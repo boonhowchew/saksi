@@ -163,12 +163,13 @@ def apply(s: State, ev: Event) -> State:
         s.curator_reports.append(p | {"seq": ev.seq})
     elif t == "plan.proposed":
         s.plan = {"sha": p["plan_sha256"], "analyses": p["analyses"], "protocol_ref": p.get("protocol_ref"),
-                  "by": ev.actor_id, "seq": ev.seq}
+                  "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq}
         s.plan_confirmed_by = set()
     elif t == "plan.confirmed":
         s.plan_confirmed_by.add(ev.actor_id)
     elif t == "plan.locked":
-        s.plan_locked = {"sha": p["plan_sha256"], "analyses": s.plan["analyses"], "seq": ev.seq}
+        s.plan_locked = {"sha": p["plan_sha256"], "analyses": s.plan["analyses"], "order": s.plan["order"],
+                         "seq": ev.seq}
     elif t == "analysis.requested":
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
@@ -260,6 +261,13 @@ class Project:
             return None
         return self._emit(actor_id, "llm.called", call).seq
 
+    def record_model_call(self, by: str, call: dict[str, Any]) -> int:
+        """Log a model call by an agent (e.g. a failed attempt) and return its event number."""
+        s = self.state()
+        if self._actor(s, by)["kind"] != "agent":
+            raise WorkflowError("only agents make model calls")
+        return self._emit(by, "llm.called", call).seq
+
     # -- setup -------------------------------------------------------------
     def create(self, title: str, study_type: str, creator: dict[str, Any],
                max_rounds: int = DEFAULT_MAX_ROUNDS, agents=DEFAULT_AGENTS) -> State:
@@ -320,13 +328,16 @@ class Project:
                                              "bytes": size, "storage_ref": storage_ref, "note": note})
         return self.state()
 
-    def record_curator_report(self, by: str, report: dict[str, Any], call: dict[str, Any] | None) -> State:
+    def record_curator_report(self, by: str, report: dict[str, Any], call: dict[str, Any] | None,
+                              requested_by: str | None = None, material_sha256: str | None = None) -> State:
         s = self.state()
-        self._require_role(s, by, "curator")
+        a = self._require_role(s, by, "curator")
         self._require_stage(s, "INGEST")
+        self._requested_by(s, a, requested_by)
         call_seq = self._log_call(by, call)
         self._emit(by, "curator.reported", {"report_sha256": self.blobs.put_json(report),
-                                            "summary": report.get("summary"), "llm_call_seq": call_seq})
+                                            "summary": report.get("summary"), "material_sha256": material_sha256,
+                                            "requested_by": requested_by, "llm_call_seq": call_seq})
         return self.state()
 
     def propose_plan(self, by: str, analyses: list[dict[str, Any]], protocol_ref: str | None,
@@ -339,8 +350,10 @@ class Project:
         if not analyses or any(not i for i in ids) or len(set(ids)) != len(ids):
             raise WorkflowError("plan needs at least one analysis, each with a unique id")
         plan = {x["id"]: x for x in analyses}
+        order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
         call_seq = self._log_call(by, call)
-        self._emit(by, "plan.proposed", {"analyses": plan, "plan_sha256": sha256_obj(plan),
+        self._emit(by, "plan.proposed", {"analyses": plan, "order": order,
+                                         "plan_sha256": sha256_obj({"analyses": plan, "order": order}),
                                          "protocol_ref": protocol_ref, "llm_call_seq": call_seq,
                                          "requested_by": requested_by})
         return self.state()
@@ -375,10 +388,12 @@ class Project:
     def complete_analysis(self, by: str, analysis_id: str, *, plan_analysis_id: str | None,
                           spec: dict[str, Any], code_sha256: str, outputs_sha256: str | None,
                           execution: dict[str, Any], status: str, error: str | None = None,
-                          request_id: str | None = None, call: dict[str, Any] | None = None) -> State:
+                          request_id: str | None = None, call: dict[str, Any] | None = None,
+                          requested_by: str | None = None, call_seqs: list[int] | None = None) -> State:
         s = self.state()
-        self._require_role(s, by, "analyst")
+        a = self._require_role(s, by, "analyst")
         self._require_stage(s, "ANALYSIS", "RESPONSE")
+        self._requested_by(s, a, requested_by)
         if status not in {"ok", "error"}:
             raise WorkflowError("status must be 'ok' or 'error'")
         if plan_analysis_id is not None and plan_analysis_id not in s.plan_locked["analyses"]:
@@ -391,6 +406,7 @@ class Project:
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
             "execution": execution, "status": status, "error": error, "request_id": request_id,
             "added_in_stage": s.stage, "added_in_round": s.round, "llm_call_seq": call_seq,
+            "llm_call_seqs": (call_seqs or []) + ([call_seq] if call_seq else []), "requested_by": requested_by,
         })
         return self.state()
 

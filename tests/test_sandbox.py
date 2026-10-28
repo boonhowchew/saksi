@@ -6,7 +6,7 @@ import hashlib
 import pytest
 
 from saksi.sandbox import CodeRejected, LocalExecutor, check_code
-from tests import synthetic
+from saksi import demo_data as synthetic
 
 GOOD = '''
 import numpy as np

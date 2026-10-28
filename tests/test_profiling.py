@@ -4,7 +4,7 @@
 import json
 
 from saksi.profiling import SMALL_CELL, leaks_rows, profile, read_table
-from tests import synthetic
+from saksi import demo_data as synthetic
 
 
 def cols(p):

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Boon-How Chew
 
-"""Synthetic antenatal-style dataset for tests. Entirely simulated; no real records."""
+"""Synthetic antenatal-style dataset and protocol for tests and the demo.
+
+Entirely simulated. No real records, no real study."""
 
 import numpy as np
 import pandas as pd
