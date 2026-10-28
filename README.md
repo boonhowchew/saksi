@@ -21,12 +21,28 @@ a PDF.
 
 | | |
 |---|---|
-| Hackathon window | 26 Oct – 4 Nov 2026 (ET) |
-| First commit | 28 Oct 2026 (MYT); see `git log` |
-| New in this repository | **All code.** Event log, workflow engine, model adapter, API, Modal deployment and tests were written during the event. No code from earlier projects was reused |
-| Prior work by the author | The workflow design follows the author's earlier conceptual work on AI-verified scholarly publishing (an unpublished white paper). That was design, not software |
+| Hackathon window | Kickoff 26 Oct 2026, 12:00 PM ET – submission 4 Nov 2026, 9:00 PM ET |
+| Repository created | 28 Oct 2026; first commit the same day (see `git log`) |
+| New in this repository | **All code.** Event log, workflow engine, model adapter, API, Modal deployment and tests were written during the event. No code from earlier projects was reused, and no template or starter repository was used |
+| Pre-existing work (before kickoff) | The workflow design follows the author's earlier conceptual work on AI-verified scholarly publishing (an unpublished white paper). That is design, not software |
 | AI assistance in development | Written with Claude (Anthropic) as a coding assistant; the commit trailers say so. **At runtime the product uses only Meta models** |
 | Test materials | The author's own studies. **None of their data is in this repository** |
+
+### What Saksi is built on
+
+Saksi uses the components below as they are, unmodified. Everything listed
+under "New in this repository" was built on top of them.
+
+| Component | Type | What Saksi uses it for |
+|---|---|---|
+| **Muse Spark 1.3** (`muse-spark-1.3`) via **Meta Model API** | Meta model, hosted API | Data Curator, Analysis Agent and Writing Agent |
+| **Muse Spark Open** (`meta-models/muse-spark-open-1026`) via **Baseten** | Meta **open-weights** model, partner inference | Reviewer Assistant, deliberately a separate deployment from the agents that draft |
+| **Modal** | Serverless platform (partner) | Hosts the API, the private data volume and the analysis sandboxes |
+| FastAPI (MIT), Starlette (BSD-3), Pydantic (MIT), python-multipart (Apache-2.0) | Open-source libraries | HTTP API, request validation and file upload |
+| httpx | Open-source library (BSD) | Calls to the model endpoints |
+| NumPy, pandas, SciPy, statsmodels, scikit-learn | Open-source libraries (BSD) | Statistical analysis inside the sandbox |
+| pytest | Open-source library (MIT) | Tests |
+| GNU AGPL-3.0 text | Licence, from the SPDX licence list | `LICENSE` |
 
 ---
 
