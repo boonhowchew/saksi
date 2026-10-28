@@ -1,6 +1,6 @@
 """Deploy Saksi on Modal.
 
-  modal secret create saksi-keys META_API_KEY=... BASETEN_API_KEY=...
+  modal secret create saksi-keys META_API_KEY=... BASETEN_API_KEY=... SAKSI_CREATE_TOKEN=...
   modal run modal_app.py::smoke      # check both Meta model endpoints
   modal deploy modal_app.py          # serve the API
 
@@ -51,7 +51,8 @@ def smoke() -> list[dict]:
     results = []
     for provider in ("meta", "baseten"):
         try:
-            r = client.chat(provider, msg, purpose="smoke", max_tokens=64)
+            # Generous cap: Muse Spark Open always reasons before it answers.
+            r = client.chat(provider, msg, purpose="smoke", max_tokens=2048)
             results.append({"provider": provider, "model": r.record.model, "reply": r.text.strip()[:40],
                             "tokens": (r.record.prompt_tokens, r.record.completion_tokens),
                             "latency_ms": r.record.latency_ms})

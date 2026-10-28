@@ -116,7 +116,7 @@ pip install -e ".[dev]"
 pytest -q
 
 # Deploy
-modal secret create saksi-keys META_API_KEY=... BASETEN_API_KEY=...
+modal secret create saksi-keys META_API_KEY=... BASETEN_API_KEY=... SAKSI_CREATE_TOKEN=...
 modal run modal_app.py::smoke
 modal deploy modal_app.py
 ```

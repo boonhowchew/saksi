@@ -12,6 +12,7 @@ and write their own events.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 from pathlib import Path
@@ -101,7 +102,8 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
     app = FastAPI(title="Saksi", version="0.1.0",
                   description="Research that is witnessed, not reconstructed.")
     app.add_middleware(CORSMiddleware, allow_origins=allowed_origins or ["*"],
-                       allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Saksi-Token"])
+                       allow_methods=["GET", "POST"],
+                       allow_headers=["Content-Type", "X-Saksi-Token", "X-Saksi-Create-Token"])
 
     def project(pid: str) -> Project:
         if not PROJECT_ID_RE.match(pid):
@@ -124,8 +126,13 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
     def health():
         return {"ok": True}
 
+    create_token = os.environ.get("SAKSI_CREATE_TOKEN")
+
     @app.post("/projects")
-    def create_project(body: CreateProject):
+    def create_project(body: CreateProject, x_saksi_create_token: str | None = Header(default=None)):
+        # On a public deployment, only someone holding the creation token may open projects.
+        if create_token and not secrets.compare_digest(x_saksi_create_token or "", create_token):
+            raise HTTPException(403, "project creation needs a valid X-Saksi-Create-Token")
         p = project(body.project_id)
         try:
             s = p.create(body.title, body.study_type, body.creator, max_rounds=body.max_rounds)

@@ -79,3 +79,23 @@ def test_cost_only_when_prices_configured(tmp_path, monkeypatch):
     monkeypatch.setenv("SAKSI_PRICE_META_OUTPUT_PER_M", "2.0")
     r = ModelClient(BlobStore(tmp_path), transport=FakeTransport(), mode="live").chat("meta", MSG, purpose="t")
     assert r.record.cost_usd == pytest.approx((11 * 1 + 3 * 2) / 1e6)
+
+
+def test_split_reasoning_variants():
+    from saksi.llm import split_reasoning
+    assert split_reasoning({"content": "<think>hmm</think>\nsaksi ok"}) == ("saksi ok", "hmm")
+    assert split_reasoning({"content": "hmm</think>saksi ok"}) == ("saksi ok", "hmm")
+    assert split_reasoning({"content": "saksi ok", "reasoning_content": "hmm"}) == ("saksi ok", "hmm")
+    assert split_reasoning({"content": "saksi ok"}) == ("saksi ok", None)
+
+
+def test_reasoning_only_reply_is_an_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("BASETEN_API_KEY", "k")
+
+    class ThinkOnly:
+        def post(self, *a, **k):
+            return {"choices": [{"message": {"content": "<think>still thinking"}, "finish_reason": "length"}],
+                    "usage": {}}
+
+    with pytest.raises(LLMError, match="no answer text.*length"):
+        ModelClient(BlobStore(tmp_path), transport=ThinkOnly(), mode="live").chat("baseten", MSG, purpose="t")

@@ -16,6 +16,7 @@ Modes (env SAKSI_LLM_MODE):
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -91,6 +92,32 @@ class LLMResult:
     text: str
     record: CallRecord
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
+    reasoning: str | None = field(repr=False, default=None)
+
+
+_THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def split_reasoning(message: dict[str, Any]) -> tuple[str, str | None]:
+    """Separate a reasoning model's thinking from its answer.
+
+    Providers expose reasoning either as a separate field or inline in
+    <think>…</think> tags. Only the answer is used downstream; the reasoning
+    is kept in the stored response for audit.
+    """
+    content = message.get("content") or ""
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    inline = _THINK.findall(content)
+    if inline:
+        content = _THINK.sub("", content)
+        reasoning = "\n".join(filter(None, [reasoning, *inline]))
+    elif "</think>" in content:            # opening tag sometimes omitted
+        head, _, content = content.partition("</think>")
+        reasoning = "\n".join(filter(None, [reasoning, head.replace("<think>", "")]))
+    elif content.lstrip().startswith("<think>"):   # cut off mid-thought: no answer yet
+        reasoning = "\n".join(filter(None, [reasoning, content.lstrip()[len("<think>"):]]))
+        content = ""
+    return content.strip(), (reasoning.strip() if isinstance(reasoning, str) and reasoning.strip() else None)
 
 
 class Transport(Protocol):
@@ -172,9 +199,14 @@ class ModelClient:
             self._replay_index_put(replay_key, response_sha)
 
         try:
-            text = raw["choices"][0]["message"]["content"] or ""
+            message = raw["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError(f"unexpected response shape from {provider}: {e}") from e
+        text, reasoning = split_reasoning(message)
+        if not text.strip():
+            finish = raw["choices"][0].get("finish_reason")
+            raise LLMError(f"{provider} returned no answer text (finish_reason={finish}); "
+                           "reasoning models may need a larger max_tokens")
 
         usage = raw.get("usage") or {}
         pt, ct = usage.get("prompt_tokens"), usage.get("completion_tokens")
@@ -187,7 +219,7 @@ class ModelClient:
             request_sha256=request_sha, response_sha256=response_sha,
             prompt_tokens=pt, completion_tokens=ct, latency_ms=latency_ms, mode=self.mode, cost_usd=cost,
         )
-        return LLMResult(text=text, record=record, raw=raw)
+        return LLMResult(text=text, record=record, raw=raw, reasoning=reasoning)
 
     # A tiny replay index stored alongside the blobs.
     def _replay_index_path(self, key: str):

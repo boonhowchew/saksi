@@ -62,3 +62,12 @@ def test_bad_project_id(tmp_path):
     c = TestClient(create_app(tmp_path))
     r = c.post("/projects", json={"project_id": "../x", "title": "t", "study_type": "primary", "creator": AUTHOR_A})
     assert r.status_code == 400
+
+
+def test_creation_token_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAKSI_CREATE_TOKEN", "letmein-long-random")
+    c = TestClient(create_app(tmp_path))
+    body = {"project_id": "gated", "title": "t", "study_type": "primary", "creator": AUTHOR_A}
+    assert c.post("/projects", json=body).status_code == 403
+    assert c.post("/projects", json=body, headers={"X-Saksi-Create-Token": "wrong"}).status_code == 403
+    assert c.post("/projects", json=body, headers={"X-Saksi-Create-Token": "letmein-long-random"}).status_code == 200
