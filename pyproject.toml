@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saksi"
+version = "0.1.0"
+description = "Research that is witnessed, not reconstructed."
+readme = "README.md"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "Boon-How Chew" }]
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.162.0",
+  "httpx==0.28.1",
+  "pydantic==2.13.5",
+  "python-multipart",
+]
+
+[project.optional-dependencies]
+analysis = ["numpy", "pandas", "scipy", "statsmodels", "scikit-learn"]
+deploy = ["modal==1.6.3"]
+dev = ["pytest", "modal==1.6.3"]
+
+[tool.setuptools]
+packages = ["saksi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
