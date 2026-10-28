@@ -6,7 +6,7 @@ Thu 5 Nov, 10:00 MYT**. Submit on Wed 4 Nov (MYT) evening.
 | Day (MYT) | Build | Done when |
 |---|---|---|
 | Wed 28 Oct | Event log, workflow engine, model adapter, API, Modal deploy, tests | ✅ tests green; smoke test passes on both endpoints |
-| Thu 29 | Sandboxed analysis execution; Data Curator; confirmatory plan runs automatically | Planned analyses run with recorded provenance |
+| Thu 29 | Sandboxed analysis execution; Data Curator; confirmatory plan runs automatically | Built early (28 Oct evening); tested locally; live Modal demo pending |
 | Fri 30 | Authors iterate with the Analysis Agent; exploratory labelling end to end | Author prompt → code → sandbox → labelled result |
 | Sat 31 | Writing Agent; attributed author revision; structured sign-off in the UI | Draft v1 → edits → sign-off |
 | Sun 1 Nov | Review loop UI; Reviewer Assistant; qualitative (review-stage) path | Two review rounds run end to end |

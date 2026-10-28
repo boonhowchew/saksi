@@ -28,6 +28,14 @@ from pydantic import BaseModel
 from .canonical import sha256_bytes, sha256_text
 from .workflow import Project, WorkflowError, ledger
 
+# Agent actions an author can trigger: name -> (Agents method, allowed argument names)
+AGENT_ACTIONS: dict[str, tuple[str, set[str]]] = {
+    "curate": ("curate", {"material_sha256"}),
+    "propose_plan": ("propose_plan", set()),
+    "run_planned": ("run_planned", {"plan_analysis_id"}),
+    "run_request": ("run_request", {"request_id", "prompt"}),
+}
+
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,40}$")
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
@@ -96,7 +104,8 @@ class Command(BaseModel):
 
 
 def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None,
-               allowed_origins: list[str] | None = None) -> FastAPI:
+               allowed_origins: list[str] | None = None,
+               agents_factory: Callable[[Project], Any] | None = None) -> FastAPI:
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
     tokens = TokenStore(root)
@@ -197,6 +206,35 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
             out["note"] = "Send this token privately to the person you registered; it is shown only once."
         persist()
         return out
+
+    @app.post("/projects/{pid}/agents/{action}")
+    def agent(pid: str, action: str, body: Command, who: str = Depends(actor)):
+        """Ask an agent to act. The request is attributed to the author who sent it."""
+        from .agents import AgentError
+        from .llm import LLMError
+        if agents_factory is None:
+            raise HTTPException(503, "agents are not configured on this server")
+        if action not in AGENT_ACTIONS:
+            raise HTTPException(404, f"unknown agent action {action}")
+        method, allowed = AGENT_ACTIONS[action]
+        extra = set(body.args) - allowed
+        if extra:
+            raise HTTPException(422, f"unexpected arguments: {', '.join(sorted(extra))}")
+        p = existing(pid)
+        if "author" not in p.state().actors[who]["roles"]:
+            raise HTTPException(403, "only authors can ask the agents to act")
+        try:
+            s = getattr(agents_factory(p), method)(who, **body.args)
+        except WorkflowError as e:
+            raise refused(e)
+        except AgentError as e:
+            persist()
+            raise HTTPException(422, f"the agent could not produce a usable result: {e}")
+        except LLMError as e:
+            persist()
+            raise HTTPException(502, f"model service error: {e}")
+        persist()
+        return {"state": s.to_dict()}
 
     @app.post("/projects/{pid}/materials")
     async def upload(pid: str, kind: str = Form(...), note: str | None = Form(None),

@@ -115,11 +115,15 @@ variants, which are discounted in exchange for training on prompts, are
 
 | Built and tested | Next |
 |---|---|
-| Hash-chained event log and verification | Sandboxed analysis execution (Modal) |
-| Workflow engine: every stage, both loops, all rules above | Agent prompts: curator, analyst, writer, reviewer assistant |
+| Hash-chained event log and verification | Writing Agent: first draft from computed outputs only |
+| Workflow engine: every stage, both loops, all rules above | Reviewer Assistant on Muse Spark Open |
 | Contribution Ledger | Web interface |
 | Model adapter for both Meta endpoints, with record/replay | Evaluation on the author's own studies |
 | HTTP API with per-person tokens; file upload | RO-Crate export of the final object |
+| Aggregate dataset profile (no rows, small cells pooled, identifiers withheld) | |
+| Data Curator: data dictionary and flags | |
+| Analysis plan from the protocol, with every quote and column checked against its source | |
+| Analysis code run in Modal sandboxes (network blocked), one repair attempt, every attempt logged | |
 
 **Roadmap beyond the hackathon** (designed, not built): ORCID sign-in,
 cryptographic attestation, editor role, open reviewer nomination, DOIs, and
