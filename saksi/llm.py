@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 """Model adapter for Meta models (Meta Model API and Muse Spark Open on Baseten).
 
 Both providers speak the OpenAI Chat Completions protocol, so one client

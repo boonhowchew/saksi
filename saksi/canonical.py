@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 """Canonical serialisation and hashing.
 
 Every hash in Saksi is computed over canonical JSON (sorted keys, no

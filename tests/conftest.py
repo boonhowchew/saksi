@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 from datetime import datetime, timedelta, timezone
 
 import pytest

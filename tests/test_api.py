@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 from fastapi.testclient import TestClient
 
 from saksi.api import create_app
@@ -71,3 +74,9 @@ def test_creation_token_gate(tmp_path, monkeypatch):
     assert c.post("/projects", json=body).status_code == 403
     assert c.post("/projects", json=body, headers={"X-Saksi-Create-Token": "wrong"}).status_code == 403
     assert c.post("/projects", json=body, headers={"X-Saksi-Create-Token": "letmein-long-random"}).status_code == 200
+
+
+def test_source_offered_to_users(tmp_path):
+    c = TestClient(create_app(tmp_path))
+    assert c.get("/source").json() == {"source": "https://github.com/boonhowchew/saksi", "licence": "AGPL-3.0-only"}
+    assert c.get("/health").json()["source"].endswith("/saksi")

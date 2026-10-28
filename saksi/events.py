@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 """Append-only, hash-chained event log.
 
 Every action in a Saksi project — by a human author, a reviewer or an AI

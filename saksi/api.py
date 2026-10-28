@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
 """HTTP API for the Saksi workflow.
 
 Identity: each human actor receives a personal access token when registered.
@@ -122,9 +125,16 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
     def refused(e: WorkflowError):
         return HTTPException(409, str(e))
 
+    source_url = os.environ.get("SAKSI_SOURCE_URL", "https://github.com/boonhowchew/saksi")
+
     @app.get("/health")
     def health():
-        return {"ok": True}
+        return {"ok": True, "source": source_url}
+
+    @app.get("/source")
+    def source():
+        """AGPL-3.0 section 13: users of the service can get its source."""
+        return {"source": source_url, "licence": "AGPL-3.0-only"}
 
     create_token = os.environ.get("SAKSI_CREATE_TOKEN")
 
