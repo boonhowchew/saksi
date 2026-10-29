@@ -111,3 +111,33 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
         "nothing_checked_but_numbers_present": nothing_checked, "analyses_not_reported": not_reported,
         "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported),
     }
+
+
+# Null value by measure, for "does the interval include no effect?". Order matters:
+# a log ratio has null 0, so it is tested before plain ratios.
+NULL_VALUES = (
+    (re.compile(r"\blog\b.*ratio|\blog[- ]?(?:odds|or|hr|rr)\b", re.I), 0.0),
+    (re.compile(r"ratio|\b(?:a?OR|RR|HR|IRR)\b", re.I), 1.0),
+    (re.compile(r"\bAUC\b|\bAUROC\b|c-?statistic|area under|concordance", re.I), 0.5),
+    (re.compile(r"difference|coefficient|\bbeta\b|slope|mean change", re.I), 0.0),
+)
+
+
+def interval_facts(outputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """For every estimate with a confidence interval, whether the interval includes
+    the null value for its measure. Computed here so no model has to compare numbers.
+    Estimates whose measure is not recognised are left out rather than guessed."""
+    facts = []
+    for aid, out in sorted(outputs.items()):
+        for e in (out or {}).get("estimates") or []:
+            lo, hi = e.get("ci_lower"), e.get("ci_upper")
+            if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (lo, hi)):
+                continue
+            label = f"{e.get('measure') or ''} {e.get('name') or ''}"
+            null = next((v for pat, v in NULL_VALUES if pat.search(label)), None)
+            if null is None:
+                continue
+            facts.append({"analysis": aid, "name": e.get("name"), "measure": e.get("measure"),
+                          "estimate": e.get("estimate"), "ci_lower": lo, "ci_upper": hi, "null_value": null,
+                          "interval_includes_null": bool(lo <= null <= hi)})
+    return facts

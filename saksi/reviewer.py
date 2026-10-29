@@ -27,13 +27,15 @@ from .agents import AgentError, parse_json, protocol_text
 from .documents import quote_found
 from .llm import ModelClient
 from .prompts import REVIEW_ASSIST, REVIEW_FOLLOWUP, prompt_ref
+from .tracing import interval_facts
 from .workflow import Project, State, WorkflowError, summarise_checks
 
 REVIEWER_ASSIST_ID = "agent:reviewer_assist"
 PROVIDER = "baseten"
 
 SEES = ("the draft under review", "the protocol", "the analysis plan every author confirmed",
-        "computed results with their confirmatory/exploratory labels", "the analysis code as it ran",
+        "computed results with their confirmatory/exploratory labels",
+        "interval facts computed by code (does each interval include its null value)", "the analysis code as it ran",
         "planned analyses that failed", "the aggregate data dictionary (no records)",
         "the automatic number check of this version",
         "in later rounds: the review items, the authors' responses and the changes since the last round")
@@ -59,7 +61,7 @@ class ReviewerAssistant:
             raise WorkflowError(f"the Reviewer Assistant works in REVIEW; the project is in {s.stage}")
         if requested_by not in s.reviewers:
             raise WorkflowError("only a reviewer can ask the Reviewer Assistant for a briefing")
-        user, inputs, to_assess = self._materials(s)
+        user, inputs, to_assess, facts = self._materials(s)
         followup = bool(to_assess) or s.round > 1
         system = REVIEW_ASSIST + ("\n\n" + REVIEW_FOLLOWUP if followup else "")
         r = self.client.chat(PROVIDER, [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -77,13 +79,14 @@ class ReviewerAssistant:
             **check_points(out.get("points_of_inquiry"), draft),
             **check_assessments(out.get("item_assessments"), to_assess, draft),
             "automatic_number_check": s.drafts[s.draft_version].get("checks"),
+            "interval_facts": facts,
             "inputs": inputs, "sees": list(SEES), "withheld": list(WITHHELD),
             "prompts": [prompt_ref("review_assist")] + ([prompt_ref("review_followup")] if followup else []),
         }
         return self.project.add_briefing(REVIEWER_ASSIST_ID, briefing, call, requested_by=requested_by)
 
     # -- what it is given ------------------------------------------------------
-    def _materials(self, s: State) -> tuple[str, dict[str, Any], list[str]]:
+    def _materials(self, s: State) -> tuple[str, dict[str, Any], list[str], list[dict[str, Any]]]:
         blobs = self.project.blobs
         d = s.drafts[s.draft_version]
         draft = blobs.get_text(d["text_sha256"])
@@ -94,6 +97,7 @@ class ReviewerAssistant:
         results = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
                        "title": v["spec"].get("title"), "results": blobs.get_json(v["outputs_sha256"])}
                    for k, v in ok.items()}
+        facts = interval_facts({k: v["results"] for k, v in results.items()})
         code = {k: blobs.get_text(v["code_sha256"])[:CODE_CHARS] for k, v in ok.items() if blobs.has(v["code_sha256"])}
         failed = {k: {"title": v["spec"].get("title"), "error": (v.get("error") or "")[:300]}
                   for k, v in s.analyses.items() if v["status"] != "ok" and v["plan_analysis_id"]
@@ -109,6 +113,7 @@ class ReviewerAssistant:
                  f"PROTOCOL:\n{protocol[:PROTOCOL_CHARS]}",
                  f"ANALYSIS PLAN CONFIRMED BY EVERY AUTHOR BEFORE ANY RESULT:\n{json.dumps(plan, indent=1)}",
                  f"COMPUTED RESULTS (draft cites them as [A:<key>]):\n{json.dumps(results, indent=1)}",
+                 f"INTERVAL FACTS (computed by code):\n{json.dumps(facts, indent=1)}",
                  "ANALYSIS CODE AS RUN:\n" + "\n\n".join(f"# [A:{k}]\n{c}" for k, c in code.items()),
                  f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed, indent=1)}",
                  f"DATA DICTIONARY (aggregate):\n{json.dumps(dictionary, indent=1)}",
@@ -136,7 +141,7 @@ class ReviewerAssistant:
                                for k, v in ok.items()},
                   "curator_report_sha256": report_sha, "checks_sha256": d.get("checks_sha256"),
                   "previous_version": prev, "items": sorted(s.items)}
-        return "\n\n".join(parts), inputs, to_assess
+        return "\n\n".join(parts), inputs, to_assess, facts
 
 
 # -- checks on what it returns ---------------------------------------------------

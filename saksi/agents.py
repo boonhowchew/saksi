@@ -27,6 +27,7 @@ from .profiling import profile, read_table
 from .prompts import CODE, CURATOR, PLAN, REPAIR, REWRITE, WRITER, prompt_ref
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
+from .tracing import interval_facts
 from .workflow import Project, State, WorkflowError
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
@@ -283,6 +284,8 @@ class Agents:
         user = (f"PROTOCOL (for design and objectives only):\n{protocol[:40000]}\n\n"
                 f"DATASET ROWS: {rows}\n\nDATA DICTIONARY:\n{json.dumps(d['dictionary'], indent=1)}\n\n"
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
+                f"INTERVAL FACTS (computed by code):\n"
+                f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}")
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.

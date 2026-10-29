@@ -255,6 +255,7 @@ def test_writer_fixes_its_own_draft_after_check(setup):
     assert [u["number"] for u in first["untraced"]] == ["9.99"] and first["exploratory_not_labelled"]
     assert d["writer_attempts"][1]["prompt"]["name"] == "rewrite"
     # The rewrite request told the agent exactly what was wrong.
+    assert '"interval_includes_null": true' in model.bodies[-2]["messages"][1]["content"]   # facts, not judgement
     rewrite_msg = model.bodies[-1]["messages"][1]["content"]
     assert "UNTRACED 9.99" in rewrite_msg and "EXPLORATORY NOT LABELLED" in rewrite_msg
     # Both model calls are in the log: the failed attempt and the final one.

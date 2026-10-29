@@ -17,6 +17,14 @@ Thu 5 Nov, 10:00 MYT**. Submit on Wed 4 Nov (MYT) evening.
 | Wed 4 | Video (morning), submission text, **submit**. Video **opens with one line** on what was pre-existing and what was built during the event | Submitted |
 | Thu 5 (to 10:00) | Buffer only | — |
 
+## Live runs (synthetic data, Modal)
+
+| When (MYT) | What ran | Result |
+|---|---|---|
+| 28 Oct 22:17 | Curate, plan, sandboxed analyses | Network blocked, data hash verified, both analyses ok |
+| 29 Oct, early afternoon | + Writing Agent | Tracer bug found (0 numbers checked, false pass); fixed, 22/22 traced |
+| 29 Oct ~14:00 | + sign-off, Reviewer Assistant (Muse Spark Open) | Draft passed first time (22 numbers, all traced, no rewrite needed). Briefing: 8 points, 8/8 quotes verified, 24.6 s, 12,226 tokens. Whole run: 6 model calls, 38,496 tokens, ~93 s of agent time. **One factual error**: P5 said the AUC interval (0.51 to 0.79) "includes 0.5"; it does not. A number flag would not have caught it ("0.5" matches 0.506 at one decimal), so whether each interval includes its null value is now computed by code and given to both models and to the reviewer. Also seen: P2's quote is real but unrelated to its question (quote checks prove the text exists, not that it is the right place) |
+
 ## Organiser guidance (Discord, 28–29 Oct)
 - Repo public and created on or after 26 Oct ✅ (created 28 Oct).
 - Commit as we go, not in one big push ✅ (small commits, pushed at least daily).

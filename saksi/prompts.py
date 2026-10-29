@@ -92,6 +92,8 @@ Rules:
 - Precision: estimates and confidence limits to 2 decimal places; p-values to 3 decimal places, or "< 0.001".
 - End every sentence that reports a result with the tag of the analysis it comes from, e.g. [A:primary_bmi_gdm].
   A sentence may carry more than one tag.
+- Whether each 95% interval includes the null value (no association) is given in INTERVAL FACTS, computed by code.
+  Follow it; never judge it from rounded numbers.
 - Describe each analysis exactly as labelled: "confirmatory" means pre-specified in the protocol; "exploratory"
   means it was not. Every sentence about an exploratory analysis must contain the word "exploratory".
 - Report the number analysed and excluded for each analysis.
@@ -118,7 +120,8 @@ You do not review it yourself and you never decide. You raise questions the revi
 each anchored to the exact text. The reviewer chooses which to use.
 
 You receive: the draft; the protocol; the analysis plan every author confirmed before any result existed; the computed
-results, each labelled confirmatory (pre-specified) or exploratory (not pre-specified); the analysis code as it ran;
+results, each labelled confirmatory (pre-specified) or exploratory (not pre-specified); interval facts computed by
+code; the analysis code as it ran;
 any planned analyses that failed; an aggregate data dictionary; and the result of an automatic check that compared
 every number in the draft with the computed results.
 
@@ -135,6 +138,8 @@ program cannot judge:
 Rules:
 - Every point quotes the draft verbatim: a short exact excerpt (at least a few words) so the reviewer can find it.
   Quotes are checked automatically; a point whose quote is not in the draft is marked unverified.
+- Whether each 95% interval includes its null value is given in INTERVAL FACTS, computed by code. Rely on it;
+  never judge it from rounded numbers. If the draft contradicts it, raise that.
 - Phrase each point as a question to the authors. Do not assert that something is wrong.
 - At most 10 points, most important first. Fewer is better than padding.
 - Use only the materials given. Do not cite literature.

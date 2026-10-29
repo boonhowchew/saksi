@@ -187,6 +187,10 @@ def demo() -> dict:
             full = p.blobs.get_json(b["briefing_sha256"])
             call = next(e.payload for e in p.log.events() if e.seq == b["llm_call_seq"])
             print(f"\n== Reviewer Assistant ({call['model']} via {call['provider']}) ==")
+            print("  interval facts given (computed by code):")
+            for f in full.get("interval_facts", []):
+                print(f"     {f['analysis']}/{f['name']}: {f['ci_lower']:.4g} to {f['ci_upper']:.4g}"
+                      f" | null {f['null_value']} | includes null: {f['interval_includes_null']}")
             print("  primary claim:", full["primary_claim"])
             print("  summary:", full["summary"])
             for pt in full["points_of_inquiry"]:

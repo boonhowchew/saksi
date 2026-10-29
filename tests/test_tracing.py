@@ -112,3 +112,27 @@ def test_every_successful_analysis_must_be_reported():
     r = trace(text, ANALYSES, OUTPUTS, required_refs=["primary", "x_q1"])
     assert r["analyses_not_reported"] == ["x_q1"] and not r["ok"]
     assert trace(text, ANALYSES, OUTPUTS, required_refs=["primary"])["ok"]
+
+
+def test_interval_facts_computed_by_code():
+    """Live run 29 Oct: the Reviewer Assistant said the AUC interval (0.51 to 0.79) 'includes 0.5'.
+    It does not. Whether an interval includes the null is now computed and handed to the models."""
+    from saksi.tracing import interval_facts
+    outputs = {
+        "primary": {"estimates": [{"name": "booking_bmi", "measure": "adjusted odds ratio", "estimate": 1.067,
+                                   "ci_lower": 0.9608, "ci_upper": 1.1858},
+                                  {"name": "previous_gdm", "measure": "adjusted odds ratio", "estimate": 3.65,
+                                   "ci_lower": 0.94, "ci_upper": 14.19}]},
+        "auc": {"estimates": [{"name": "AUC", "measure": "AUC", "estimate": 0.6486,
+                               "ci_lower": 0.50628, "ci_upper": 0.79087}]},
+        "lin": {"estimates": [{"name": "age", "measure": "log odds ratio", "estimate": 0.2, "ci_lower": 0.05,
+                               "ci_upper": 0.35},
+                              {"name": "x", "measure": "mean difference", "estimate": -1.2, "ci_lower": -2.0,
+                               "ci_upper": 0.1},
+                              {"name": "y", "measure": "something new", "estimate": 2, "ci_lower": 1, "ci_upper": 3},
+                              {"name": "z", "measure": "odds ratio", "estimate": 2, "ci_lower": None, "ci_upper": 3}]},
+    }
+    f = {(x["analysis"], x["name"]): (x["null_value"], x["interval_includes_null"]) for x in interval_facts(outputs)}
+    assert f == {("primary", "booking_bmi"): (1.0, True), ("primary", "previous_gdm"): (1.0, True),
+                 ("auc", "AUC"): (0.5, False),
+                 ("lin", "age"): (0.0, False), ("lin", "x"): (0.0, True)}

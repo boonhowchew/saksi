@@ -71,11 +71,13 @@ def test_round_one_briefing_is_independent_and_checked(in_review):
     assert SECRET not in sent                                                       # no author-side history
     for leak in ("Person 1", "S100001"):                                            # no data rows
         assert leak not in sent
-    assert "ANALYSIS CODE AS RUN" in sent and "AUTOMATIC NUMBER CHECK" in sent
+    assert "ANALYSIS CODE AS RUN" in sent and "AUTOMATIC NUMBER CHECK" in sent and "INTERVAL FACTS" in sent
 
     full = p.blobs.get_json(b["briefing_sha256"])
     assert full["inputs"]["draft_sha256"] == s.drafts[2]["text_sha256"]
     assert full["automatic_number_check"]["ok"] is True and full["withheld"]
+    bmi = next(f for f in full["interval_facts"] if f["name"] == "booking_bmi")
+    assert bmi["null_value"] == 1.0 and bmi["interval_includes_null"] is True
     led = ledger(p.log.events())["agent:reviewer_assist"]
     assert led["counts"] == {"review_briefings": 1, "model_calls": 1} and led["on_behalf_of"] == {"rev1": 1}
 

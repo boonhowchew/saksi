@@ -77,6 +77,7 @@ under "New in this repository" was built on top of them.
 - **Confirmatory or exploratory is decided by the engine** from the plan every author confirmed. The caller cannot set the label, and it cannot be removed afterwards.
 - **Approvals bind to exact content.** A changed plan, a new analysis or an edited draft voids earlier confirmations, acceptances and sign-offs.
 - **Every number is traced.** Each draft and each edit, by agent or author, is checked by code: every number must match a result from an analysis the sentence cites, exploratory results must be called exploratory, and every analysis that ran must be reported (no selective reporting). Sign-offs record the check for the exact version signed.
+- **Models are given facts, not asked to compare numbers.** Whether each 95% interval includes its null value (1 for ratios, 0.5 for AUC, 0 for differences) is computed by code and given to the Writing Agent, the Reviewer Assistant and the reviewer.
 - **No bare "Approve" button.** Sign-off requires restating the primary claim in your own words and answering verification questions, and records the time spent.
 - **Agents never act anonymously for a person.** An agent edit must name the author who requested it, and the Contribution Ledger credits both.
 - **Review always ends.** Each item is *satisfied* or *agree to disagree*; the second kind goes into the published commentary. Rounds are capped.
