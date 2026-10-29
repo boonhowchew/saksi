@@ -450,7 +450,8 @@ function people() {
 /* Data */
 async function materials() {
   const s = S.state;
-  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
+  const inUse = s.materials.filter((m) => m.kind === "dataset").at(-1);
+  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${m === inUse && s.materials.filter((x) => x.kind === "dataset").length > 1 ? ' <span class="tag good">in use</span>' : ""}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
     <td><span class="hash" title="${esc(m.sha256)}">${short(m.sha256)}</span></td><td>${esc(name(m.by))}</td></tr>`).join("");
   const canUpload = isAuthor() && s.stage === "INGEST";
   let rep = "";
@@ -460,7 +461,7 @@ async function materials() {
     if (full) {
       const sev = { high: "bad", medium: "attn", low: "" };
       rep = `<section><h2>Data Curator's report</h2>
-        <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
+        <p class="muted small">For ${esc(s.materials.find((m) => m.sha256 === r.material_sha256)?.filename || "the dataset")}: an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
         <p>${esc(full.summary)}</p>
         ${full.flags?.length ? `<h3>Flags for the authors to check</h3><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
           ${full.flags.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div>` : ""}
@@ -472,7 +473,7 @@ async function materials() {
   }
   const canCurate = isAuthor() && s.stage === "INGEST" && s.materials.some((m) => m.kind === "dataset");
   return `<section><h2>Study materials</h2>
-    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running.</p>
+    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running. If you upload more than one dataset, Saksi uses the latest.</p>
     ${list ? `<div class="tablewrap"><table><thead><tr><th>Kind</th><th>File</th><th>Size</th><th>Hash</th><th>Uploaded by</th></tr></thead><tbody>${list}</tbody></table></div>` : `<p>No files yet.</p>`}
     ${canUpload ? `<form class="row" data-form="upload" style="margin-top:1rem">
       <label><span>Kind</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Registration</option><option value="other">Other</option></select></label>
@@ -481,7 +482,7 @@ async function materials() {
       <button class="btn" data-label="Uploading">Upload</button></form>` : ""}
   </section>
   ${canCurate ? `<section><h2>Data Curator</h2><p class="muted small">Muse Spark 1.3 drafts a data dictionary and flags problems from an aggregate profile: column types, ranges, missingness, small cells pooled. No rows are sent.</p>
-    <button class="btn" data-agent="curate" data-label="The Data Curator is working">Ask the Data Curator to check the dataset</button></section>` : ""}
+    <button class="btn" data-agent="curate" data-label="The Data Curator is working">Ask the Data Curator to check ${esc(inUse?.filename || "the dataset")}</button></section>` : ""}
   ${rep}`;
 }
 

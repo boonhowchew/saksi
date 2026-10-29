@@ -62,7 +62,7 @@ with sync_playwright() as p:
         page.select_option("form[data-form=upload] select[name=kind]", kind)
         page.set_input_files("form[data-form=upload] input[type=file]", path)
         click(page, "Upload")
-    click(page, "Ask the Data Curator to check the dataset"); shot(page, "03-curator")
+    click(page, "Ask the Data Curator to check"); shot(page, "03-curator")
     print("curator:", note(page))
     page.get_by_role("tab", name="Plan").click()
     click(page, "Ask the Analysis Agent to draft the plan"); click(page, "Confirm this plan"); shot(page, "04-plan")

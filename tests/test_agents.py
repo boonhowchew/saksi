@@ -105,8 +105,9 @@ class ScriptedModel:
                    else "plan" if "structured analysis plan" in system
                    else "write" if "Writing Agent" in system else "code")
         reply = self.script[purpose].pop(0)
+        reply, finish = reply if isinstance(reply, tuple) else (reply, "stop")     # (text, "length") = cut off
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
-        return {"choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+        return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
 
 
@@ -227,12 +228,49 @@ def test_rejected_code_is_recorded_as_failure(setup):
     assert s.analyses["primary.r1"]["status"] == "ok" and s.analyses["primary"]["status"] == "error"
 
 
-def test_bad_json_from_curator_is_logged_then_raised(setup):
+def test_bad_json_from_curator_is_retried_once_then_refused(setup):
     p, agents, model, _ = setup
-    model.script["curate"] = ["sorry, I cannot"]
-    with pytest.raises(AgentError):
+    model.script["curate"] = ["sorry, I cannot", "still not JSON"]
+    with pytest.raises(AgentError, match="after one retry"):
         agents.curate("bhc")
-    assert p.log.events()[-1].type == "llm.called"
+    assert [e.type for e in p.log.events()[-2:]] == ["llm.called", "llm.called"]
+    assert "YOUR PREVIOUS REPLY WAS NOT VALID JSON" in model.bodies[-1]["messages"][1]["content"]
+
+
+def test_curator_retry_can_succeed(setup):
+    p, agents, model, _ = setup
+    model.script["curate"] = ['{"summary": "x", "dictionary": [', CURATOR_REPLY]
+    s = agents.curate("bhc")
+    assert s.curator_reports[-1]["summary"].startswith("400 records")
+    assert len(p.blobs.get_json(s.curator_reports[-1]["report_sha256"])["earlier_call_seqs"]) == 1
+
+
+def test_wide_dataset_is_curated_in_batches_and_a_cut_off_batch_is_split(proj, monkeypatch):
+    """29 Oct, live: a real dataset with many columns broke the Data Curator. Its single reply was cut
+    off at the length limit mid-dictionary ("Expecting ',' delimiter")."""
+    import numpy as np
+    import pandas as pd
+    monkeypatch.setenv("META_API_KEY", "k")
+    rng = np.random.default_rng(1)
+    wide = pd.DataFrame({f"v{i:03d}": rng.normal(size=60).round(2) for i in range(90)})
+    upload(proj, "dataset", "wide.csv", wide.to_csv(index=False).encode())
+    upload(proj, "protocol", "protocol.txt", demo_data.PROTOCOL.encode())
+    entry = lambda a, b: {"dictionary": [{"column": f"v{i:03d}", "label": "x", "type": "numeric",
+                                          "units_or_coding": "unknown", "role": "unclear"} for i in range(a, b)],
+                          "flags": [{"column": f"v{a:03d}", "severity": "low", "issue": "check", "suggested_check": "c"}]}
+    model = ScriptedModel({"curate": [
+        ('{"dictionary": [{"column": "v000"}', "length"),          # first 40 columns: cut off
+        entry(0, 20), entry(20, 40), entry(40, 80), entry(80, 90),
+        {"summary": "90 numeric columns.", "protocol_variables_missing_from_data": ["gdm"], "flags": []}]})
+    agents = Agents(proj, ModelClient(proj.blobs, transport=model, mode="live"), LocalExecutor())
+    s = agents.curate("bhc")
+    rep = proj.blobs.get_json(s.curator_reports[-1]["report_sha256"])
+    assert rep["columns"] == 90 and len(rep["dictionary"]) == 90 and len(rep["flags"]) == 4
+    assert rep["summary"] == "90 numeric columns." and rep["protocol_variables_missing_from_data"] == ["gdm"]
+    assert [x["name"] for x in rep["prompts"]] == ["curator_columns", "curator_overview"]
+    calls = [e for e in proj.log.events() if e.type == "llm.called"]
+    assert len(calls) == 6                                      # the cut-off reply is in the record too
+    assert "cut off" not in json.dumps(model.bodies[-1]) and "v089" in model.bodies[-1]["messages"][1]["content"]
 
 
 def test_tampered_material_is_refused(setup):
@@ -340,3 +378,12 @@ def test_unresolved_draft_goes_to_authors_who_can_fix_it(setup):
     p.open_draft("bhc", 2)
     s = p.sign_off("bhc", 2, RESTATE, ANSWERS)
     assert s.signoffs[2]["bhc"]["checks_at_signoff"]["ok"] is True
+
+
+def test_wide_dataset_analysis_sees_only_its_columns():
+    from saksi.agents import _focus
+    prof = {"rows": 10, "columns": [{"name": f"v{i}"} for i in range(100)]}
+    d = {"profile": prof, "dictionary": [{"column": f"v{i}"} for i in range(100)]}
+    dic, p, names = _focus(d, [{"outcome": {"column": "v1"}, "exposures": [{"column": "v2"}], "covariates": []}])
+    assert [c["name"] for c in p["columns"]] == ["v1", "v2"] and len(dic) == 2 and len(names) == 100
+    assert _focus(d, [{"title": "author request"}])[2] is None          # nothing named: everything

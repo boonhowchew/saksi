@@ -29,6 +29,33 @@ Return ONLY a JSON object with exactly these keys:
   "protocol_variables_missing_from_data": [str]
 }"""
 
+CURATOR_COLUMNS = """You are the Data Curator in Saksi, a research platform where every step is recorded.
+
+The dataset is wide, so you receive the AGGREGATE PROFILE of SOME of its columns (never individual records), the
+names of all columns, and the protocol. Draft data-dictionary entries and flag data-quality problems for THESE
+columns only. The same rules apply: never invent values, units or codes you cannot see ("unknown — confirm with
+authors"); flag likely direct identifiers, implausible ranges and missingness that could bias the planned analysis.
+Keep each entry short.
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "dictionary": [{"column": str, "label": str, "type": "numeric|binary|categorical|date|identifier|free_text",
+                  "units_or_coding": str, "role": "outcome|exposure|covariate|identifier|administrative|unclear"}],
+  "flags": [{"column": str, "severity": "high|medium|low", "issue": str, "suggested_check": str}]
+}"""
+
+CURATOR_OVERVIEW = """You are the Data Curator in Saksi, a research platform where every step is recorded.
+
+You receive every column of a dataset with its kind and number of missing values (no values, no records), and the
+study protocol. Column-level checks have been done separately. Give a short overview for the authors.
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "summary": "two sentences",
+  "protocol_variables_missing_from_data": [variables the protocol names that no column appears to hold],
+  "flags": [{"column": null, "severity": "high|medium|low", "issue": "dataset-level problem", "suggested_check": str}]
+}"""
+
 PLAN = """You are the Analysis Agent in Saksi. Turn the study protocol into a structured analysis plan.
 
 Rules:
@@ -194,7 +221,8 @@ Add this key to the JSON object:
   "item_assessments": [{"item_id": str, "assessment": "addressed|partly_addressed|not_addressed|cannot_tell",
                         "quote": "exact excerpt from the current draft, or empty", "note": "one or two sentences"}]"""
 
-TEMPLATES = {"curator": CURATOR, "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
+TEMPLATES = {"curator": CURATOR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+             "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 
 
