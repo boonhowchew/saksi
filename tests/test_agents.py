@@ -165,7 +165,8 @@ def test_curate_plan_run_end_to_end(setup):
     assert prim["sample_check"]["targets"] == {"n": {"target": 400, "achieved": 388, "short": True},
                                                "events": {"target": 40, "achieved": 18, "short": True}}
     assert auc["label"] == "exploratory" and auc["basis"] == "pre-specified"     # secondary: not powered for it
-    assert "not the primary hypothesis" in s.plan_locked["analyses"]["auc"]["design"]["reasons_not_confirmatory"][0]
+    assert any("listed as a secondary analysis" in r
+               for r in s.plan_locked["analyses"]["auc"]["design"]["reasons_not_confirmatory"])
 
     # Figures: Saksi draws the forest plot and flow diagram from the recorded results; the ROC curve,
     # required by rule for an AUC analysis, is drawn by the analysis code in the sandbox.

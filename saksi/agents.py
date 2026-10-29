@@ -29,7 +29,7 @@ from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .figures import required_figure
 from .tracing import interval_facts
-from .workflow import Project, State, WorkflowError
+from .workflow import Project, State, WorkflowError, included_order
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
 
@@ -214,12 +214,14 @@ class Agents:
                                                   requested_by=requested_by, material_sha256=ds["sha256"])
 
     # -- Analysis plan -------------------------------------------------------
-    def propose_plan(self, requested_by: str) -> State:
+    def propose_plan(self, requested_by: str, instructions: str | None = None) -> State:
         s = self.project.state()
         protocol, pm = self._protocol_text(s)
         d = self._dictionary(s)
         user = (f"PROTOCOL:\n{protocol}\n\nDATA DICTIONARY:\n{json.dumps(d['dictionary'], separators=(',', ':'))}\n\n"
-                f"DATASET PROFILE (aggregate only):\n{json.dumps(d['profile'], separators=(',', ':'))}")
+                f"DATASET PROFILE (aggregate only):\n{json.dumps(d['profile'], separators=(',', ':'))}"
+                + (f"\n\nTHE AUTHORS' INSTRUCTIONS FOR THIS PLAN (follow them; the protocol still governs what "
+                   f"each analysis is):\n{instructions.strip()}" if instructions and instructions.strip() else ""))
         r = self._chat("plan", PLAN, user, json_mode=True, purpose="propose_plan")
         try:
             out = parse_json(r.text)
@@ -236,15 +238,17 @@ class Agents:
             a["columns_not_in_data"] = sorted({v["column"] for v in named
                                                if isinstance(v, dict) and v.get("column") and v["column"] not in cols})
             a["prompt"] = prompt_ref("plan")
+        note = f"Redrafted at the request of {requested_by}: {instructions.strip()}" if instructions and \
+            instructions.strip() else None
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
-                                         call=r.record.to_payload(), requested_by=requested_by)
+                                         call=r.record.to_payload(), requested_by=requested_by, note=note)
 
     # -- Running analyses ------------------------------------------------------
     def run_planned(self, requested_by: str, plan_analysis_id: str | None = None) -> State:
         s = self.project.state()
         if s.plan_locked is None:
             raise WorkflowError("the analysis plan has not been confirmed by every author")
-        ids = [plan_analysis_id] if plan_analysis_id else list(s.plan_locked["order"])
+        ids = [plan_analysis_id] if plan_analysis_id else included_order(s.plan_locked)
         for pid in ids:
             if pid not in s.plan_locked["analyses"]:
                 raise WorkflowError(f"{pid!r} is not in the confirmed plan")
@@ -367,6 +371,8 @@ class Agents:
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}\n\n"
+                f"PROTOCOL ANALYSES NOT PERFORMED IN THIS PAPER (authors' decision, with reasons):\n"
+                f"{json.dumps(not_performed(s), indent=1)}\n\n"
                 f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}")
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.
@@ -401,6 +407,12 @@ class Agents:
         """Reviewer Assistant briefing. A different model; it gets no executor and cannot edit."""
         from .reviewer import ReviewerAssistant
         return ReviewerAssistant(self.project, self.client).brief(requested_by)
+
+
+def not_performed(s: State) -> list[dict[str, Any]]:
+    plan = s.plan_locked or {}
+    return [{"id": i, "title": a.get("title"), "reason": a.get("exclusion_reason")}
+            for i, a in (plan.get("analyses") or {}).items() if not a.get("included", True)]
 
 
 def _focus(d: dict[str, Any], specs: list[dict[str, Any]]):

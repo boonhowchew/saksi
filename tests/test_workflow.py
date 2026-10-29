@@ -250,3 +250,28 @@ def test_state_is_rebuilt_identically(proj):
     a = proj.state().to_dict()
     b = Project(proj.root.parent, "demo").state().to_dict()
     assert a == b
+
+
+def test_authors_revise_the_plan_and_leaving_out_needs_a_reason(proj):
+    from saksi.workflow import WorkflowError, included_order
+    import pytest as _pt
+    to_analysis_plan = [{"id": "primary", "method": "logistic"}, {"id": "sens1", "method": "gbc"},
+                        {"id": "sub1", "method": "subgroups"}]
+    proj.upload_material("bhc", "dataset", "data.csv", "a" * 64, 100)
+    proj.upload_material("bhc", "protocol", "protocol.pdf", "b" * 64, 200)
+    proj.propose_plan("agent:analyst", to_analysis_plan, protocol_ref="b" * 64)
+    revised = [dict(a) for a in to_analysis_plan]
+    revised[2]["included"] = False
+    with _pt.raises(WorkflowError, match="say why 'sub1'"):
+        proj.propose_plan("coauthor", revised, protocol_ref="b" * 64, note="subgroups for a later paper")
+    revised[2]["exclusion_reason"] = "Subgroup analyses are planned for a separate paper"
+    with _pt.raises(WorkflowError, match="what you changed"):
+        proj.propose_plan("coauthor", revised, protocol_ref="b" * 64)
+    s = proj.propose_plan("coauthor", revised, protocol_ref="b" * 64, note="Subgroups go in a separate paper.")
+    assert s.plan["note"] == "Subgroups go in a separate paper." and s.plan["changes"]["left_out"] == ["sub1"]
+    for a in ("bhc", "coauthor"):
+        s = proj.confirm_plan(a, s.plan["sha"])
+    assert included_order(s.plan_locked) == ["primary", "sens1"]
+    with _pt.raises(WorkflowError, match="left out of this paper"):
+        proj.complete_analysis("agent:analyst", "sub1", plan_analysis_id="sub1", spec={}, code_sha256="a" * 64,
+                               outputs_sha256=None, execution={}, status="ok")

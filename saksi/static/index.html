@@ -115,6 +115,15 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; font-size: .88rem; margin: .5rem 0; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+ul.checks { list-style: none; padding: 0; margin: .5rem 0; }
+ul.checks li { display: flex; gap: .6rem; padding: .35rem 0; border-top: 1px solid var(--paper); }
+ul.checks li .mark { flex: 0 0 1.3rem; height: 1.3rem; border-radius: 50%; display: grid; place-items: center; font-size: .8rem; font-weight: 700; }
+ul.checks li.met .mark { background: var(--verdigris-wash); color: var(--verdigris); }
+ul.checks li.unmet .mark { background: var(--ochre-wash); color: var(--ochre); }
+fieldset.edit { border: 1px solid var(--rule); border-radius: 6px; padding: .75rem 1rem 1rem; display: grid; gap: .6rem; }
+fieldset.edit legend { font-weight: 600; padding: 0 .3rem; }
+label.inline { display: flex; gap: .4rem; align-items: center; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; }
 blockquote { margin: .4rem 0; padding: .3rem .8rem; border-left: 3px solid var(--rule); font-family: var(--serif); color: var(--ink); }
 details > summary { cursor: pointer; color: var(--indigo); margin: .3rem 0; }
 
@@ -301,7 +310,7 @@ function nextStep() {
         if (!datasets.length || !s.materials.some((m) => m.kind === "protocol")) return ["Upload the dataset and the protocol.", "materials"];
         if (!s.curator_reports.length) return ["Ask the Data Curator to check the dataset.", "materials"];
         if (!s.plan) return ["Ask the Analysis Agent to draft the analysis plan from the protocol.", "plan"];
-        if (!s.plan_confirmed_by.includes(S.you)) return ["Check the analysis plan against the protocol, then confirm it.", "plan"];
+        if (!s.plan_confirmed_by.includes(S.you)) return ["Check the analysis plan: include or leave out analyses, correct roles if needed, then confirm it.", "plan"];
         return ["Waiting for co-authors to confirm the plan: " + waiting(s.authors.filter((a) => !s.plan_confirmed_by.includes(a))), "plan"];
       case "ANALYSIS": {
         const order = s.plan_locked?.order || [];
@@ -451,8 +460,18 @@ function people() {
 async function materials() {
   const s = S.state;
   const inUse = s.materials.filter((m) => m.kind === "dataset").at(-1);
-  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${m === inUse && s.materials.filter((x) => x.kind === "dataset").length > 1 ? ' <span class="tag good">in use</span>' : ""}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
-    <td><span class="hash" title="${esc(m.sha256)}">${short(m.sha256)}</span></td><td>${esc(name(m.by))}</td></tr>`).join("");
+  const inUseProtocol = s.materials.filter((m) => m.kind === "protocol").at(-1);
+  const readBy = (m) => {
+    const i = m.inspection;
+    if (!i) return `<span class="muted small">not checked (uploaded before this check existed)</span>`;
+    if (i.error) return `<span class="tag bad">could not read: ${esc(i.error)}</span>`;
+    if (m.kind === "dataset") return `<span class="tag good">read</span> ${esc(i.rows)} rows × ${esc(i.columns)} columns`;
+    if (i.warning) return `<span class="tag attn">${esc(i.warning)}</span>`;
+    return i.characters != null ? `<span class="tag good">read</span> ${esc(i.characters.toLocaleString())} characters of text${i.pages ? `, ${esc(i.pages)} pages` : ""}` : "";
+  };
+  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${(m === inUse && s.materials.filter((x) => x.kind === "dataset").length > 1) || (m === inUseProtocol && s.materials.filter((x) => x.kind === "protocol").length > 1) ? ' <span class="tag good">in use</span>' : ""}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
+    <td>${readBy(m)}</td><td><span class="hash" title="${esc(m.sha256)}">${short(m.sha256)}</span></td><td>${esc(name(m.by))}</td></tr>`).join("");
+  const preview = inUseProtocol?.inspection?.preview;
   const canUpload = isAuthor() && s.stage === "INGEST";
   let rep = "";
   const r = s.curator_reports.at(-1);
@@ -473,8 +492,10 @@ async function materials() {
   }
   const canCurate = isAuthor() && s.stage === "INGEST" && s.materials.some((m) => m.kind === "dataset");
   return `<section><h2>Study materials</h2>
-    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running. If you upload more than one dataset, Saksi uses the latest.</p>
-    ${list ? `<div class="tablewrap"><table><thead><tr><th>Kind</th><th>File</th><th>Size</th><th>Hash</th><th>Uploaded by</th></tr></thead><tbody>${list}</tbody></table></div>` : `<p>No files yet.</p>`}
+    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running. If you upload more than one dataset or protocol, Saksi uses the latest of each.</p>
+    ${list ? `<div class="tablewrap"><table><thead><tr><th>Kind</th><th>File</th><th>Size</th><th>Read by Saksi</th><th>Hash</th><th>Uploaded by</th></tr></thead><tbody>${list}</tbody></table></div>` : `<p>No files yet.</p>`}
+    ${preview ? `<details><summary>The start of the protocol text, as Saksi reads it</summary><p class="small muted">Quotations in the plan are checked against this text. If it looks garbled, upload a Word or text version of the protocol.</p><blockquote class="small">${esc(preview)}…</blockquote></details>` : ""}
+    ${!s.materials.some((m) => m.kind === "protocol") && s.materials.length ? `<p class="msg warn small">No protocol yet. Upload it with Kind set to Protocol; the plan is drawn from it and every quotation is checked against it.</p>` : ""}
     ${canUpload ? `<form class="row" data-form="upload" style="margin-top:1rem">
       <label><span>Kind</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Registration</option><option value="other">Other</option></select></label>
       <label><span>File</span><input type="file" name="file" required></label>
@@ -490,42 +511,82 @@ async function materials() {
 function plan() {
   const s = S.state, p = s.plan;
   const canPropose = isAuthor() && s.stage === "INGEST" && s.curator_reports.length;
-  if (!p) return `<section><h2>Analysis plan</h2><p>No plan yet. The Analysis Agent reads the protocol and lists only the analyses it specifies, each with a quotation that is checked against the protocol text.</p>
-    ${canPropose ? `<button class="btn" data-agent="propose_plan" data-label="The Analysis Agent is reading the protocol">Ask the Analysis Agent to draft the plan</button>` : `<p class="muted">An author can ask for it once the Data Curator has reported.</p>`}</section>`;
+  const redraft = (label) => `<form class="stack" data-form="redraft" style="margin-top:1rem">
+      <label><span>Instructions for the Analysis Agent (optional), for example "only the analyses for the primary objective"</span><textarea name="instructions"></textarea></label>
+      <div><button class="btn ${p ? "quiet" : ""}" data-label="The Analysis Agent is reading the protocol">${label}</button></div></form>`;
+  if (!p) return `<section><h2>Analysis plan</h2><p>No plan yet. The Analysis Agent reads the protocol and lists the analyses it specifies, each with a quotation that code checks against the protocol.</p>
+    ${canPropose ? redraft("Ask the Analysis Agent to draft the plan") : `<p class="muted">An author can ask for it once the Data Curator has reported.</p>`}</section>`;
+  if (S.planEdit && isAuthor() && s.stage === "INGEST") return planEditor(p);
   const locked = s.plan_locked && s.plan_locked.sha === p.sha;
-  const col = (v) => v?.column ? `${esc(v.name)} <span class="muted">(${esc(v.column)})</span>` : `${esc(v?.name || "")} <span class="tag attn">no column</span>`;
+  const items = p.order.map((id) => p.analyses[id]);
+  const inc = items.filter((a) => a.included !== false);
+  const nConf = inc.filter((a) => a.label === "confirmatory").length;
+  const confirmedBy = s.authors.filter((a) => s.plan_confirmed_by.includes(a));
+  const ch = p.changes;
   return `<section><h2>Analysis plan</h2>
-    <p>${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed. Its analyses are confirmatory; anything else is labelled exploratory.`
-      : `Proposed by ${esc(name(p.by))}. Confirmed by: ${p && s.plan_confirmed_by.length ? esc(s.plan_confirmed_by.map(name).join(", ")) : "nobody yet"}.`}</p>
-    <p class="small muted">Plan hash <span class="hash">${short(p.sha)}</span>. Confirming binds you to exactly this version.</p>
-    ${p.order.map((id, i) => { const a = p.analyses[id]; return `<div class="item ${a.protocol_quote_verified && !a.columns_not_in_data?.length ? "good" : "attn"}">
-      <h3>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span> ${a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""}</h3>
-      <dl class="facts"><dt>Objective</dt><dd>${esc(a.objective)}</dd><dt>Outcome</dt><dd>${col(a.outcome)}</dd>
-      <dt>Exposures</dt><dd>${(a.exposures || []).map(col).join(", ") || "none"}</dd><dt>Covariates</dt><dd>${(a.covariates || []).map(col).join(", ") || "none"}</dd>
-      <dt>Method</dt><dd>${esc(a.method)}</dd><dt>Effect measure</dt><dd>${esc(a.effect_measure)}</dd><dt>Missing data</dt><dd>${esc(a.missing_data)}</dd></dl>
-      <blockquote>${esc(a.protocol_quote)}</blockquote>
-      <p>${a.protocol_quote_verified ? `<span class="tag good">Quotation found in the protocol</span>` : `<span class="tag attn">Quotation not found in the protocol: check this analysis</span>`}
-      ${a.columns_not_in_data?.length ? ` <span class="tag attn">Not in the data: ${esc(a.columns_not_in_data.join(", "))}</span>` : ""}</p>
-      ${a.design ? designBlock(a.design) : ""}
-      ${a.unresolved?.length ? `<p class="small">Unresolved: ${esc(a.unresolved.join("; "))}</p>` : ""}</div>`; }).join("")}
-    ${isAuthor() && s.stage === "INGEST" && !s.plan_confirmed_by.includes(S.you)
-      ? `<button class="btn" data-action="confirm_plan" data-label="Confirming">Confirm this plan</button>` : ""}
-    ${canPropose && !locked ? ` <button class="btn quiet" data-agent="propose_plan" data-label="The Analysis Agent is reading the protocol">Ask for a new draft of the plan</button>` : ""}
-  </section>`;
+    <p>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol: <strong>${nConf} confirmatory</strong>, ${inc.length - nConf} exploratory${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.</p>
+    <p class="small">${p.by.startsWith("agent:") ? `Drafted by ${esc(name(p.by))}${p.requested_by ? " for " + esc(name(p.requested_by)) : ""}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: “${esc(p.note)}”` : ""}.
+      ${ch ? esc([ch.left_out?.length && `left out ${ch.left_out.join(", ")}`, ch.put_back?.length && `put back ${ch.put_back.join(", ")}`, ch.role_changed?.length && `role changed for ${ch.role_changed.join(", ")}`, ch.label_changed?.length && `label changed for ${ch.label_changed.join(", ")}`, ch.added?.length && `added ${ch.added.join(", ")}`, ch.removed?.length && `removed ${ch.removed.join(", ")}`].filter(Boolean).join("; ")) : ""}</p>
+    <p>${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed.`
+      : `Confirmed by ${confirmedBy.length} of ${s.authors.length} authors${confirmedBy.length ? ": " + esc(confirmedBy.map(name).join(", ")) : ""}. Confirming binds you to exactly this version (<span class="hash">${short(p.sha)}</span>); any change needs everyone to confirm again.`}</p>
+    ${isAuthor() && s.stage === "INGEST" ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0">
+      ${!s.plan_confirmed_by.includes(S.you) ? `<button class="btn" data-action="confirm_plan" data-label="Confirming">Confirm this plan</button>` : `<span class="tag good">You confirmed this version</span>`}
+      <button class="btn quiet" data-action="editplan">Edit the plan</button></div>` : ""}
+    <details class="small"><summary>How Saksi labels analyses</summary><p>An analysis is <strong>confirmatory</strong> only if all three checks below pass, and every author confirms the plan before any result exists. Code does the checking against the protocol's own text; authors can correct the plan, but a justification that isn't in the protocol won't pass. Everything else is <strong>exploratory</strong>, which is how it must be reported.</p></details>
+  </section>
+  <section>${items.map((a, i) => planItem(a, i)).join("")}</section>
+  ${canPropose && !locked ? `<section><h2>Ask for a new draft</h2><p class="small muted">The new draft replaces this one; the record keeps both.</p>${redraft("Ask the Analysis Agent for a new draft")}</section>` : ""}`;
 }
 
-function designBlock(d) {
-  const found = (ok) => ok ? `<span class="tag good">found in the protocol</span>` : `<span class="tag attn">not found in the protocol</span>`;
+function planItem(a, i) {
+  const d = a.design || {}, out = a.included === false;
+  const col = (v) => v?.column ? `${esc(v.name)} <span class="muted">(${esc(v.column)})</span>` : `${esc(v?.name || "")} <span class="tag attn">no column</span>`;
+  const conds = d.conditions || [];
+  const wording = { described: d.quotes?.described, primary: d.quotes?.primary, powered: d.quotes?.sample_size };
   const t = d.sample_size_target || {};
-  return `<details ${d.label === "confirmatory" ? "" : "open"}><summary>Why ${d.label === "confirmatory" ? "confirmatory" : "exploratory"}</summary>
-    <p class="small">${d.label === "confirmatory"
-      ? "The protocol names this the primary analysis and its sample-size justification covers it. Both quotations were found in the protocol by code."
-      : "Confirmatory needs the protocol to name it the primary analysis and its sample-size justification to cover it. Here: " + esc(d.reasons_not_confirmatory.join("; ")) + "."}</p>
-    <dl class="facts"><dt>Role in the protocol</dt><dd>${esc(d.role)}</dd>
-    ${d.primary_quote ? `<dt>Named primary</dt><dd>“${esc(d.primary_quote)}” ${found(d.checks.primary_quote_verified)}</dd>` : ""}
-    ${d.sample_size_quote ? `<dt>Sample size</dt><dd>“${esc(d.sample_size_quote)}” ${found(d.checks.sample_size_quote_verified)}</dd>` : ""}
-    ${t.n || t.events ? `<dt>Planned</dt><dd>${t.n ? esc(t.n) + " participants" : ""}${t.n && t.events ? ", " : ""}${t.events ? esc(t.events) + " events" : ""}</dd>` : ""}</dl></details>`;
+  return `<div class="item ${out ? "" : d.label === "confirmatory" ? "good" : "attn"}">
+    <h3>${i + 1}. ${esc(a.title || a.id)} ${out ? `<span class="tag">left out of this paper</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""} <span class="muted small">${esc(a.id)}</span></h3>
+    ${out ? `<p class="small"><strong>Left out:</strong> ${esc(a.exclusion_reason)}. The draft will name it as a protocol analysis not performed.</p>` : ""}
+    ${conds.length ? `<ul class="checks">${conds.map((c) => {
+      const w = wording[c.key];
+      return `<li class="${c.met ? "met" : "unmet"}"><span class="mark">${c.met ? "✓" : "✗"}</span><div><strong>${esc(c.label)}.</strong> <span class="small">${esc(c.detail[0].toUpperCase() + c.detail.slice(1))}.</span>
+        ${w?.protocol_text && w.status === "close" ? `<blockquote class="small">Protocol: “${esc(w.protocol_text)}”</blockquote>` : ""}
+        ${c.key === "described" && a.protocol_quote ? `<blockquote class="small">${esc(a.protocol_quote)}</blockquote>` : ""}
+        ${c.key === "primary" && d.primary_quote ? `<blockquote class="small">${esc(d.primary_quote)}</blockquote>` : ""}
+        ${c.key === "powered" && d.sample_size_quote ? `<blockquote class="small">${esc(d.sample_size_quote)}</blockquote>${t.n || t.events ? `<p class="small muted">Planned: ${t.n ? esc(t.n) + " participants" : ""}${t.n && t.events ? ", " : ""}${t.events ? esc(t.events) + " outcome events" : ""}</p>` : ""}` : ""}
+      </div></li>`; }).join("")}</ul>`
+      : `<p class="small">${esc((d.reasons_not_confirmatory || []).join("; ") || "")}</p>`}
+    ${a.columns_not_in_data?.length ? `<p><span class="tag attn">Not in the data: ${esc(a.columns_not_in_data.join(", "))}</span></p>` : ""}
+    <details><summary>Specification</summary><dl class="facts"><dt>Objective</dt><dd>${esc(a.objective)}</dd><dt>Outcome</dt><dd>${col(a.outcome)}</dd>
+      <dt>Exposures</dt><dd>${(a.exposures || []).map(col).join(", ") || "none"}</dd><dt>Covariates</dt><dd>${(a.covariates || []).map(col).join(", ") || "none"}</dd>
+      <dt>Method</dt><dd>${esc(a.method)}</dd><dt>Effect measure</dt><dd>${esc(a.effect_measure)}</dd><dt>Missing data</dt><dd>${esc(a.missing_data)}</dd>
+      ${a.unresolved?.length ? `<dt>Unresolved</dt><dd>${esc(a.unresolved.join("; "))}</dd>` : ""}</dl></details>
+  </div>`;
 }
+
+function planEditor(p) {
+  const f = (id, k) => `${k}:${id}`;
+  return `<section><h2>Edit the plan</h2>
+    <p class="small">Choose which of the protocol's analyses this paper includes, and correct what the Analysis Agent got wrong. For quotations, paste the protocol's own words: code checks them against the protocol again when you save. Saving creates a revised plan that every author confirms; the record keeps both versions.</p>
+    <form class="stack" data-form="planedit" style="max-width:none">
+    ${p.order.map((id, i) => { const a = p.analyses[id], d = a.design || {}, t = d.sample_size_target || {}; return `<fieldset class="edit">
+      <legend>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span></legend>
+      <label class="inline"><input type="checkbox" name="${f(id, "inc")}" ${a.included === false ? "" : "checked"}> Include in this paper</label>
+      <label><span>If left out, why (required; the draft will report it)</span><input type="text" name="${f(id, "why")}" value="${esc(a.exclusion_reason || "")}"></label>
+      <label><span>Role in the protocol</span><select name="${f(id, "role")}">${["primary", "secondary", "other"].map((r) => `<option value="${r}" ${(d.role || a.role) === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      <label><span>Protocol sentence describing this analysis</span><textarea name="${f(id, "pq")}">${esc(a.protocol_quote || "")}</textarea></label>
+      <label><span>Protocol sentence naming it the primary analysis (primary analyses only)</span><textarea name="${f(id, "prq")}">${esc(d.primary_quote || a.primary_quote || "")}</textarea></label>
+      <label><span>The protocol's sample-size justification, if it covers this analysis</span><textarea name="${f(id, "ssq")}">${esc(d.sample_size_quote || a.sample_size_quote || "")}</textarea></label>
+      <div class="row2"><label><span>Planned participants</span><input type="text" inputmode="numeric" name="${f(id, "n")}" value="${esc(t.n ?? "")}"></label>
+        <label><span>Planned outcome events</span><input type="text" inputmode="numeric" name="${f(id, "ev")}" value="${esc(t.events ?? "")}"></label></div>
+      <label><span>Method</span><input type="text" name="${f(id, "method")}" value="${esc(a.method || "")}"></label>
+      <label><span>Missing data</span><input type="text" name="${f(id, "md")}" value="${esc(a.missing_data || "")}"></label>
+    </fieldset>`; }).join("")}
+    <label><span>What you changed and why (required; kept in the record)</span><textarea name="note" required></textarea></label>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn" data-label="Saving">Save as a revised plan</button>
+      <button class="btn quiet" type="button" data-action="canceledit">Cancel</button></div></form></section>`;
+}
+
 function sampleBlock(c) {
   if (!c) return "";
   const rows = Object.entries(c.targets).map(([k, r]) => `${k === "n" ? "Participants" : "Outcome events"}: ${r.achieved ?? "not reported"} analysed, ${r.target} planned${r.short ? " (short)" : ""}`);
@@ -840,6 +901,8 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "clearprefill": S.prefill = null; return render();
+    case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
+    case "canceledit": S.planEdit = false; return render();
     case "showcode": { const box = document.getElementById("code-" + t.dataset.sha); box.innerHTML = `<pre>${esc(await blob(t.dataset.sha))}</pre>`; return; }
     case "download": {
       const url = URL.createObjectURL(new Blob([JSON.stringify(S.events, null, 1)], { type: "application/json" }));
@@ -893,6 +956,20 @@ document.addEventListener("submit", async (ev) => {
       const form = new FormData(); form.append("kind", val("kind")); form.append("file", fd.get("file"));
       if (val("note")) form.append("note", val("note"));
       return act(btn, () => api(`/projects/${S.pid}/materials`, { method: "POST", form }), "Uploaded.");
+    }
+    case "redraft": return act(btn, () => agent("propose_plan", val("instructions") ? { instructions: val("instructions") } : {}),
+      "The Analysis Agent drafted a new plan. Check it, then confirm it.", "The Analysis Agent is reading the protocol. This can take a minute or two.");
+    case "planedit": {
+      const p = s.plan, num = (v) => (v && /^\d+$/.test(v) ? +v : null);
+      const analyses = p.order.map((id) => {
+        const a = { ...p.analyses[id] }, g = (k) => val(`${k}:${id}`);
+        delete a.design; delete a.label; delete a.protocol_quote_verified;
+        return { ...a, included: !!fd.get(`inc:${id}`), exclusion_reason: g("why") || null, role: g("role"),
+          protocol_quote: g("pq"), primary_quote: g("prq"), sample_size_quote: g("ssq"),
+          sample_size_target: { n: num(g("n")), events: num(g("ev")) }, method: g("method"), missing_data: g("md") };
+      });
+      return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note") }); S.planEdit = false; return r; },
+        "Saved as a revised plan. Code re-checked every quotation against the protocol; every author now confirms it.");
     }
     case "explore": return act(btn, () => agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }), "The exploratory analysis ran. It is labelled exploratory.",
       "The Analysis Agent is writing and running the code. This can take a minute or two.");

@@ -22,7 +22,8 @@ def test_primary_with_verified_quotes_is_confirmatory():
 
 def test_secondary_is_exploratory_even_when_pre_specified():
     d = assess({**PRIMARY, "role": "secondary"}, P)
-    assert d["label"] == "exploratory" and "not the primary hypothesis" in d["reasons_not_confirmatory"][0]
+    assert d["label"] == "exploratory" and "listed as a secondary analysis" in d["reasons_not_confirmatory"][0]
+    assert [c["met"] for c in d["conditions"]] == [True, False, True]
 
 
 def test_invented_quotes_fail_safe_to_exploratory():
@@ -35,7 +36,7 @@ def test_invented_quotes_fail_safe_to_exploratory():
 
 def test_no_protocol_text_means_exploratory():
     d = assess(PRIMARY, None)
-    assert d["label"] == "exploratory" and "not available" in d["reasons_not_confirmatory"][0]
+    assert d["label"] == "exploratory" and "could not read the protocol" in d["reasons_not_confirmatory"][0]
 
 
 def test_sample_check_flags_shortfall_without_changing_label():
@@ -64,5 +65,13 @@ def test_engine_decides_whoever_proposes(proj):
     assert s.plan["analyses"]["sens"]["protocol_quote_verified"] is False
     # Tampering with the stored protocol after upload: nothing can be verified, so nothing is confirmatory.
     (proj.root / "materials" / sha).write_bytes(data + b"\nedited")
-    s = proj.propose_plan("bhc", [PRIMARY], protocol_ref=sha)
+    s = proj.propose_plan("bhc", [PRIMARY], protocol_ref=sha, note="retry after the file changed")
     assert s.plan["analyses"]["primary"]["label"] == "exploratory"
+
+
+def test_pdf_damage_is_tolerated_but_numbers_are_not():
+    damaged = P.replace("400 women\n(about 40 GDM events)", "400 wo-\nmen (about 40 GDM\nevents)").replace("fi", "\ufb01")
+    assert assess(PRIMARY, damaged)["label"] == "confirmatory"
+    d = assess({**PRIMARY, "sample_size_quote":
+                "4000 women (about 40 GDM events) give 80% power to detect an odds ratio of 1.10 per kg/m2"}, P)
+    assert d["label"] == "exploratory" and "numbers differ" in d["conditions"][2]["detail"]

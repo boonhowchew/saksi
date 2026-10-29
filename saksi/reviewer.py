@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .agents import AgentError, parse_json, protocol_text
+from .agents import AgentError, not_performed, parse_json, protocol_text
 from .documents import quote_found
 from .llm import ModelClient
 from .prompts import REVIEW_ASSIST, REVIEW_FOLLOWUP, prompt_ref
@@ -117,6 +117,8 @@ class ReviewerAssistant:
                  f"INTERVAL FACTS (computed by code):\n{json.dumps(facts, indent=1)}",
                  "ANALYSIS CODE AS RUN:\n" + "\n\n".join(f"# [A:{k}]\n{c}" for k, c in code.items()),
                  f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed, indent=1)}",
+                 f"PROTOCOL ANALYSES THE AUTHORS LEFT OUT OF THIS PAPER, WITH REASONS:\n"
+                 f"{json.dumps(not_performed(s), indent=1)}",
                  "FIGURES (captions only; drawn by code, never by a model):\n" + ("\n".join(
                      f"Figure {f['number']} [A:{f['analysis_id']}], drawn by {f['drawn_by']}: {f['caption']}"
                      for f in s.figures if f["analysis_id"] in ok) or "(none)"),

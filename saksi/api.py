@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .canonical import sha256_bytes, sha256_text
+from .inspection import inspect_material
 from .workflow import Project, WorkflowError, ledger
 
 log = logging.getLogger("saksi")
@@ -36,7 +37,7 @@ log = logging.getLogger("saksi")
 # The authors' agents work for the authors; the Reviewer Assistant works for the reviewer.
 AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "curate": ("curate", {"material_sha256"}, "author"),
-    "propose_plan": ("propose_plan", set(), "author"),
+    "propose_plan": ("propose_plan", {"instructions"}, "author"),
     "run_planned": ("run_planned", {"plan_analysis_id"}, "author"),
     "run_request": ("run_request", {"request_id", "prompt"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
@@ -52,7 +53,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "register_human": ("register_human", {"actor", "role"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
-    "propose_plan": ("propose_plan", {"analyses", "protocol_ref"}),
+    "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note"}),
     "request_analysis": ("request_analysis", {"request_id", "prompt"}),
     "accept_analyses": ("accept_analyses", {"analysis_set_sha256"}),
     "edit_draft": ("edit_draft", {"base_version", "text", "summary"}),
@@ -278,9 +279,10 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         dest.parent.mkdir(parents=True, exist_ok=True)
         if not dest.exists():
             dest.write_bytes(data)
+        fname = Path(file.filename or "upload").name
         try:
-            s = p.upload_material(who, kind, Path(file.filename or "upload").name, digest, len(data),
-                                  storage_ref=f"materials/{digest}", note=note)
+            s = p.upload_material(who, kind, fname, digest, len(data), storage_ref=f"materials/{digest}", note=note,
+                                  inspection=inspect_material(kind, fname, data))
         except WorkflowError as e:
             raise refused(e)
         persist()

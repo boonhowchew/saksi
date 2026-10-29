@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Boon-How Chew
 
+import json
+
 from fastapi.testclient import TestClient
 
 from saksi.api import create_app
@@ -204,3 +206,19 @@ def test_web_page_is_served_with_a_strict_policy(tmp_path):
     csp = r.headers["content-security-policy"]
     assert "default-src 'none'" in csp and "connect-src 'self'" in csp     # the page talks only to Saksi
     assert "https://" not in r.text.split("<script>")[0]                    # no third-party fonts or styles
+
+
+def test_upload_reports_what_saksi_could_read(tmp_path):
+    from saksi import demo_data
+    c, tok = setup(tmp_path)
+    h = {"X-Saksi-Token": tok}
+    r = c.post("/projects/gdm-demo/materials", data={"kind": "dataset"}, headers=h,
+               files={"file": ("gdm.csv", demo_data.make().to_csv(index=False).encode())})
+    assert r.json()["state"]["materials"][-1]["inspection"] == {"readable": True, "rows": 400, "columns": 10}
+    r = c.post("/projects/gdm-demo/materials", data={"kind": "protocol"}, headers=h,
+               files={"file": ("protocol.txt", demo_data.PROTOCOL.encode())})
+    ins = r.json()["state"]["materials"][-1]["inspection"]
+    assert ins["readable"] and ins["preview"].startswith("Title: Risk factors") and "Person" not in json.dumps(ins)
+    r = c.post("/projects/gdm-demo/materials", data={"kind": "protocol"}, headers=h,
+               files={"file": ("scan.txt", b"page 1")})
+    assert "Almost no text" in r.json()["state"]["materials"][-1]["inspection"]["warning"]

@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .documents import quote_found
+from .documents import locate
 
 ROLES = {"primary", "secondary", "other"}
 _INT = re.compile(r"\d[\d,]*")
@@ -42,6 +42,14 @@ def _target(raw: Any) -> dict[str, int | None]:
     return out
 
 
+def _found(quote: str, text: str) -> dict[str, Any]:
+    if not quote.strip():
+        return {"given": False, "status": "not_given"}
+    if not text:
+        return {"given": True, "status": "not_found", "why": "the protocol's text could not be read"}
+    return {"given": True, **locate(quote, text)}
+
+
 def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any]:
     """Design assessment for one planned analysis. Overrides anything the proposer claimed."""
     text = protocol_text or ""
@@ -49,30 +57,50 @@ def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any
     primary_q = str(analysis.get("primary_quote") or "")
     size_q = str(analysis.get("sample_size_quote") or "")
     target = _target(analysis.get("sample_size_target"))
-    checks = {
-        "protocol_available": bool(text),
-        "protocol_quote_verified": bool(text) and quote_found(str(analysis.get("protocol_quote") or ""), text),
-        "primary_quote_verified": role == "primary" and bool(text) and quote_found(primary_q, text),
-        "sample_size_quote_verified": bool(text) and bool(size_q) and quote_found(size_q, text),
-        "targets_in_quote": all(v in _ints(size_q) for v in target.values() if v is not None),
-    }
-    reasons = []
+    described = _found(str(analysis.get("protocol_quote") or ""), text)
+    primary = _found(primary_q, text) if role == "primary" else {"given": bool(primary_q), "status": "not_checked"}
+    size = _found(size_q, text)
+    ok = lambda f: f["status"] in ("exact", "close")
+    # Planned numbers must appear in the protocol's own wording of the justification.
+    size_words = size.get("protocol_text") or size_q
+    targets_ok = all(v in _ints(size_words) for v in target.values() if v is not None)
+
+    def detail(f: dict[str, Any], what: str) -> str:
+        if f["status"] == "exact":
+            return "found in the protocol"
+        if f["status"] == "close":
+            return "found in the protocol with small differences; the protocol's wording is shown"
+        if f["status"] == "not_given":
+            return f"no {what} given. If the protocol has one, edit the plan and paste it"
+        return (f"not found in the protocol ({f.get('why', 'not in the protocol')}). "
+                "Edit the plan and paste the protocol's exact words")
+
+    conditions = [
+        {"key": "described", "label": "Described in the protocol", "met": ok(described),
+         "detail": detail(described, "protocol sentence describing it")},
+        {"key": "primary", "label": "Named as the primary analysis in the protocol",
+         "met": role == "primary" and ok(primary),
+         "detail": (detail(primary, "sentence naming it primary") if role == "primary" else
+                    f"listed as a {role} analysis. If the protocol names it primary, set its role to primary "
+                    "and paste that sentence")},
+        {"key": "powered", "label": "Covered by the protocol's sample-size calculation",
+         "met": ok(size) and targets_ok,
+         "detail": (detail(size, "sample-size justification") if not ok(size) else
+                    "found in the protocol" + ("" if targets_ok else
+                    ", but the planned numbers are not in that passage. Correct the planned numbers"))},
+    ]
     if not text:
-        reasons.append("the protocol text is not available to check against")
-    if role != "primary":
-        reasons.append(f"the plan lists it as a {role} analysis, not the primary hypothesis")
-    elif not checks["primary_quote_verified"]:
-        reasons.append("no quotation from the protocol naming it as primary was found in the protocol")
-    if not checks["sample_size_quote_verified"]:
-        reasons.append("no sample-size justification quoted from the protocol covers it")
-    elif not checks["targets_in_quote"]:
-        reasons.append("the numeric sample-size target does not appear in the quoted justification")
-    if not checks["protocol_quote_verified"]:
-        reasons.append("the quotation specifying the analysis was not found in the protocol")
-    confirmatory = not reasons
+        for c in conditions:
+            c["met"], c["detail"] = False, "Saksi could not read the protocol's text, so nothing can be checked"
+    confirmatory = all(c["met"] for c in conditions)
+    reasons = [f"{c['label'].lower()}: no ({c['detail']})" for c in conditions if not c["met"]]
+    checks = {"protocol_available": bool(text), "protocol_quote_verified": ok(described),
+              "primary_quote_verified": role == "primary" and ok(primary), "sample_size_quote_verified": ok(size),
+              "targets_in_quote": targets_ok}
     return {"role": role, "label": "confirmatory" if confirmatory else "exploratory", "basis": "pre-specified",
             "primary_quote": primary_q, "sample_size_quote": size_q, "sample_size_target": target,
-            "checks": checks, "reasons_not_confirmatory": reasons}
+            "quotes": {"described": described, "primary": primary, "sample_size": size},
+            "conditions": conditions, "checks": checks, "reasons_not_confirmatory": reasons}
 
 
 def sample_check(design: dict[str, Any] | None, outputs: dict[str, Any] | None) -> dict[str, Any] | None:

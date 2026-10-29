@@ -62,7 +62,9 @@ Rules:
 - Include ONLY analyses the protocol specifies. Do not add analyses the protocol does not describe; authors can
   request exploratory analyses separately and they will be labelled exploratory.
 - For each analysis give a verbatim quotation (one sentence or clause, copied exactly) from the protocol that
-  specifies it. The quotation will be checked against the protocol text automatically.
+  specifies it. The quotation will be checked against the protocol text automatically, so copy it character for
+  character: keep the protocol's own abbreviations and numbers, and do not shorten, merge or paraphrase.
+- List each distinct analysis once. Do not split one model into several analyses (for example one per covariate).
 - Map variables to dataset columns using the data dictionary. If a protocol variable has no matching column,
   say so in "unresolved"; do not guess.
 - State the missing-data approach the protocol specifies; if it specifies none, write "not specified".
@@ -146,6 +148,7 @@ Rules:
   Results, citing that analysis, and treat the shortfall as a limitation.
 - Report the number analysed and excluded for each analysis.
 - If a planned analysis failed, say so in Methods and report no result for it.
+- Name each protocol analysis NOT PERFORMED IN THIS PAPER in the Methods, with the authors' reason.
 - Observational data: no causal language ("effect of", "caused", "led to", "reduced"). Use "associated with".
 - Where INTERVAL FACTS say an interval includes the null value, do not write that the variable "was associated
   with" the outcome. Give the estimate and interval and say the data are compatible with no association. Avoid

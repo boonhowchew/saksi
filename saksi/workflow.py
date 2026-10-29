@@ -173,7 +173,8 @@ def apply(s: State, ev: Event) -> State:
         s.curator_reports.append(p | {"seq": ev.seq})
     elif t == "plan.proposed":
         s.plan = {"sha": p["plan_sha256"], "analyses": p["analyses"], "protocol_ref": p.get("protocol_ref"),
-                  "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq}
+                  "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq,
+                  "note": p.get("note"), "changes": p.get("changes"), "requested_by": p.get("requested_by")}
         s.plan_confirmed_by = set()
     elif t == "plan.confirmed":
         s.plan_confirmed_by.add(ev.actor_id)
@@ -329,7 +330,8 @@ class Project:
 
     # -- INGEST ------------------------------------------------------------
     def upload_material(self, by: str, kind: str, filename: str, sha256: str, size: int,
-                        storage_ref: str | None = None, note: str | None = None) -> State:
+                        storage_ref: str | None = None, note: str | None = None,
+                        inspection: dict[str, Any] | None = None) -> State:
         s = self.state()
         self._require_role(s, by, "author")
         self._require_stage(s, "INGEST")
@@ -338,7 +340,8 @@ class Project:
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise WorkflowError("sha256 must be 64 lowercase hex characters")
         self._emit(by, "material.uploaded", {"kind": kind, "filename": filename, "sha256": sha256,
-                                             "bytes": size, "storage_ref": storage_ref, "note": note})
+                                             "bytes": size, "storage_ref": storage_ref, "note": note,
+                                             "inspection": inspection})
         return self.state()
 
     def record_curator_report(self, by: str, report: dict[str, Any], call: dict[str, Any] | None,
@@ -354,7 +357,10 @@ class Project:
         return self.state()
 
     def propose_plan(self, by: str, analyses: list[dict[str, Any]], protocol_ref: str | None,
-                     call: dict[str, Any] | None = None, requested_by: str | None = None) -> State:
+                     call: dict[str, Any] | None = None, requested_by: str | None = None,
+                     note: str | None = None) -> State:
+        """A plan from the Analysis Agent, or a revision by an author. Authors decide which protocol
+        analyses this paper includes; leaving one out needs a reason, which the record and the draft keep."""
         s = self.state()
         a = self._require_role(s, by, "analyst", "author")
         self._require_stage(s, "INGEST")
@@ -362,6 +368,14 @@ class Project:
         ids = [x.get("id") for x in analyses]
         if not analyses or any(not i for i in ids) or len(set(ids)) != len(ids):
             raise WorkflowError("plan needs at least one analysis, each with a unique id")
+        for x in analyses:
+            x["included"] = x.get("included", True) is not False
+            if not x["included"] and not str(x.get("exclusion_reason") or "").strip():
+                raise WorkflowError(f"say why {x['id']!r} is left out of this paper")
+        if not any(x["included"] for x in analyses):
+            raise WorkflowError("include at least one analysis")
+        if a["kind"] == "human" and s.plan and not (note or "").strip():
+            raise WorkflowError("say what you changed in the plan and why")
         # Confirmatory or exploratory is decided here, by code, against the stored protocol,
         # whoever proposed the plan. Anything the proposer claimed about it is overwritten.
         text = self._protocol_text(s, protocol_ref)
@@ -371,8 +385,9 @@ class Project:
             plan[x["id"]] = {**x, "design": d, "label": d["label"],
                              "protocol_quote_verified": d["checks"]["protocol_quote_verified"]}
         order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
+        changes = _plan_changes(s.plan, plan) if s.plan else None
         call_seq = self._log_call(by, call)
-        self._emit(by, "plan.proposed", {"analyses": plan, "order": order,
+        self._emit(by, "plan.proposed", {"analyses": plan, "order": order, "note": note, "changes": changes,
                                          "plan_sha256": sha256_obj({"analyses": plan, "order": order}),
                                          "protocol_ref": protocol_ref, "llm_call_seq": call_seq,
                                          "requested_by": requested_by})
@@ -433,6 +448,8 @@ class Project:
             raise WorkflowError("status must be 'ok' or 'error'")
         if plan_analysis_id is not None and plan_analysis_id not in s.plan_locked["analyses"]:
             raise WorkflowError(f"{plan_analysis_id!r} is not in the confirmed plan")
+        if plan_analysis_id is not None and not s.plan_locked["analyses"][plan_analysis_id].get("included", True):
+            raise WorkflowError(f"{plan_analysis_id!r} was left out of this paper when the plan was confirmed")
         # The label comes from the confirmed plan, fixed before any result; never from the caller.
         planned = s.plan_locked["analyses"][plan_analysis_id] if plan_analysis_id is not None else None
         label = planned.get("label", "exploratory") if planned else "exploratory"
@@ -773,6 +790,23 @@ def _diff_stats(old: str, new: str) -> dict[str, int]:
             added += j2 - j1
     return {"words_added": added, "words_removed": removed, "words_before": len(old.split()),
             "words_after": len(new.split())}
+
+
+def included_order(plan: dict[str, Any] | None) -> list[str]:
+    """The plan's analyses that this paper includes, in protocol order."""
+    if not plan:
+        return []
+    return [i for i in plan["order"] if plan["analyses"][i].get("included", True)]
+
+
+def _plan_changes(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    o = old["analyses"]
+    inc = lambda d, i: d[i].get("included", True)
+    return {"added": sorted(set(new) - set(o)), "removed": sorted(set(o) - set(new)),
+            "left_out": sorted(i for i in new if not inc(new, i) and (i not in o or inc(o, i))),
+            "put_back": sorted(i for i in new if inc(new, i) and i in o and not inc(o, i)),
+            "role_changed": sorted(i for i in new if i in o and new[i].get("role") != o[i].get("role")),
+            "label_changed": sorted(i for i in new if i in o and new[i].get("label") != o[i].get("label"))}
 
 
 def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
