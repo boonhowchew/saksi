@@ -23,7 +23,7 @@ a PDF.
 |---|---|
 | Hackathon window | Kickoff 26 Oct 2026, 12:00 PM ET – submission 4 Nov 2026, 9:00 PM ET |
 | Repository created | 28 Oct 2026; first commit the same day (see `git log`) |
-| New in this repository | **All code.** Event log, workflow engine, model adapter, API, Modal deployment and tests were written during the event. No code from earlier projects was reused, and no template or starter repository was used |
+| New in this repository | **All code.** Event log, workflow engine, agents, number tracer, model adapter, API, web page, Modal deployment and tests were written during the event. No code from earlier projects was reused, and no template or starter repository was used |
 | Pre-existing work (before kickoff) | **No code.** Only the workflow design, which follows the author's earlier conceptual work on AI-verified scholarly publishing (an unpublished white paper). The demo video opens with this same statement |
 | AI assistance in development | Written with Claude (Anthropic) as a coding assistant; the commit trailers say so. **At runtime the product uses only Meta models** |
 | Test materials | The author's own studies. **None of their data is in this repository** |
@@ -40,8 +40,10 @@ under "New in this repository" was built on top of them.
 | **Modal** | Serverless platform (partner) | Hosts the API, the private data volume and the analysis sandboxes |
 | FastAPI (MIT), Starlette (BSD-3), Pydantic (MIT), python-multipart (Apache-2.0) | Open-source libraries | HTTP API, request validation and file upload |
 | httpx | Open-source library (BSD) | Calls to the model endpoints |
-| NumPy, pandas, SciPy, statsmodels, scikit-learn | Open-source libraries (BSD) | Statistical analysis inside the sandbox |
-| pytest | Open-source library (MIT) | Tests |
+| NumPy, pandas, SciPy, statsmodels, scikit-learn, patsy | Open-source libraries (BSD) | Statistical analysis inside the sandbox |
+| openpyxl (MIT), pypdf (BSD-3), python-docx (MIT) | Open-source libraries | Reading uploaded datasets (Excel) and protocols (PDF, Word) |
+| pytest (MIT) | Open-source library | Tests |
+| Uvicorn (BSD-3), Playwright (Apache-2.0) with Chromium (BSD) | Open-source tools, development only | Offline rehearsal server and the browser walk-through in `scripts/` |
 | GNU AGPL-3.0 text | Licence, from the SPDX licence list | `LICENSE` |
 
 ---
@@ -117,9 +119,9 @@ variants, which are discounted in exchange for training on prompts, are
 
 | Built and tested | Next |
 |---|---|
-| Hash-chained event log and verification | Web interface |
-| Workflow engine: every stage, both loops, all rules above | Live run of the review stage on Muse Spark Open |
-| Contribution Ledger | Evaluation on the author's own studies |
+| Hash-chained event log and verification | Methods guide for the agents, from the author's teaching material |
+| Workflow engine: every stage, both loops, all rules above | Evaluation on the author's own studies |
+| Contribution Ledger | Qualitative (evidence synthesis) path |
 | Model adapter for both Meta endpoints, with record/replay | RO-Crate export of the final object |
 | HTTP API with per-person tokens; file upload | |
 | Aggregate dataset profile (no rows, small cells pooled, identifiers withheld) | |
@@ -130,6 +132,9 @@ variants, which are discounted in exchange for training on prompts, are
 | Reviewer Assistant: briefing with points of inquiry; quotes checked; item assessments in later rounds; records exactly what it was given | |
 | Review loop over the API: two rounds, from draft to the final version | |
 | Number tracer: every number in every draft and edit checked against the results; every analysis must be reported | |
+| Interval facts: whether each interval includes its null value, computed by code for the models and the reviewer | |
+| Web page: every stage for authors and the reviewer, next step for each person, live record with integrity check, provenance and ledger. No third-party scripts or fonts | |
+| Live runs on Modal with both Meta models, from upload to the Reviewer Assistant's briefing (see PLAN.md) | |
 
 **Roadmap beyond the hackathon** (designed, not built): ORCID sign-in,
 cryptographic attestation, editor role, open reviewer nomination, DOIs, and
@@ -144,7 +149,15 @@ pytest -q
 # Deploy
 modal secret create saksi-keys META_API_KEY=... BASETEN_API_KEY=... SAKSI_CREATE_TOKEN=...
 modal run modal_app.py::smoke
-modal deploy modal_app.py
+modal deploy modal_app.py      # the web page is at the deployed URL itself
+```
+
+To try the web page without keys or network, run the offline rehearsal server.
+It is the real app with scripted model replies:
+
+```bash
+python scripts/offline_server.py          # open http://127.0.0.1:8765
+python scripts/web_walkthrough.py out/    # optional: the whole flow in a headless browser, with screenshots
 ```
 
 Set `SAKSI_LLM_MODE=record` to keep model responses, then `replay` to rerun
