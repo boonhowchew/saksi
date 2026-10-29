@@ -24,7 +24,7 @@ a PDF.
 | Hackathon window | Kickoff 26 Oct 2026, 12:00 PM ET – submission 4 Nov 2026, 9:00 PM ET |
 | Repository created | 28 Oct 2026; first commit the same day (see `git log`) |
 | New in this repository | **All code.** Event log, workflow engine, model adapter, API, Modal deployment and tests were written during the event. No code from earlier projects was reused, and no template or starter repository was used |
-| Pre-existing work (before kickoff) | The workflow design follows the author's earlier conceptual work on AI-verified scholarly publishing (an unpublished white paper). That is design, not software |
+| Pre-existing work (before kickoff) | **No code.** Only the workflow design, which follows the author's earlier conceptual work on AI-verified scholarly publishing (an unpublished white paper). The demo video opens with this same statement |
 | AI assistance in development | Written with Claude (Anthropic) as a coding assistant; the commit trailers say so. **At runtime the product uses only Meta models** |
 | Test materials | The author's own studies. **None of their data is in this repository** |
 

@@ -197,3 +197,18 @@ def test_tampered_material_is_refused(setup):
     path.write_bytes(path.read_bytes() + b"\n1,2,3")
     with pytest.raises(AgentError, match="does not match"):
         agents.curate("bhc")
+
+
+def test_returned_error_is_labelled_honestly(setup):
+    p, agents, model, _ = setup
+    cannot = "def analyse(data_path, seed):\n    return {'error': 'column waist_cm not found'}\n"
+    model.script["code"] = [fence(cannot), fence(GOOD)]
+    agents.curate("bhc")
+    model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.propose_plan("bhc")
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    s = agents.run_planned("bhc")
+    a = s.analyses["primary"]
+    assert a["status"] == "ok"
+    assert [x["outcome"] for x in a["execution"]["attempts"]] == ["returned_error", "ok"]

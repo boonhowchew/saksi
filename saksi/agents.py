@@ -210,7 +210,11 @@ class Agents:
             else:
                 result = self.executor.run(code, data, seed=seed)
                 ok = result.status == "ok" and isinstance(result.results, dict) and "error" not in result.results
-                attempts.append({"attempt": attempt, "code_sha256": code_sha, "outcome": result.status,
+                outcome = result.status
+                if result.status == "ok" and not ok:
+                    # Ran without crashing but did not deliver: say so, don't call it "ok".
+                    outcome = "returned_error" if isinstance(result.results, dict) else "bad_result"
+                attempts.append({"attempt": attempt, "code_sha256": code_sha, "outcome": outcome,
                                  "execution": result.to_payload()})
                 if ok:
                     break

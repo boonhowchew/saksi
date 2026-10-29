@@ -125,9 +125,15 @@ def demo() -> dict:
         print(f"     data hash matches upload: {prov.get('data_sha256') == ex['dataset_sha256']}"
               f" | packages: {prov.get('packages')}")
         if a["status"] == "ok":
-            for e in p.blobs.get_json(a["outputs_sha256"]).get("estimates", [])[:6]:
+            out = p.blobs.get_json(a["outputs_sha256"])
+            print(f"     n analysed: {out.get('n_analysed')} | excluded: {out.get('n_excluded')}"
+                  f" ({out.get('exclusion_reason')})")
+            print(f"     model: {(out.get('model') or {}).get('formula_or_description')}")
+            for e in out.get("estimates", [])[:6]:
                 print(f"     {e.get('name')}: {e.get('estimate')} ({e.get('ci_lower')}, {e.get('ci_upper')})"
                       f" {e.get('measure')}")
+            for note in (out.get("notes") or [])[:4]:
+                print(f"     note: {str(note)[:200]}")
         else:
             print(f"     error: {a['error'][:300]}")
 
