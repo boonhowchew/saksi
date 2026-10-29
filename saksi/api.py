@@ -15,6 +15,7 @@ and write their own events.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -23,10 +24,13 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .canonical import sha256_bytes, sha256_text
 from .workflow import Project, WorkflowError, ledger
+
+log = logging.getLogger("saksi")
 
 # Agent actions: name -> (Agents method, allowed argument names, role that may ask)
 # The authors' agents work for the authors; the Reviewer Assistant works for the reviewer.
@@ -40,6 +44,8 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
 }
 
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,40}$")
+# The web page. On Modal it is copied to SAKSI_WEB_DIR (Modal ships only .py files with the package).
+WEB_DIR = Path(os.environ.get("SAKSI_WEB_DIR") or Path(__file__).parent / "static")
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # Human commands callable over HTTP: name -> (Project method, allowed argument names)
@@ -60,6 +66,11 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "submit_response": ("submit_response", set()),
     "attest": ("attest", {"version", "statement"}),
 }
+
+
+# The page talks only to this server: no third-party scripts, fonts or images.
+CSP = ("default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+       "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
 class TokenStore:
@@ -138,6 +149,15 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         return HTTPException(409, str(e))
 
     source_url = os.environ.get("SAKSI_SOURCE_URL", "https://github.com/boonhowchew/saksi")
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def page():
+        f = WEB_DIR / "index.html"
+        if not f.exists():
+            raise HTTPException(404, f"web page not found at {f}")
+        return HTMLResponse(f.read_text(encoding="utf-8"),
+                            headers={"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
+                                     "Referrer-Policy": "no-referrer"})
 
     @app.get("/health")
     def health():
@@ -237,6 +257,11 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         except LLMError as e:
             persist()
             raise HTTPException(502, f"model service error: {e}")
+        except Exception as e:  # a bug, not a refusal: say which action failed, keep details in the server log
+            log.exception("agent action %s failed", action)
+            persist()
+            raise HTTPException(500, f"Saksi hit an unexpected error during '{action}' ({type(e).__name__}). "
+                                     "Anything already done is in the record; the details are in the server log.")
         persist()
         return {"state": s.to_dict()}
 

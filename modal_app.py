@@ -15,6 +15,8 @@ Modal Sandboxes with networking blocked.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import modal
 
 app = modal.App("saksi")
@@ -26,7 +28,10 @@ image = (
         "numpy==2.5.4", "pandas==3.1.0", "scipy==1.18.1", "statsmodels==0.15.0", "scikit-learn==1.9.1",
         "openpyxl", "pypdf", "python-docx",
     )
+    .env({"SAKSI_WEB_DIR": "/web"})
     .add_local_python_source("saksi")
+    # Modal ships only .py files with the package, so the web page goes separately.
+    .add_local_dir(Path(__file__).parent / "saksi" / "static", remote_path="/web")
 )
 
 volume = modal.Volume.from_name("saksi-data", create_if_missing=True)

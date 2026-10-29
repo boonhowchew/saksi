@@ -194,3 +194,12 @@ def test_review_loop_over_http(tmp_path, monkeypatch):
     st = cmd(c, tok, "attest", version=2, statement="I stand behind this final version.").json()["state"]
     assert st["stage"] == "FINAL"
     assert c.get("/projects/gdm-demo/verify").json()["ok"] is True
+
+
+def test_web_page_is_served_with_a_strict_policy(tmp_path):
+    c = TestClient(create_app(tmp_path))
+    r = c.get("/")
+    assert r.status_code == 200 and "<title>Saksi</title>" in r.text
+    csp = r.headers["content-security-policy"]
+    assert "default-src 'none'" in csp and "connect-src 'self'" in csp     # the page talks only to Saksi
+    assert "https://" not in r.text.split("<script>")[0]                    # no third-party fonts or styles

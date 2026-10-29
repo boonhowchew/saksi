@@ -140,6 +140,7 @@ class State:
             "analyses_accepted_by": sorted(self.analyses_accepted_by.get(self.analysis_set_sha(), set())),
             "draft_version": self.draft_version, "drafts": {str(k): v for k, v in self.drafts.items()},
             "signoffs": {str(k): v for k, v in self.signoffs.items()},
+            "opened": {f"{a}|{v}": ts for (a, v), ts in self.opened.items()},
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},

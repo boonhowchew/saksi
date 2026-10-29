@@ -1,0 +1,882 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only  Copyright (c) 2026 Boon-How Chew -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saksi</title>
+<meta name="description" content="Research that is witnessed, not reconstructed.">
+<style>
+:root {
+  --paper: #EEF1F4;
+  --sheet: #FFFFFF;
+  --ink: #1B2A4A;
+  --indigo: #23366E;
+  --muted: #5B6680;
+  --rule: #C9D1DB;
+  --verdigris: #2F7D6D;
+  --verdigris-wash: #E3F1EE;
+  --ochre: #9A6416;
+  --ochre-wash: #FBF0DC;
+  --danger: #A23B3B;
+  --sans: "Avenir Next", Avenir, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
+a { color: var(--indigo); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid #7F95D1; outline-offset: 2px; }
+h1, h2, h3, h4 { line-height: 1.25; margin: 0 0 .5em; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0 0 .75em; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.hash, code, pre { font-family: var(--mono); font-size: .8rem; }
+pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); padding: .75rem; border-radius: 4px; max-height: 28rem; overflow: auto; margin: .5rem 0; }
+.hidden { display: none !important; }
+
+/* Header */
+.top { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; padding: 1rem 1.25rem .5rem; }
+.mark { font: 600 1.6rem/1 var(--serif); color: var(--indigo); letter-spacing: .01em; margin: 0; }
+.mark small { font: 400 .85rem var(--sans); color: var(--muted); margin-left: .5rem; letter-spacing: 0; }
+.top .project { font-weight: 600; flex: 1 1 auto; }
+.who { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.who select { max-width: 24rem; }
+
+/* Stage line: the project's sequence */
+.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 0; margin: .25rem 1.25rem 1rem; padding: 0; counter-reset: st; }
+.stages li { counter-increment: st; padding: .3rem .7rem .3rem .2rem; color: var(--muted); font-size: .85rem; position: relative; }
+.stages li::before { content: counter(st); display: inline-grid; place-items: center; width: 1.3rem; height: 1.3rem; border-radius: 50%; border: 1px solid var(--rule); margin-right: .35rem; font-size: .75rem; background: var(--sheet); }
+.stages li.done { color: var(--ink); }
+.stages li.done::before { content: "✓"; background: var(--verdigris-wash); border-color: var(--verdigris); color: var(--verdigris); }
+.stages li.now { color: var(--indigo); font-weight: 600; }
+.stages li.now::before { background: var(--indigo); color: #fff; border-color: var(--indigo); }
+
+/* Layout */
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1.25rem; padding: 0 1.25rem 2rem; align-items: start; }
+@media (max-width: 960px) { .wrap { grid-template-columns: 1fr; } }
+.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; min-width: 0; }
+.next { padding: 1rem 1.25rem; border-bottom: 1px solid var(--rule); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.next p { margin: 0; flex: 1 1 20rem; }
+.next strong { color: var(--indigo); }
+nav.tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--rule); padding: 0 .75rem; }
+nav.tabs button { border: 0; background: none; padding: .7rem .6rem; cursor: pointer; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
+nav.tabs button[aria-selected="true"] { color: var(--indigo); border-bottom-color: var(--indigo); font-weight: 600; }
+nav.tabs .count { font-size: .75rem; color: var(--muted); margin-left: .2rem; }
+.panel { padding: 1.25rem; }
+section + section { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
+
+/* Controls */
+.btn { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--indigo); background: var(--indigo); color: #fff; border-radius: 4px; padding: .45rem .9rem; cursor: pointer; }
+.btn.quiet { background: var(--sheet); color: var(--indigo); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.btn.busy::after { content: ""; width: .8rem; height: .8rem; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.busy::after { animation: none; } }
+.linkish { border: 0; background: none; color: var(--indigo); text-decoration: underline; cursor: pointer; padding: 0; }
+form.stack { display: grid; gap: .65rem; max-width: 42rem; }
+form + form { margin-top: 1.75rem; }
+form.row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; }
+label { display: grid; gap: .2rem; font-size: .9rem; }
+label > span { color: var(--muted); }
+input[type=text], input[type=password], input[type=file], select, textarea { border: 1px solid var(--rule); border-radius: 4px; padding: .45rem .55rem; background: #fff; min-width: 0; }
+textarea { min-height: 5rem; resize: vertical; }
+textarea.manuscript { min-height: 24rem; font: 1rem/1.6 var(--serif); }
+.msg { padding: .6rem .8rem; border-radius: 4px; margin: .5rem 0; }
+.msg.err { background: #F7E4E4; color: var(--danger); }
+.msg.ok { background: var(--verdigris-wash); color: var(--verdigris); }
+.msg.warn { background: var(--ochre-wash); color: var(--ochre); }
+.secret { font-family: var(--mono); background: var(--ochre-wash); padding: .6rem .8rem; border-radius: 4px; word-break: break-all; }
+
+/* Status words */
+.tag { display: inline-block; font-size: .78rem; padding: .05rem .45rem; border-radius: 3px; border: 1px solid var(--rule); color: var(--muted); white-space: nowrap; }
+.tag.good { color: var(--verdigris); border-color: var(--verdigris); background: var(--verdigris-wash); }
+.tag.attn { color: var(--ochre); border-color: #D9B36E; background: var(--ochre-wash); }
+.tag.bad { color: var(--danger); border-color: #D9A0A0; background: #F7E4E4; }
+.tag.conf { color: var(--indigo); border-color: var(--indigo); }
+.tag.expl { color: var(--ochre); border-color: #D9B36E; }
+
+/* Tables */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Items and analyses */
+.item { border-left: 3px solid var(--rule); padding: .25rem 0 .25rem .9rem; margin: 1rem 0; }
+.item.attn { border-left-color: #D9B36E; }
+.item.good { border-left-color: var(--verdigris); }
+.item h3 { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; font-size: .88rem; margin: .5rem 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+blockquote { margin: .4rem 0; padding: .3rem .8rem; border-left: 3px solid var(--rule); font-family: var(--serif); color: var(--ink); }
+details > summary { cursor: pointer; color: var(--indigo); margin: .3rem 0; }
+
+/* The manuscript reads as a manuscript */
+.manuscript-view { font: 1.05rem/1.7 var(--serif); max-width: 42rem; }
+.manuscript-view h2 { font: 600 1.3rem var(--serif); margin-top: 1.4rem; }
+.manuscript-view h3 { font: 600 1.1rem var(--serif); margin-top: 1.2rem; }
+.cite { font: .72rem var(--sans); color: var(--indigo); background: #E6EBF6; border-radius: 3px; padding: 0 .3rem; white-space: nowrap; vertical-align: .1em; }
+.placeholder { font: italic .95rem var(--sans); color: var(--ochre); }
+mark { background: #FFE9A8; padding: 0 .1rem; }
+mark[data-point] { cursor: pointer; }
+
+/* The record rail: the memorable part */
+.rail { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); display: flex; flex-direction: column; }
+@media (max-width: 960px) { .rail { position: static; max-height: none; } }
+.rail h2 { font: 600 1.15rem var(--serif); color: var(--indigo); margin: 0 0 .3rem; }
+.seal { padding: .6rem .8rem; border-radius: 6px; font-size: .88rem; margin-bottom: .75rem; }
+.seal.good { background: var(--verdigris-wash); color: var(--verdigris); border: 1px solid #A9D3C9; }
+.seal.bad { background: #F7E4E4; color: var(--danger); border: 1px solid #D9A0A0; }
+.chain { list-style: none; margin: 0; padding: 0 0 0 1.1rem; overflow-y: auto; position: relative; }
+.chain::before { content: ""; position: absolute; left: .42rem; top: .4rem; bottom: .4rem; width: 2px; background: var(--rule); }
+.chain li { position: relative; padding: 0 0 .85rem .6rem; font-size: .85rem; }
+.chain li::before { content: ""; position: absolute; left: -1.02rem; top: .35rem; width: .62rem; height: .62rem; border-radius: 50%; background: var(--indigo); border: 2px solid var(--paper); box-shadow: 0 0 0 1px var(--indigo); }
+.chain li.agent::before { background: var(--sheet); }
+.chain li.system::before { background: var(--rule); box-shadow: 0 0 0 1px var(--rule); width: .5rem; height: .5rem; left: -.96rem; }
+.chain li.fresh::before { background: var(--verdigris); box-shadow: 0 0 0 1px var(--verdigris); }
+.chain .what { color: var(--ink); }
+.chain .meta { color: var(--muted); font-size: .78rem; }
+.chain .link { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+.chain button.linkish { font-size: .78rem; }
+
+/* Sign-in */
+.gate { max-width: 44rem; margin: 2rem auto; padding: 0 1.25rem; }
+.gate .lead { font: 1.35rem/1.4 var(--serif); color: var(--indigo); margin: .25rem 0 1.5rem; }
+.gate .sheet { padding: 1.25rem; margin-bottom: 1rem; }
+.ids { list-style: none; padding: 0; margin: 0; }
+.ids li { display: flex; gap: .5rem; align-items: center; padding: .35rem 0; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+.ids li span { flex: 1 1 auto; }
+</style>
+</head>
+<body>
+<div id="app" aria-live="polite"></div>
+<script>
+"use strict";
+/* Saksi web page. Talks only to the Saksi server it was loaded from.
+   Every action goes through the same API as everything else; the server decides
+   who may do what and writes it to the record. */
+
+const STAGES = [["INGEST", "Ingest"], ["ANALYSIS", "Analysis"], ["DRAFTING", "Drafting"],
+  ["AUTHOR_REVISION", "Author revision"], ["REVIEW", "Review"], ["RESPONSE", "Response"],
+  ["ATTESTATION", "Attestation"], ["FINAL", "Final"]];
+const TABS = [["people", "People"], ["materials", "Data"], ["plan", "Plan"], ["analyses", "Analyses"],
+  ["draft", "Draft"], ["review", "Review"], ["record", "Record"]];
+
+const S = { pid: null, token: null, you: null, state: null, events: [], verify: null, tab: "people",
+  version: null, busy: null, notice: null, secret: null, prefill: null, blobs: new Map(), seenSeq: 0, stale: false };
+
+/* ---------- small helpers ---------- */
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const short = (h) => h ? esc(String(h).slice(0, 10)) + "…" : "";
+const fmtTime = (ts) => { try { return new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); } catch { return esc(ts); } };
+const num = (x, d = 2) => (typeof x === "number" && isFinite(x)) ? x.toFixed(d) : (x == null ? "" : esc(x));
+const pval = (p) => typeof p === "number" ? (p < 0.001 ? "< 0.001" : p.toFixed(3)) : "";
+const $ = (sel) => document.querySelector(sel);
+const me = () => S.state?.actors?.[S.you] || {};
+const has = (role) => (me().roles || []).includes(role);
+const name = (id) => S.state?.actors?.[id]?.name || id;
+const isAuthor = () => has("author");
+const isReviewer = () => has("reviewer");
+const store = {
+  get() { try { return JSON.parse(localStorage.getItem("saksi.identities") || "[]"); } catch { return []; } },
+  set(list) { try { localStorage.setItem("saksi.identities", JSON.stringify(list)); } catch { /* private window: works for this visit only */ } },
+};
+
+async function api(path, { method = "GET", body, form, headers = {} } = {}) {
+  const h = { ...headers };
+  if (S.token) h["X-Saksi-Token"] = S.token;
+  let payload;
+  if (form) payload = form;
+  else if (body !== undefined) { h["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
+  let r;
+  try { r = await fetch(path, { method, headers: h, body: payload }); }
+  catch { throw new Error("The connection dropped. If an agent was working it may still finish; the page checks again shortly."); }
+  let data = null;
+  try { data = await r.json(); } catch { /* not JSON */ }
+  if (!r.ok) {
+    const d = data?.detail;
+    throw new Error(typeof d === "string" ? d : (d ? JSON.stringify(d) : `The server answered ${r.status}.`));
+  }
+  return data;
+}
+const command = (name, args = {}) => api(`/projects/${S.pid}/commands/${name}`, { method: "POST", body: { args } });
+const agent = (action, args = {}) => api(`/projects/${S.pid}/agents/${action}`, { method: "POST", body: { args } });
+async function blob(sha) {
+  if (!sha) return null;
+  if (!S.blobs.has(sha)) S.blobs.set(sha, api(`/projects/${S.pid}/blobs/${sha}`).then((r) => r.text));
+  return S.blobs.get(sha);
+}
+async function blobJSON(sha) { const t = await blob(sha); try { return t ? JSON.parse(t) : null; } catch { return null; } }
+
+/* ---------- loading ---------- */
+async function load() {
+  const [st, ev, vr] = await Promise.all([api(`/projects/${S.pid}`), api(`/projects/${S.pid}/events`),
+    api(`/projects/${S.pid}/verify`)]);
+  const prevCurrent = S.state?.draft_version;
+  S.you = st.you; S.state = st.state; S.events = ev; S.verify = vr; S.stale = false;
+  if (S.version == null || !S.state.drafts[S.version] || S.version === prevCurrent) S.version = S.state.draft_version || null;
+}
+
+async function refresh() { await load(); await render(); }
+
+async function act(button, fn, okText, workingText) {
+  if (S.busy) return;
+  S.busy = button?.dataset?.label || "Working";
+  S.notice = workingText ? { kind: "warn", text: workingText } : null;
+  S.secret = null;
+  const st = $("#status"); if (st) st.innerHTML = noticeHtml();
+  document.querySelectorAll("button.btn").forEach((b) => (b.disabled = true));
+  if (button) { button.classList.add("busy"); }
+  const before = S.state?.head_seq || 0;
+  try {
+    const r = await fn();
+    if (r?.token_for_new_actor) S.secret = { label: "Token for the person you added", token: r.token_for_new_actor };
+    S.notice = okText ? { kind: "ok", text: okText } : null;
+  } catch (e) {
+    S.notice = { kind: "err", text: e.message };
+  } finally {
+    S.busy = null;
+    try { await load(); } catch (e) { S.notice = { kind: "err", text: e.message }; }
+    S.seenSeq = before;
+    await render();
+  }
+}
+
+/* ---------- plain-language record ---------- */
+function describe(e) {
+  const p = e.payload || {}, who = esc(name(e.actor_id));
+  const forWhom = p.requested_by ? ` for ${esc(name(p.requested_by))}` : "";
+  switch (e.type) {
+    case "project.created": return `${who} started the project`;
+    case "actor.registered": return p.kind === "agent" ? `${esc(p.name)} joined, running ${esc(p.model)}`
+      : `${esc(p.name)} joined as ${esc((p.roles || []).filter((r) => r !== "corresponding_author").join(", ") || "author")}`;
+    case "material.uploaded": return `${who} uploaded the ${esc(p.kind.replace("_", " "))}: ${esc(p.filename)}`;
+    case "curator.reported": return `${who} reported on the dataset${forWhom}`;
+    case "plan.proposed": { const n = Object.keys(p.analyses || {}).length; return `${who} proposed a plan of ${n} ${n === 1 ? "analysis" : "analyses"}${forWhom}`; }
+    case "plan.confirmed": return `${who} confirmed the plan`;
+    case "plan.locked": return "The plan was locked: every author confirmed it";
+    case "stage.advanced": return `Moved to ${esc(stageName(p.to))}: ${esc(p.reason)}`;
+    case "analysis.requested": return `${who} asked for an exploratory analysis`;
+    case "analysis.completed": return `${who} ran ${esc(p.analysis_id)} (${esc(p.label)}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
+    case "analyses.accepted": return `${who} accepted the results`;
+    case "draft.created": return `${who} wrote draft version ${p.version}${forWhom}`;
+    case "draft.edited": return `${who} edited the draft, making version ${p.version}${forWhom}`;
+    case "draft.opened": return `${who} opened version ${p.version}`;
+    case "draft.signed_off": return `${who} signed off version ${p.version}`;
+    case "review.briefing": return `${who} briefed ${esc(name(p.requested_by))}: ${(p.points_of_inquiry || []).length} points`;
+    case "review.item_added": return `${who} commented (${esc(p.item_id)})`;
+    case "review.item_responded": return `${who} ${esc(p.response)} ${esc(p.item_id)}`;
+    case "review.item_verdict": return `${who} marked ${esc(p.item_id)} ${esc(p.verdict.replaceAll("_", " "))}`;
+    case "review.submitted": return p.decision === "accept" ? `${who} accepted the manuscript` : `${who} asked for revision`;
+    case "response.submitted": return `${who} sent the response to the reviewer`;
+    case "authorship.attested": return `${who} attested version ${p.version}`;
+    case "llm.called": return `${who} called ${esc(p.model)} (${(p.prompt_tokens || 0) + (p.completion_tokens || 0)} tokens)`;
+    default: return esc(e.type);
+  }
+}
+const stageName = (code) => (STAGES.find(([c]) => c === code) || [code, code])[1];
+
+/* ---------- what should I do next ---------- */
+function nextStep() {
+  const s = S.state, v = s.draft_version;
+  const datasets = s.materials.filter((m) => m.kind === "dataset");
+  const signed = s.signoffs[v] || {};
+  const waiting = (ids) => ids.map(name).join(", ");
+  if (s.stage === "FINAL") return ["Final. Every author attested version " + v + ".", "draft"];
+  if (isAuthor()) {
+    switch (s.stage) {
+      case "INGEST":
+        if (!datasets.length || !s.materials.some((m) => m.kind === "protocol")) return ["Upload the dataset and the protocol.", "materials"];
+        if (!s.curator_reports.length) return ["Ask the Data Curator to check the dataset.", "materials"];
+        if (!s.plan) return ["Ask the Analysis Agent to draft the analysis plan from the protocol.", "plan"];
+        if (!s.plan_confirmed_by.includes(S.you)) return ["Check the analysis plan against the protocol, then confirm it.", "plan"];
+        return ["Waiting for co-authors to confirm the plan: " + waiting(s.authors.filter((a) => !s.plan_confirmed_by.includes(a))), "plan"];
+      case "ANALYSIS": {
+        const order = s.plan_locked?.order || [];
+        const missing = order.filter((pid) => !Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
+        if (missing.length) return ["Run the planned analyses.", "analyses"];
+        if (!s.analyses_accepted_by.includes(S.you)) return ["Check the results and accept them. You can also ask for an exploratory analysis.", "analyses"];
+        return ["Waiting for co-authors to accept the results: " + waiting(s.authors.filter((a) => !s.analyses_accepted_by.includes(a))), "analyses"];
+      }
+      case "DRAFTING": return ["Ask the Writing Agent for the first draft.", "draft"];
+      case "AUTHOR_REVISION":
+        if (!signed[S.you]) return [`Read version ${v}, edit it if needed, and sign it off.`, "draft"];
+        if (s.authors.every((a) => signed[a]) && !s.reviewers.length) return [has("corresponding_author") ? "Every author has signed off. Add a reviewer to start the review." : "Every author has signed off. Waiting for a reviewer to be added.", "people"];
+        if (s.authors.every((a) => signed[a])) return [has("corresponding_author") ? `Every author has signed off. Send version ${v} for review.` : "Every author has signed off. Waiting for the review to start.", "people"];
+        return ["Waiting for co-authors to sign off: " + waiting(s.authors.filter((a) => !signed[a])), "draft"];
+      case "REVIEW": return [`The reviewer is reviewing version ${v} (round ${s.round}).`, "review"];
+      case "RESPONSE": {
+        const open = Object.entries(s.items).filter(([, it]) => it.status === "open");
+        if (open.length) return [`Respond to ${open.length} open comment${open.length > 1 ? "s" : ""}. Edit the draft first for any you revise.`, "review"];
+        if (!signed[S.you]) return [`Every comment has a response. Sign off version ${v}.`, "draft"];
+        if (s.authors.some((a) => !signed[a])) return ["Waiting for co-authors to sign off: " + waiting(s.authors.filter((a) => !signed[a])), "draft"];
+        return [has("corresponding_author") ? "Send the response to the reviewer." : "Waiting for the corresponding author to send the response.", "review"];
+      }
+      case "ATTESTATION":
+        if (!(s.attestations[v] || {})[S.you]) return [`The reviewer accepted. Attest version ${v}.`, "review"];
+        return ["Waiting for co-authors to attest.", "review"];
+    }
+  }
+  if (isReviewer()) {
+    if (s.stage === "REVIEW") {
+      const pending = Object.values(s.items).filter((it) => it.status === "responded").length;
+      if (pending) return [`Give a verdict on ${pending} response${pending > 1 ? "s" : ""}, then accept or ask for revision.`, "review"];
+      const briefed = s.briefings.some((b) => b.round === s.round && b.draft_version === v);
+      return [briefed ? "Read the draft, write your comments, then accept or ask for revision."
+        : "Read version " + v + ". You can ask the Reviewer Assistant for a briefing first.", "review"];
+    }
+    return ["Nothing for you yet. The review starts once every author has signed off the draft.", "draft"];
+  }
+  return ["Nothing for you to do at this stage.", "record"];
+}
+
+/* ---------- rendering ---------- */
+async function render() {
+  const app = $("#app");
+  if (!S.pid || !S.state) { app.innerHTML = gate(); return; }
+  const [msg, tab] = nextStep();
+  const s = S.state;
+  const ids = store.get().filter((x) => x.pid === S.pid);
+  const stageIdx = STAGES.findIndex(([c]) => c === s.stage);
+  app.innerHTML = `
+  <header class="top">
+    <p class="mark">Saksi<small>witnessed research</small></p>
+    <p class="project">${esc(s.title)} <span class="muted small">(${esc(s.project_id)})</span></p>
+    <div class="who">
+      <label class="small"><span class="hidden">Acting as</span>
+        <select data-change="switch" aria-label="Acting as">
+          ${ids.map((x) => `<option value="${esc(x.actor)}" ${x.actor === S.you ? "selected" : ""}>${esc(x.name)} (${esc(roleLabel(x.roles))})</option>`).join("")}
+          ${ids.some((x) => x.actor === S.you) ? "" : `<option selected>${esc(me().name)}</option>`}
+        </select></label>
+      <button class="btn quiet" data-action="signout">Sign out</button>
+    </div>
+  </header>
+  <ol class="stages" aria-label="Stages">
+    ${STAGES.map(([c, n], i) => `<li class="${i < stageIdx ? "done" : i === stageIdx ? "now" : ""}" ${i === stageIdx ? 'aria-current="step"' : ""}>${esc(n)}${c === s.stage && ["REVIEW", "RESPONSE"].includes(c) ? `, round ${s.round}` : ""}</li>`).join("")}
+  </ol>
+  <div class="wrap">
+    <main class="sheet">
+      <div class="next"><p><strong>${esc(me().name)}</strong>: ${esc(msg)}</p>
+        ${S.tab !== tab ? `<button class="btn quiet" data-tab="${tab}">Open ${esc(TABS.find(([t]) => t === tab)[1])}</button>` : ""}</div>
+      <div id="stale">${staleHtml()}</div>
+      <div id="status" role="status">${noticeHtml()}</div>
+      ${S.secret ? `<div style="margin:1rem 1.25rem 0"><p class="small"><strong>${esc(S.secret.label)}.</strong> Send it privately; it is shown only once.</p><div class="secret">${esc(S.secret.token)}</div></div>` : ""}
+      <nav class="tabs" role="tablist">${TABS.map(([t, n]) => `<button role="tab" aria-selected="${S.tab === t}" data-tab="${t}">${esc(n)}${tabCount(t)}</button>`).join("")}</nav>
+      <div class="panel" id="panel">${await panel(S.tab)}</div>
+    </main>
+    <aside class="rail" aria-label="Record">${rail()}</aside>
+  </div>`;
+  if (S.tab === "draft") maybeOpenDraft();
+}
+const staleHtml = () => S.stale ? `<div class="msg warn" style="margin:1rem 1.25rem 0">Someone else has acted since this page was drawn. The record on the right is up to date. <button class="linkish" data-action="reload">Show the latest everywhere</button></div>` : "";
+const noticeHtml = () => S.notice ? `<div class="msg ${S.notice.kind}" style="margin:1rem 1.25rem 0">${esc(S.notice.text)}</div>` : "";
+const roleLabel = (roles = []) => roles.includes("corresponding_author") ? "corresponding author" : (roles[0] || "");
+function tabCount(t) {
+  const s = S.state;
+  if (t === "analyses" && Object.keys(s.analyses).length) return `<span class="count">${Object.keys(s.analyses).length}</span>`;
+  if (t === "draft" && s.draft_version) return `<span class="count">v${s.draft_version}</span>`;
+  if (t === "review" && Object.keys(s.items).length) return `<span class="count">${Object.keys(s.items).length}</span>`;
+  return "";
+}
+
+function rail() {
+  const v = S.verify;
+  const seal = v?.ok
+    ? `<div class="seal good"><strong>Record intact.</strong> ${v.events} events, each sealed with the hash of the one before. Any change to any event would show here.</div>`
+    : `<div class="seal bad"><strong>Record broken${v?.bad_seq ? " at event " + v.bad_seq : ""}.</strong> ${esc(v?.error || "")}</div>`;
+  const shown = [...S.events].reverse().filter((e) => e.type !== "llm.called" || S.showCalls);
+  return `<h2>Record</h2>${seal}
+    <p class="small muted"><label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" data-change="calls" ${S.showCalls ? "checked" : ""}> Show model calls</label></p>
+    <ol class="chain">${shown.map((e) => {
+      const kind = e.actor_id === "system" ? "system" : e.actor_id.startsWith("agent:") ? "agent" : "human";
+      const fresh = S.seenSeq && e.seq > S.seenSeq ? " fresh" : "";
+      return `<li class="${kind}${fresh}"><div class="what">${describe(e)}</div>
+        <div class="meta">#${e.seq}, ${fmtTime(e.ts)}</div>
+        <div class="link" title="This event's hash, and the hash of the event before it">${short(e.hash)} ← ${short(e.prev_hash)}</div>
+        <details><summary class="small">Exact entry</summary><pre>${esc(JSON.stringify(e.payload, null, 1))}</pre></details></li>`;
+    }).join("")}</ol>`;
+}
+
+async function panel(tab) {
+  try {
+    switch (tab) {
+      case "people": return people();
+      case "materials": return await materials();
+      case "plan": return plan();
+      case "analyses": return await analyses();
+      case "draft": return await draft();
+      case "review": return await review();
+      case "record": S.ledger = await api(`/projects/${S.pid}/ledger`); return record();
+    }
+  } catch (e) { return `<div class="msg err">${esc(e.message)}</div>`; }
+  return "";
+}
+
+/* People */
+function people() {
+  const s = S.state;
+  const rows = Object.entries(s.actors).map(([id, a]) => `<tr><td>${esc(a.name)}${id === S.you ? " <span class='tag'>you</span>" : ""}</td>
+    <td>${esc(a.kind === "agent" ? "agent" : roleLabel(a.roles))}</td>
+    <td>${a.kind === "agent" ? `${esc(a.model)} <span class="muted small">via ${esc(a.provider)}</span>` : esc(a.affiliation || "")}</td>
+    <td>${a.orcid ? `<a href="https://orcid.org/${esc(a.orcid)}" rel="noreferrer" target="_blank">${esc(a.orcid)}</a>` : ""}</td></tr>`).join("");
+  const canAdd = has("corresponding_author") && s.stage !== "FINAL";
+  const authorsOpen = ["INGEST", "ANALYSIS"].includes(s.stage);
+  return `<section><h2>People and agents</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation or model</th><th>ORCID iD</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+  ${canAdd ? `<section><h2>Add a person</h2>
+    <p class="muted small">They get a personal token. Everything they do is recorded under their name.${authorsOpen ? "" : " Authors can only join before drafting starts, so every author can verify the analysis."}</p>
+    <form class="stack" data-form="addperson">
+      <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
+      <label><span>Short id (letters, digits, hyphens), used in the record</span><input type="text" name="actor_id" required pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,40}"></label>
+      <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
+      <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
+      <label><span>Role</span><select name="role">${authorsOpen ? "<option value='author'>Author</option>" : ""}<option value="reviewer">Reviewer</option></select></label>
+      <div><button class="btn" data-label="Adding">Add person</button></div></form></section>` : ""}
+  ${has("corresponding_author") && s.stage === "AUTHOR_REVISION" && s.reviewers.length && s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a])
+    ? `<section><h2>Start the review</h2><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></section>` : ""}`;
+}
+
+/* Data */
+async function materials() {
+  const s = S.state;
+  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
+    <td><span class="hash" title="${esc(m.sha256)}">${short(m.sha256)}</span></td><td>${esc(name(m.by))}</td></tr>`).join("");
+  const canUpload = isAuthor() && s.stage === "INGEST";
+  let rep = "";
+  const r = s.curator_reports.at(-1);
+  if (r) {
+    const full = await blobJSON(r.report_sha256);
+    if (full) {
+      const sev = { high: "bad", medium: "attn", low: "" };
+      rep = `<section><h2>Data Curator's report</h2>
+        <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
+        <p>${esc(full.summary)}</p>
+        ${full.flags?.length ? `<h3>Flags for the authors to check</h3><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
+          ${full.flags.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+        ${full.protocol_variables_missing_from_data?.length ? `<p class="msg warn">In the protocol but not in the data: ${esc(full.protocol_variables_missing_from_data.join(", "))}</p>` : ""}
+        <details><summary>Data dictionary (${(full.dictionary || []).length} columns)</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Label</th><th>Type</th><th>Units or coding</th><th>Role</th></tr></thead><tbody>
+          ${(full.dictionary || []).map((d) => `<tr><td>${esc(d.column)}</td><td>${esc(d.label)}</td><td>${esc(d.type)}</td><td>${esc(d.units_or_coding)}</td><td>${esc(d.role)}</td></tr>`).join("")}</tbody></table></div></details>
+      </section>`;
+    }
+  }
+  const canCurate = isAuthor() && s.stage === "INGEST" && s.materials.some((m) => m.kind === "dataset");
+  return `<section><h2>Study materials</h2>
+    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running.</p>
+    ${list ? `<div class="tablewrap"><table><thead><tr><th>Kind</th><th>File</th><th>Size</th><th>Hash</th><th>Uploaded by</th></tr></thead><tbody>${list}</tbody></table></div>` : `<p>No files yet.</p>`}
+    ${canUpload ? `<form class="row" data-form="upload" style="margin-top:1rem">
+      <label><span>Kind</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Registration</option><option value="other">Other</option></select></label>
+      <label><span>File</span><input type="file" name="file" required></label>
+      <label><span>Note (optional)</span><input type="text" name="note"></label>
+      <button class="btn" data-label="Uploading">Upload</button></form>` : ""}
+  </section>
+  ${canCurate ? `<section><h2>Data Curator</h2><p class="muted small">Muse Spark 1.3 drafts a data dictionary and flags problems from an aggregate profile: column types, ranges, missingness, small cells pooled. No rows are sent.</p>
+    <button class="btn" data-agent="curate" data-label="The Data Curator is working">Ask the Data Curator to check the dataset</button></section>` : ""}
+  ${rep}`;
+}
+
+/* Plan */
+function plan() {
+  const s = S.state, p = s.plan;
+  const canPropose = isAuthor() && s.stage === "INGEST" && s.curator_reports.length;
+  if (!p) return `<section><h2>Analysis plan</h2><p>No plan yet. The Analysis Agent reads the protocol and lists only the analyses it specifies, each with a quotation that is checked against the protocol text.</p>
+    ${canPropose ? `<button class="btn" data-agent="propose_plan" data-label="The Analysis Agent is reading the protocol">Ask the Analysis Agent to draft the plan</button>` : `<p class="muted">An author can ask for it once the Data Curator has reported.</p>`}</section>`;
+  const locked = s.plan_locked && s.plan_locked.sha === p.sha;
+  const col = (v) => v?.column ? `${esc(v.name)} <span class="muted">(${esc(v.column)})</span>` : `${esc(v?.name || "")} <span class="tag attn">no column</span>`;
+  return `<section><h2>Analysis plan</h2>
+    <p>${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed. Its analyses are confirmatory; anything else is labelled exploratory.`
+      : `Proposed by ${esc(name(p.by))}. Confirmed by: ${p && s.plan_confirmed_by.length ? esc(s.plan_confirmed_by.map(name).join(", ")) : "nobody yet"}.`}</p>
+    <p class="small muted">Plan hash <span class="hash">${short(p.sha)}</span>. Confirming binds you to exactly this version.</p>
+    ${p.order.map((id, i) => { const a = p.analyses[id]; return `<div class="item ${a.protocol_quote_verified && !a.columns_not_in_data?.length ? "good" : "attn"}">
+      <h3>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span></h3>
+      <dl class="facts"><dt>Objective</dt><dd>${esc(a.objective)}</dd><dt>Outcome</dt><dd>${col(a.outcome)}</dd>
+      <dt>Exposures</dt><dd>${(a.exposures || []).map(col).join(", ") || "none"}</dd><dt>Covariates</dt><dd>${(a.covariates || []).map(col).join(", ") || "none"}</dd>
+      <dt>Method</dt><dd>${esc(a.method)}</dd><dt>Effect measure</dt><dd>${esc(a.effect_measure)}</dd><dt>Missing data</dt><dd>${esc(a.missing_data)}</dd></dl>
+      <blockquote>${esc(a.protocol_quote)}</blockquote>
+      <p>${a.protocol_quote_verified ? `<span class="tag good">Quotation found in the protocol</span>` : `<span class="tag attn">Quotation not found in the protocol: check this analysis</span>`}
+      ${a.columns_not_in_data?.length ? ` <span class="tag attn">Not in the data: ${esc(a.columns_not_in_data.join(", "))}</span>` : ""}</p>
+      ${a.unresolved?.length ? `<p class="small">Unresolved: ${esc(a.unresolved.join("; "))}</p>` : ""}</div>`; }).join("")}
+    ${isAuthor() && s.stage === "INGEST" && !s.plan_confirmed_by.includes(S.you)
+      ? `<button class="btn" data-action="confirm_plan" data-label="Confirming">Confirm this plan</button>` : ""}
+    ${canPropose && !locked ? ` <button class="btn quiet" data-agent="propose_plan" data-label="The Analysis Agent is reading the protocol">Ask for a new draft of the plan</button>` : ""}
+  </section>`;
+}
+
+/* Analyses */
+async function analyses() {
+  const s = S.state;
+  const ids = Object.keys(s.analyses);
+  const canRun = isAuthor() && s.stage === "ANALYSIS";
+  const blocks = await Promise.all(ids.map(async (id) => {
+    const a = s.analyses[id], ex = a.execution || {}, pv = ex.provenance || {};
+    const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
+    const est = out?.estimates || [];
+    return `<div class="item ${a.status === "ok" ? "good" : "attn"}">
+      <h3>${esc(a.spec?.title || id)} <span class="tag ${a.label === "confirmatory" ? "conf" : "expl"}">${esc(a.label)}</span>
+        <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
+      ${a.requested_by ? `<p class="small muted">Requested by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
+      ${out ? `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}, excluded ${esc(out.n_excluded ?? 0)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
+        ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
+        ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+        ${(out.notes || []).length ? `<ul class="small">${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : `<p class="msg err small">${esc(a.error || "")}</p>`}
+      <details><summary>How it ran</summary><dl class="facts">
+        <dt>Where</dt><dd>${esc(ex.backend)}${pv.sandbox_object_id ? `, sandbox <span class="hash">${esc(pv.sandbox_object_id)}</span>` : ""}</dd>
+        <dt>Network</dt><dd>${pv.network === "blocked" ? `<span class="tag good">blocked</span>` : esc(pv.network || "not recorded")}</dd>
+        <dt>Data</dt><dd>${pv.data_sha256 && pv.data_sha256 === ex.dataset_sha256 ? `<span class="tag good">same file as uploaded</span>` : `<span class="tag attn">not confirmed</span>`} <span class="hash">${short(ex.dataset_sha256)}</span></dd>
+        <dt>Seed</dt><dd>${esc(ex.seed)}</dd>
+        <dt>Attempts</dt><dd>${(ex.attempts || []).map((t) => esc(t.outcome)).join(", then ")}</dd>
+        <dt>Packages</dt><dd class="small">${esc(Object.entries(pv.packages || {}).map(([k, v]) => k + " " + v).join(", "))}</dd>
+        <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd></dl>
+        <div id="code-${esc(a.code_sha256)}"></div></details></div>`;
+  }));
+  const order = s.plan_locked?.order || [];
+  const allPlanned = order.every((pid) => Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
+  const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
+  return `<section><h2>Analyses</h2>
+    <p class="muted small">The Analysis Agent writes code for each planned analysis. It runs in a sandbox with the network blocked, on the uploaded file, checked by hash. The model never sees a data row.</p>
+    ${canRun && !allPlanned ? `<button class="btn" data-agent="run_planned" data-label="Running the planned analyses">Run the planned analyses</button>` : ""}
+    ${blocks.join("") || (s.stage === "INGEST" ? "<p>Analyses start once every author has confirmed the plan.</p>" : "")}
+  </section>
+  ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
+    <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
+      <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
+      <div><button class="btn" data-label="Running the exploratory analysis">Run exploratory analysis</button></div></form></section>
+    ${allPlanned && ids.length ? `<section><h2>Accept the results</h2>
+      <p>Accepted by: ${esc(s.analyses_accepted_by.map(name).join(", ") || "nobody yet")}. Accepting binds to exactly this set of results (<span class="hash">${short(s.analysis_set_sha256)}</span>); a new analysis needs fresh acceptance.</p>
+      ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
+}
+
+/* Draft */
+function renderManuscript(text, marks = []) {
+  const inline = (t) => {
+    let h = esc(t);
+    for (const m of marks) {
+      const q = esc(m.quote);
+      if (q.length >= 12 && h.includes(q)) h = h.replace(q, `<mark data-point="${esc(m.id)}" title="${esc(m.id)}">${q}</mark>`);
+    }
+    return h.replace(/\[A:([A-Za-z0-9_.\-]+)\]/g, '<span class="cite" title="Computed result">$1</span>')
+      .replace(/\[Authors?:([^\]]+)\]/g, '<span class="placeholder">[Authors:$1]</span>')
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  };
+  return text.split(/\n{2,}/).map((block) => {
+    const lines = block.split("\n");
+    let out = "", para = [];
+    const flush = () => { if (para.length) { out += `<p>${inline(para.join(" "))}</p>`; para = []; } };
+    for (const ln of lines) {
+      const h = ln.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { flush(); out += `<h${Math.min(h[1].length + 1, 4)}>${inline(h[2])}</h${Math.min(h[1].length + 1, 4)}>`; }
+      else if (/^\s*[-*]\s+/.test(ln)) { flush(); out += `<ul><li>${inline(ln.replace(/^\s*[-*]\s+/, ""))}</li></ul>`; }
+      else para.push(ln);
+    }
+    flush();
+    return out;
+  }).join("");
+}
+
+async function draft() {
+  const s = S.state;
+  if (!s.draft_version) {
+    const can = isAuthor() && s.stage === "DRAFTING";
+    return `<section><h2>Draft</h2><p>No draft yet. The Writing Agent drafts Methods, Results and Discussion from the computed results only. A program then checks every number against those results.</p>
+      ${can ? `<button class="btn" data-agent="write_draft" data-label="The Writing Agent is drafting">Ask the Writing Agent for the first draft</button>` : `<p class="muted">Drafting starts once every author has accepted the results.</p>`}</section>`;
+  }
+  const v = S.version || s.draft_version, d = s.drafts[v];
+  const text = await blob(d.text_sha256);
+  const checks = d.checks || {}, full = d.checks_sha256 ? await blobJSON(d.checks_sha256) : null;
+  const current = v === s.draft_version;
+  const marks = s.stage === "REVIEW" || s.stage === "RESPONSE"
+    ? (s.briefings.filter((b) => b.draft_version === v).at(-1)?.points_of_inquiry || []).filter((p) => p.quote_verified) : [];
+  const signed = s.signoffs[v] || {};
+  const canEdit = isAuthor() && current && ["AUTHOR_REVISION", "RESPONSE"].includes(s.stage);
+  const canSign = canEdit && !signed[S.you];
+  const versions = Object.keys(s.drafts).map(Number).sort((a, b) => a - b);
+  const attempts = d.writer_attempts || [];
+  return `<section>
+    <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;justify-content:space-between">
+      <h2 style="margin:0">Draft, version ${v}${current ? "" : " <span class='tag'>older version</span>"}</h2>
+      <label class="small"><span class="hidden">Version</span><select data-change="version" aria-label="Version">${versions.map((x) => `<option value="${x}" ${x === v ? "selected" : ""}>Version ${x}${x === s.draft_version ? " (current)" : ""}</option>`).join("")}</select></label></div>
+    <p class="small muted">${d.type === "draft.created" ? "Written" : "Edited"} by ${esc(name(d.by))}${d.requested_by ? " for " + esc(name(d.requested_by)) : ""}, ${fmtTime(d.ts)}${d.summary ? `: “${esc(d.summary)}”` : ""}${d.diff ? ` (${d.diff.words_added} words added, ${d.diff.words_removed} removed)` : ""}.</p>
+    <div class="msg ${checks.ok ? "ok" : "warn"}"><strong>${checks.ok ? "Number check passed." : "Number check found problems."}</strong>
+      ${esc(checks.numbers_checked)} numbers checked against the computed results${checks.untraced ? `; ${checks.untraced} could not be traced` : ""}${checks.exploratory_not_labelled ? `; ${checks.exploratory_not_labelled} exploratory result${checks.exploratory_not_labelled > 1 ? "s" : ""} not called exploratory` : ""}${checks.analyses_not_reported?.length ? `; not reported: ${esc(checks.analyses_not_reported.join(", "))}` : ""}${checks.unknown_analysis_refs?.length ? `; unknown analyses cited: ${esc(checks.unknown_analysis_refs.join(", "))}` : ""}.</div>
+    ${full?.untraced?.length ? `<details open><summary>Numbers that could not be traced</summary><ul class="small">${full.untraced.map((u) => `<li><mark>${esc(u.number)}</mark> in: ${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
+    ${full?.exploratory_not_labelled?.length ? `<details open><summary>Exploratory results not called exploratory</summary><ul class="small">${full.exploratory_not_labelled.map((u) => `<li>${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
+    ${attempts.length > 1 ? `<p class="small muted">The Writing Agent's first attempt failed the check; it rewrote the draft once from the findings${attempts.at(-1).passed_check ? " and passed" : ", and what remains is for the authors"}.</p>` : ""}
+    ${marks.length ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
+    <article class="manuscript-view">${renderManuscript(text || "", marks)}</article>
+  </section>
+  <section><h2>Sign-offs for version ${v}</h2>
+    ${Object.keys(signed).length ? `<ul>${Object.entries(signed).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.claim_restatement)}”${x.checks_at_signoff ? ` <span class="tag ${x.checks_at_signoff.ok ? "good" : "attn"}">number check ${x.checks_at_signoff.ok ? "passed" : "had problems"} when signed</span>` : ""}</li>`).join("")}</ul>` : "<p>No sign-offs yet.</p>"}
+    ${canSign ? `<form class="stack" data-form="signoff"><p class="small muted">There is no approve button. Say what the paper claims, in your own words, and answer each question.</p>
+      <label><span>The primary claim, in your own words (at least 8 words)</span><textarea name="claim" required></textarea></label>
+      ${s.signoff_questions.map((q, i) => `<label><span>${esc(q)}</span><textarea name="q${i}" required></textarea></label>`).join("")}
+      <div><button class="btn" data-label="Signing off">Sign off version ${v}</button></div></form>` : ""}
+  </section>
+  ${canEdit ? `<section><h2>Edit the draft</h2><p class="small muted">Your edit becomes version ${v + 1}, is recorded under your name, and is number-checked again. Sign-offs are needed again for the new version.</p>
+    <form class="stack" data-form="edit" style="max-width:none"><textarea class="manuscript" name="text">${esc(text)}</textarea>
+      <label><span>What you changed and why</span><input type="text" name="summary" required></label>
+      <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></section>` : ""}`;
+}
+async function maybeOpenDraft() {
+  const s = S.state, v = s.draft_version;
+  if (!v || S.version !== v || S.busy || !(isAuthor() || isReviewer())) return;
+  if (s.opened[`${S.you}|${v}`]) return;
+  try { await command("open_draft", { version: v }); await load(); $(".rail").innerHTML = rail(); } catch { /* not allowed now: fine */ }
+}
+
+/* Review */
+async function review() {
+  const s = S.state, v = s.draft_version;
+  const items = Object.entries(s.items).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  const inReview = s.stage === "REVIEW", inResponse = s.stage === "RESPONSE";
+  const latest = s.briefings.at(-1);
+  let brief = "";
+  if (latest && (isReviewer() || s.stage !== "REVIEW")) {
+    const b = await blobJSON(latest.briefing_sha256);
+    const call = S.events.find((e) => e.seq === latest.llm_call_seq)?.payload;
+    if (b) brief = `<section><h2>Reviewer Assistant's briefing <span class="muted small">round ${b.round}, version ${b.draft_version}</span></h2>
+      <p class="small muted">${call ? `${esc(call.model)} via ${esc(call.provider)}, ${(call.prompt_tokens || 0) + (call.completion_tokens || 0)} tokens. ` : ""}Asked for by ${esc(name(latest.requested_by))}. It suggests questions; the reviewer decides what to ask.</p>
+      <p><strong>Primary claim, as it reads it:</strong> ${esc(b.primary_claim)}</p><p>${esc(b.summary)}</p>
+      ${(b.interval_facts || []).length ? `<details><summary>Interval facts computed by code (${b.interval_facts.length})</summary><div class="tablewrap"><table><thead><tr><th>Analysis</th><th>Term</th><th>95% CI</th><th>No effect at</th><th>Interval includes it</th></tr></thead><tbody>
+        ${b.interval_facts.map((f) => `<tr><td>${esc(f.analysis)}</td><td>${esc(f.name)}</td><td class="num">${num(f.ci_lower, 3)} to ${num(f.ci_upper, 3)}</td><td class="num">${esc(f.null_value)}</td><td>${f.interval_includes_null ? "yes" : "no"}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+      ${(b.item_assessments || []).length ? `<h3>Does each response deal with the comment?</h3>${b.item_assessments.map((a) => `<div class="item"><p><strong>${esc(a.item_id)}</strong> <span class="tag ${a.assessment === "addressed" ? "good" : "attn"}">${esc(a.assessment.replaceAll("_", " "))}</span> ${esc(a.note)}</p>${a.quote ? `<blockquote>${esc(a.quote)}</blockquote>${a.quote_verified ? "" : `<span class="tag attn">quote not found in the draft</span>`}` : ""}</div>`).join("")}` : ""}
+      ${(b.points_of_inquiry || []).map((pt) => `<div class="item ${pt.quote_verified ? "" : "attn"}">
+        <h3>${esc(pt.id)} <span class="tag ${pt.severity === "major" ? "attn" : ""}">${esc(pt.severity)}</span> <span class="tag">${esc(pt.category.replaceAll("_", " "))}</span>
+          ${pt.quote_verified ? `<span class="tag good">quote found in the draft</span>` : `<span class="tag bad">quote not found in the draft</span>`}</h3>
+        <blockquote>${esc(pt.quote)}</blockquote><p>${esc(pt.question)}</p><p class="small muted">${esc(pt.why_it_matters)}</p>
+        ${isReviewer() && inReview ? `<button class="btn quiet" data-action="usepoint" data-point="${esc(pt.id)}" data-seq="${latest.seq}">Use as a comment</button>` : ""}
+        ${s.items && Object.values(s.items).some((it) => it.from_point === pt.id && it.assisted_by_seq === latest.seq) ? ` <span class="tag good">used as a comment</span>` : ""}</div>`).join("")}
+      <details><summary>What the assistant was given, and what it was not</summary><p class="small"><strong>Given:</strong> ${esc((b.sees || []).join("; "))}.</p><p class="small"><strong>Not given:</strong> ${esc((b.withheld || []).join("; "))}.</p>
+        <p class="small muted">Inputs are recorded by hash: draft <span class="hash">${short(b.inputs?.draft_sha256)}</span>, protocol <span class="hash">${short(b.inputs?.protocol_sha256)}</span>, plan <span class="hash">${short(b.inputs?.plan_sha256)}</span>.</p></details></section>`;
+  }
+  const nextItem = "R" + (items.length + 1);
+  const pre = S.prefill || {};
+  const itemHtml = items.map(([id, it]) => {
+    return `<div class="item ${it.status === "open" ? "attn" : it.status === "responded" ? "" : "good"}">
+      <h3>${esc(id)} <span class="tag ${it.status === "open" ? "attn" : it.status === "satisfied" ? "good" : ""}">${esc(it.status.replaceAll("_", " "))}</span>
+        <span class="muted small">round ${it.round}, by ${esc(name(it.by))}${it.from_point ? `, from the assistant's ${esc(it.from_point)}` : ""}</span></h3>
+      <p>${esc(it.comment)}</p>${it.location ? `<p class="small muted">Where: ${esc(it.location)}</p>` : ""}
+      ${it.responses.map((r) => `<p class="small"><strong>${esc(name(r.by))}</strong> ${esc(r.response)} in version ${r.draft_version}${r.note ? `: ${esc(r.note)}` : ""}</p>`).join("")}
+      ${it.verdicts.map((x) => `<p class="small"><strong>${esc(name(x.by))}</strong>: ${esc(x.verdict.replaceAll("_", " "))}${x.note ? `, ${esc(x.note)}` : ""}</p>`).join("")}
+      ${isReviewer() && inReview && it.status === "responded" ? `<form class="row" data-form="verdict" data-item="${esc(id)}">
+        <label><span>Your verdict</span><select name="verdict"><option value="satisfied">Satisfied</option><option value="still_concerned">Still concerned</option><option value="agree_to_disagree">Agree to disagree</option></select></label>
+        <label style="flex:1 1 16rem"><span>Note (required for agree to disagree; it will be published)</span><input type="text" name="note"></label>
+        <button class="btn" data-label="Saving">Give verdict</button></form>` : ""}
+      ${isAuthor() && inResponse && it.status === "open" ? `<form class="row" data-form="respond" data-item="${esc(id)}">
+        <label><span>Your response</span><select name="response"><option value="revised">Revised the draft</option><option value="clarified">Clarified</option><option value="rebutted">Rebutted</option></select></label>
+        <label style="flex:1 1 16rem"><span>Note to the reviewer</span><input type="text" name="note"></label>
+        <button class="btn" data-label="Saving">Respond</button></form>` : ""}
+</div>`;
+  }).join("");
+  const att = s.attestations[v] || {};
+  return `${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
+      <p class="muted small">Muse Spark Open, a different, open-weights model. Every briefing starts a fresh conversation. It never opens the data and never sees the authors' side. It suggests questions; you decide what to ask.</p>
+      <button class="btn${latest && latest.round === s.round && latest.draft_version === v ? " quiet" : ""}" data-agent="brief_reviewer" data-label="The Reviewer Assistant is reading">${latest && latest.round === s.round && latest.draft_version === v ? "Ask for another briefing" : `Ask for a briefing on version ${v}`}</button></section>` : ""}
+    ${brief}
+    <section><h2>Comments</h2>${itemHtml || "<p>No comments yet.</p>"}
+    ${isReviewer() && inReview ? `<form class="stack" data-form="additem" id="additem">
+      <h3>Add a comment</h3>
+      <input type="hidden" name="assisted_by_seq" value="${esc(pre.seq ?? "")}"><input type="hidden" name="from_point" value="${esc(pre.point ?? "")}">
+      ${pre.point ? `<p class="small muted">Adopting the assistant's ${esc(pre.point)}. Edit it into your own words; it is recorded as yours. <button class="linkish" type="button" data-action="clearprefill">Start blank</button></p>` : ""}
+      <label><span>Comment id</span><input type="text" name="item_id" value="${esc(nextItem)}" required></label>
+      <label><span>Comment to the authors</span><textarea name="comment" required>${esc(pre.comment ?? "")}</textarea></label>
+      <label><span>Where in the draft (optional)</span><input type="text" name="location" value="${esc(pre.location ?? "")}"></label>
+      <div><button class="btn" data-label="Adding">Add comment</button></div></form>
+      <form class="stack" data-form="submitreview"><h3>Finish this round</h3>
+      <label><span>Summary for the authors (optional)</span><textarea name="summary"></textarea></label>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn quiet" name="decision" value="revise" data-label="Sending">Ask for revision</button>
+      <button class="btn" name="decision" value="accept" data-label="Accepting">Accept the manuscript</button></div>
+      <p class="small muted">Accepting needs every comment settled: satisfied, or agree to disagree. Round ${s.round} of at most ${s.max_rounds}.</p></form>` : ""}
+    ${isAuthor() && inResponse && has("corresponding_author") ? `<div style="margin-top:1rem"><button class="btn" data-action="submit_response" data-label="Sending">Send the response to the reviewer</button>
+      <p class="small muted">Needs a response to every open comment and every author's sign-off of the current version.</p></div>` : ""}
+    </section>
+    ${s.stage === "ATTESTATION" || s.stage === "FINAL" ? `<section><h2>Attestation of version ${v}</h2>
+      ${Object.keys(att).length ? `<ul>${Object.entries(att).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.statement)}”</li>`).join("")}</ul>` : ""}
+      ${isAuthor() && s.stage === "ATTESTATION" && !att[S.you] ? `<form class="stack" data-form="attest"><label><span>Your attestation, in your own words</span><textarea name="statement" required placeholder="I have read the final version and stand behind it."></textarea></label>
+        <div><button class="btn" data-label="Attesting">Attest version ${v}</button></div></form>` : ""}</section>` : ""}`;
+}
+
+/* Record */
+function record() {
+  const led = S.ledger || {};
+  const calls = S.events.filter((e) => e.type === "llm.called");
+  const rows = Object.entries(led).map(([id, r]) => `<tr><td>${esc(name(id))}</td><td class="small">${esc(Object.entries(r.counts).map(([k, n]) => `${k.replaceAll("_", " ")} ${n}`).join(", "))}</td>
+    <td class="num">${r.words_added || ""}${r.words_removed ? " / −" + r.words_removed : ""}</td><td class="num">${r.verification_seconds ? Math.round(r.verification_seconds / 60) + " min" : ""}</td>
+    <td class="num">${r.tokens || ""}</td><td class="small">${esc(Object.entries(r.on_behalf_of || {}).map(([k, n]) => `${name(k)} ${n}`).join(", "))}</td></tr>`).join("");
+  return `<section><h2>Contribution Ledger</h2><p class="small muted">Built from the record alone. Descriptive, not a ranking.</p>
+    <div class="tablewrap"><table><thead><tr><th>Who</th><th>What</th><th>Words added / removed</th><th>Time verifying</th><th>Tokens</th><th>Acted for</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+  <section><h2>Model calls (${calls.length})</h2><div class="tablewrap"><table><thead><tr><th>#</th><th>Agent</th><th>Model</th><th>Purpose</th><th>Tokens in / out</th><th>Seconds</th></tr></thead><tbody>
+    ${calls.map((e) => `<tr><td>${e.seq}</td><td>${esc(name(e.actor_id))}</td><td>${esc(e.payload.model)}${e.payload.open_weights ? ' <span class="tag">open weights</span>' : ""}</td><td>${esc(e.payload.purpose)}</td>
+      <td class="num">${e.payload.prompt_tokens ?? ""} / ${e.payload.completion_tokens ?? ""}</td><td class="num">${e.payload.latency_ms != null ? (e.payload.latency_ms / 1000).toFixed(1) : ""}</td></tr>`).join("")}</tbody></table></div>
+    <p class="small muted">The exact request and response of every call are stored by hash.</p></section>
+  <section><h2>Check it yourself</h2><p>The record is a chain: each event contains the hash of the one before. Anyone can check it at <a href="/projects/${esc(S.pid)}/verify">/projects/${esc(S.pid)}/verify</a>, without a token.</p>
+    <button class="btn quiet" data-action="download">Download the full record (JSON)</button></section>`;
+}
+
+/* ---------- sign-in ---------- */
+function gate() {
+  const ids = store.get();
+  return `<div class="gate"><p class="mark">Saksi<small>witnessed research</small></p>
+    <p class="lead">Research that is witnessed, not reconstructed.</p>
+    ${S.notice ? `<div class="msg ${S.notice.kind}">${esc(S.notice.text)}</div>` : ""}
+    ${S.secret ? `<div class="sheet"><p><strong>${esc(S.secret.label)}.</strong> Keep it; it is shown only once. It is saved in this browser if you chose to remember it.</p><div class="secret">${esc(S.secret.token)}</div></div>` : ""}
+    ${ids.length ? `<div class="sheet"><h2>Your projects on this device</h2><ul class="ids">${ids.map((x, i) => `<li><span><strong>${esc(x.name)}</strong> (${esc(roleLabel(x.roles))}) in ${esc(x.pid)}</span>
+      <button class="btn" data-action="resume" data-i="${i}">Open</button><button class="btn quiet" data-action="forget" data-i="${i}">Forget</button></li>`).join("")}</ul></div>` : ""}
+    <div class="sheet"><h2>Open a project</h2><form class="stack" data-form="signin">
+      <label><span>Project id</span><input type="text" name="pid" required autocomplete="off"></label>
+      <label><span>Your personal token</span><input type="password" name="token" required autocomplete="off"></label>
+      <label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="remember" checked> Remember on this device</label>
+      <div><button class="btn" data-label="Opening">Open</button></div></form></div>
+    <details class="sheet"><summary>Start a new project</summary><form class="stack" data-form="create" style="margin-top:1rem">
+      <p class="small muted">You become the corresponding author. Starting projects on this server needs its creation token.</p>
+      <label><span>Creation token</span><input type="password" name="create" autocomplete="off"></label>
+      <label><span>Project id (lowercase letters, digits, hyphens)</span><input type="text" name="pid" required pattern="[a-z0-9][a-z0-9\\-]{2,40}"></label>
+      <label><span>Title</span><input type="text" name="title" required></label>
+      <label><span>Study type</span><select name="study_type"><option value="primary">Primary study with a dataset</option><option value="evidence_synthesis">Evidence synthesis</option></select></label>
+      <label><span>Your full name</span><input type="text" name="name" required></label>
+      <label><span>Your short id, used in the record</span><input type="text" name="actor_id" required pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,40}"></label>
+      <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
+      <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
+      <div><button class="btn" data-label="Starting">Start project</button></div></form></details>
+    <p class="small muted">Saksi is open source under AGPL-3.0: <a href="https://github.com/boonhowchew/saksi" rel="noreferrer">source code</a>.</p></div>`;
+}
+
+async function openProject(pid, token, remember) {
+  S.pid = pid; S.token = token; S.blobs = new Map(); S.ledger = null; S.secret = null; S.prefill = null;
+  await load();
+  const a = S.state.actors[S.you];
+  if (remember) {
+    const list = store.get().filter((x) => !(x.pid === pid && x.actor === S.you));
+    list.push({ pid, token, actor: S.you, name: a.name, roles: a.roles });
+    store.set(list);
+  }
+  S.tab = nextStep()[1];
+  S.seenSeq = 0;
+}
+
+/* ---------- events ---------- */
+document.addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-tab],[data-action],[data-agent],mark[data-point]");
+  if (!t) return;
+  if (t.matches("mark[data-point]")) { S.tab = "review"; await render(); return; }
+  if (t.dataset.tab) { S.tab = t.dataset.tab; S.notice = null; await render(); $("#panel")?.focus?.(); return; }
+  if (t.dataset.agent) {
+    const label = t.dataset.label;
+    return act(t, () => agent(t.dataset.agent), "Done. The result is below and in the record.",
+      `${label}. This can take a minute or two; the page updates when it is done.`);
+  }
+  const a = t.dataset.action, s = S.state;
+  switch (a) {
+    case "signout": S.pid = S.token = S.state = null; S.notice = S.secret = null; return render();
+    case "reload": return refresh();
+    case "resume": { const x = store.get()[+t.dataset.i]; try { await openProject(x.pid, x.token, true); } catch (e) { S.pid = null; S.state = null; S.notice = { kind: "err", text: e.message }; } return render(); }
+    case "forget": { const list = store.get(); list.splice(+t.dataset.i, 1); store.set(list); return render(); }
+    case "confirm_plan": return act(t, () => command("confirm_plan", { plan_sha256: s.plan.sha }), "You confirmed the plan.");
+    case "accept": return act(t, () => command("accept_analyses", { analysis_set_sha256: s.analysis_set_sha256 }), "You accepted the results.");
+    case "start_review": return act(t, () => command("start_review"), "The review has started.");
+    case "submit_response": return act(t, () => command("submit_response"), "The response went to the reviewer.");
+    case "usepoint": {
+      const b = await blobJSON(s.briefings.find((x) => x.seq === +t.dataset.seq).briefing_sha256);
+      const pt = b.points_of_inquiry.find((p) => p.id === t.dataset.point);
+      S.prefill = { seq: +t.dataset.seq, point: pt.id, comment: pt.question, location: pt.quote };
+      await render(); $("#additem")?.scrollIntoView({ behavior: "smooth", block: "start" }); $("#additem textarea")?.focus();
+      return;
+    }
+    case "clearprefill": S.prefill = null; return render();
+    case "showcode": { const box = document.getElementById("code-" + t.dataset.sha); box.innerHTML = `<pre>${esc(await blob(t.dataset.sha))}</pre>`; return; }
+    case "download": {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(S.events, null, 1)], { type: "application/json" }));
+      const link = Object.assign(document.createElement("a"), { href: url, download: `saksi-${S.pid}-record.json` });
+      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); return;
+    }
+  }
+});
+
+document.addEventListener("change", async (ev) => {
+  const t = ev.target;
+  if (t.dataset.change === "version") { S.version = +t.value; return render(); }
+  if (t.dataset.change === "calls") { S.showCalls = t.checked; $(".rail").innerHTML = rail(); return; }
+  if (t.dataset.change === "switch") {
+    const x = store.get().find((i) => i.pid === S.pid && i.actor === t.value);
+    if (x) { await openProject(x.pid, x.token, true); S.notice = { kind: "ok", text: `You are now acting as ${x.name}.` }; return render(); }
+  }
+});
+
+document.addEventListener("submit", async (ev) => {
+  const f = ev.target; ev.preventDefault();
+  const fd = new FormData(f), btn = ev.submitter || f.querySelector("button.btn");
+  const val = (k) => (fd.get(k) || "").toString().trim();
+  const s = S.state;
+  switch (f.dataset.form) {
+    case "signin":
+      try { await openProject(val("pid"), val("token"), !!fd.get("remember")); S.notice = null; }
+      catch (e) { S.pid = null; S.state = null; S.token = null; S.notice = { kind: "err", text: e.message }; }
+      return render();
+    case "create": {
+      try {
+        const creator = { actor_id: val("actor_id"), name: val("name") };
+        if (val("orcid")) creator.orcid = val("orcid");
+        if (val("affiliation")) creator.affiliation = val("affiliation");
+        S.token = null;
+        const r = await api("/projects", { method: "POST", body: { project_id: val("pid"), title: val("title"), study_type: val("study_type"), creator },
+          headers: val("create") ? { "X-Saksi-Create-Token": val("create") } : {} });
+        await openProject(val("pid"), r.token, true);
+        S.secret = { label: "Your personal token for this project", token: r.token };
+        S.notice = { kind: "ok", text: "Project started. Add your co-authors under People." };
+      } catch (e) { S.pid = null; S.state = null; S.notice = { kind: "err", text: e.message }; }
+      return render();
+    }
+    case "addperson": {
+      const actor = { actor_id: val("actor_id"), name: val("name") };
+      if (val("orcid")) actor.orcid = val("orcid");
+      if (val("affiliation")) actor.affiliation = val("affiliation");
+      return act(btn, () => command("register_human", { actor, role: val("role") }), `${actor.name} was added.`);
+    }
+    case "upload": {
+      const form = new FormData(); form.append("kind", val("kind")); form.append("file", fd.get("file"));
+      if (val("note")) form.append("note", val("note"));
+      return act(btn, () => api(`/projects/${S.pid}/materials`, { method: "POST", form }), "Uploaded.");
+    }
+    case "explore": return act(btn, () => agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }), "The exploratory analysis ran. It is labelled exploratory.",
+      "The Analysis Agent is writing and running the code. This can take a minute or two.");
+    case "signoff": {
+      const answers = {}; s.signoff_questions.forEach((q, i) => (answers[q] = val("q" + i)));
+      return act(btn, () => command("sign_off", { version: s.draft_version, claim_restatement: val("claim"), answers }), `You signed off version ${s.draft_version}.`);
+    }
+    case "edit": return act(btn, () => command("edit_draft", { base_version: s.draft_version, text: fd.get("text").toString(), summary: val("summary") }), `Saved as version ${s.draft_version + 1}.`);
+    case "additem": {
+      const args = { item_id: val("item_id"), comment: val("comment") };
+      if (val("location")) args.location = val("location");
+      if (val("assisted_by_seq")) { args.assisted_by_seq = +val("assisted_by_seq"); args.from_point = val("from_point") || null; }
+      return act(btn, async () => { const r = await command("add_item", args); S.prefill = null; return r; }, `Comment ${args.item_id} added.`);
+    }
+    case "verdict": return act(btn, () => command("give_verdict", { item_id: f.dataset.item, verdict: val("verdict"), note: val("note") }), "Verdict recorded.");
+    case "respond": return act(btn, () => command("respond", { item_id: f.dataset.item, response: val("response"), note: val("note") }), "Response recorded.");
+    case "submitreview": return act(btn, () => command("submit_review", { decision: btn.value, summary: val("summary") }), btn.value === "accept" ? "You accepted the manuscript." : "You asked for revision.");
+    case "attest": return act(btn, () => command("attest", { version: s.draft_version, statement: val("statement") }), `You attested version ${s.draft_version}.`);
+  }
+});
+
+/* Others may act at the same time: check quietly, never wipe a half-written form. */
+setInterval(async () => {
+  if (!S.pid || S.busy || document.hidden) return;
+  try {
+    const st = await api(`/projects/${S.pid}`);
+    if (st.state.head_seq !== S.state.head_seq) {
+      S.events = await api(`/projects/${S.pid}/events`);
+      S.verify = await api(`/projects/${S.pid}/verify`);
+      S.stale = true;
+      const r = $(".rail"); if (r) r.innerHTML = rail();
+      const box = $("#stale"); if (box) box.innerHTML = staleHtml();
+    }
+  } catch { /* offline for a moment */ }
+}, 20000);
+
+render();
+</script>
+</body>
+</html>
