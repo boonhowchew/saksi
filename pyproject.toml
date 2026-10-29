@@ -15,12 +15,18 @@ dependencies = [
   "httpx==0.28.1",
   "pydantic==2.13.5",
   "python-multipart",
+  "numpy",            # dataset profile
+  "pandas",           # dataset profile
+  "openpyxl",         # .xlsx datasets
+  "pypdf",            # protocol text from PDF
+  "python-docx",      # protocol text from Word
 ]
 
 [project.optional-dependencies]
-analysis = ["numpy", "pandas", "scipy", "statsmodels", "scikit-learn"]
+# What analyses import inside the sandbox (pinned there; see saksi/sandbox.py).
+analysis = ["scipy", "statsmodels", "scikit-learn"]
 deploy = ["modal==1.6.3"]
-dev = ["pytest", "modal==1.6.3"]
+dev = ["pytest", "modal==1.6.3", "scipy", "statsmodels", "scikit-learn"]
 
 [tool.setuptools]
 packages = ["saksi"]
