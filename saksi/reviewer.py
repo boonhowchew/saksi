@@ -117,6 +117,9 @@ class ReviewerAssistant:
                  f"INTERVAL FACTS (computed by code):\n{json.dumps(facts, indent=1)}",
                  "ANALYSIS CODE AS RUN:\n" + "\n\n".join(f"# [A:{k}]\n{c}" for k, c in code.items()),
                  f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed, indent=1)}",
+                 "FIGURES (captions only; drawn by code, never by a model):\n" + ("\n".join(
+                     f"Figure {f['number']} [A:{f['analysis_id']}], drawn by {f['drawn_by']}: {f['caption']}"
+                     for f in s.figures if f["analysis_id"] in ok) or "(none)"),
                  f"DATA DICTIONARY (aggregate):\n{json.dumps(dictionary, indent=1)}",
                  f"AUTOMATIC NUMBER CHECK OF THIS VERSION:\n{json.dumps(_check_brief(checks), indent=1)}"]
 

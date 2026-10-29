@@ -27,6 +27,7 @@ from .profiling import profile, read_table
 from .prompts import CODE, CURATOR, PLAN, REPAIR, REWRITE, WRITER, prompt_ref
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
+from .figures import required_figure
 from .tracing import interval_facts
 from .workflow import Project, State, WorkflowError
 
@@ -207,6 +208,9 @@ class Agents:
         data = self._bytes(ds)
         d = self._dictionary(s)
         seed = analysis_seed(s.project_id, analysis_id)
+        rf = required_figure(spec)                  # chosen by rule from the plan, not by the model
+        if rf:
+            spec = {**spec, "required_figure": rf}
         base_user = (f"ANALYSIS SPECIFICATION:\n{json.dumps(spec, indent=1)}\n\n"
                      f"DATA DICTIONARY:\n{json.dumps(d['dictionary'], indent=1)}\n\n"
                      f"DATASET PROFILE (aggregate only; the CSV has these columns):\n{json.dumps(d['profile'], indent=1)}")
@@ -252,15 +256,20 @@ class Agents:
         if not ok and error is None:
             error = final.get("reason") or (result.error if result else None) or \
                 (json.dumps(result.results)[:500] if result and result.results else "analysis failed")
+        figs = [{"name": f["name"], "caption": f.get("caption", ""), "svg_sha256": self.project.blobs.put_text(f["svg"])}
+                for f in (result.figures if ok and result else [])]
         execution = {"backend": getattr(self.executor, "backend", "unknown"), "seed": seed,
                      "dataset_sha256": ds["sha256"], "attempts": attempts,
-                     "provenance": result.meta if result else {}, "prompt": prompt_ref("code")}
+                     "provenance": result.meta if result else {}, "prompt": prompt_ref("code"),
+                     "required_figure": rf["name"] if rf else None,
+                     "required_figure_drawn": bool(rf) and any(f["name"] == rf["name"] for f in figs),
+                     "figure_error": result.figure_error if result else None}
         return self.project.complete_analysis(
             ANALYST_ID, analysis_id, plan_analysis_id=plan_analysis_id, spec=spec,
             code_sha256=self.project.blobs.put_text(code),
             outputs_sha256=self.project.blobs.put_json(result.results) if ok else None,
             execution=execution, status="ok" if ok else "error", error=error, request_id=request_id,
-            call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs)
+            call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs, figures=figs)
 
     # -- Writing -------------------------------------------------------------
     def write_draft(self, requested_by: str) -> State:
@@ -287,7 +296,8 @@ class Agents:
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
-                f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}")
+                f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}\n\n"
+                f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}")
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.
         attempts, text, last_call = [], "", None
@@ -321,6 +331,11 @@ class Agents:
         """Reviewer Assistant briefing. A different model; it gets no executor and cannot edit."""
         from .reviewer import ReviewerAssistant
         return ReviewerAssistant(self.project, self.client).brief(requested_by)
+
+
+def _figure_list(s: State, ok: dict[str, Any]) -> str:
+    rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}" for f in s.figures if f["analysis_id"] in ok]
+    return "\n".join(rows) or "(none)"
 
 
 def _brief(findings: dict[str, Any]) -> str:

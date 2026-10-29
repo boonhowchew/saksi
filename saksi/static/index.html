@@ -125,6 +125,9 @@ details > summary { cursor: pointer; color: var(--indigo); margin: .3rem 0; }
 .cite { font: .72rem var(--sans); color: var(--indigo); background: #E6EBF6; border-radius: 3px; padding: 0 .3rem; white-space: nowrap; vertical-align: .1em; }
 .placeholder { font: italic .95rem var(--sans); color: var(--ochre); }
 mark { background: #FFE9A8; padding: 0 .1rem; }
+figure.fig { margin: 1rem 0; max-width: 46rem; }
+figure.fig img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 4px; background: #fff; }
+figure.fig figcaption { font-size: .9rem; margin-top: .4rem; }
 mark[data-point] { cursor: pointer; }
 
 /* The record rail: the memorable part */
@@ -529,6 +532,25 @@ function sampleBlock(c) {
     ${c.shortfall ? " The label stays confirmatory, because it was fixed before any result; the draft must state the shortfall." : ""}</div>`;
 }
 
+/* Figures: SVG text from the record, shown as images so nothing in them can run */
+function svgURI(svg) {
+  const bytes = new TextEncoder().encode(svg);
+  let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return "data:image/svg+xml;base64," + btoa(bin);
+}
+async function figureHtml(f) {
+  const uri = svgURI(await blob(f.svg_sha256) || "");
+  const c = f.caption_check || {};
+  const problems = (c.untraced ? `${c.untraced} number${c.untraced > 1 ? "s" : ""} not in the results` : "")
+    + (c.exploratory_not_labelled ? `${c.untraced ? "; " : ""}does not say exploratory` : "");
+  return `<figure class="fig"><img src="${uri}" alt="Figure ${f.number}: ${esc(f.caption)}" loading="lazy">
+    <figcaption><strong>Figure ${f.number}.</strong> ${esc(f.caption)}
+    <br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
+    ${problems ? `<span class="tag attn">caption: ${esc(problems)}</span>` : `<span class="tag good">caption checked</span>`}
+    ${f.warning ? `<span class="tag bad">${esc(f.warning)}</span>` : ""}
+    <a class="small" href="${uri}" download="saksi-figure-${f.number}.svg">Download SVG</a></figcaption></figure>`;
+}
+
 /* Analyses */
 async function analyses() {
   const s = S.state;
@@ -547,6 +569,8 @@ async function analyses() {
         ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
         ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
         ${(out.notes || []).length ? `<ul class="small">${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : `<p class="msg err small">${esc(a.error || "")}</p>`}
+      ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
+      ${ex.required_figure && !ex.required_figure_drawn ? `<p class="msg warn small">The rule for this analysis requires a ${esc(ex.required_figure.replaceAll("_", " "))}, but the analysis code did not draw one.${ex.figure_error ? " The figure code failed; see How it ran." : ""}</p>` : ""}
       <details><summary>How it ran</summary><dl class="facts">
         <dt>Where</dt><dd>${esc(ex.backend)}${pv.sandbox_object_id ? `, sandbox <span class="hash">${esc(pv.sandbox_object_id)}</span>` : ""}</dd>
         <dt>Network</dt><dd>${pv.network === "blocked" ? `<span class="tag good">blocked</span>` : esc(pv.network || "not recorded")}</dd>
@@ -554,7 +578,8 @@ async function analyses() {
         <dt>Seed</dt><dd>${esc(ex.seed)}</dd>
         <dt>Attempts</dt><dd>${(ex.attempts || []).map((t) => esc(t.outcome)).join(", then ")}</dd>
         <dt>Packages</dt><dd class="small">${esc(Object.entries(pv.packages || {}).map(([k, v]) => k + " " + v).join(", "))}</dd>
-        <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd></dl>
+        <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd>
+        ${ex.figure_error ? `<dt>Figure error</dt><dd><pre>${esc(ex.figure_error)}</pre></dd>` : ""}</dl>
         <div id="code-${esc(a.code_sha256)}"></div></details></div>`;
   }));
   const order = s.plan_locked?.order || [];
@@ -633,6 +658,8 @@ async function draft() {
     ${marks.length ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
     <article class="manuscript-view">${renderManuscript(text || "", marks)}</article>
   </section>
+  ${okFigures().length ? `<section><h2>Figures</h2><p class="small muted">Numbered in the order they were made. The draft may cite them by these numbers.</p>
+    ${(await Promise.all(okFigures().map(figureHtml))).join("")}</section>` : ""}
   <section><h2>Sign-offs for version ${v}</h2>
     ${Object.keys(signed).length ? `<ul>${Object.entries(signed).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.claim_restatement)}”${x.checks_at_signoff ? ` <span class="tag ${x.checks_at_signoff.ok ? "good" : "attn"}">number check ${x.checks_at_signoff.ok ? "passed" : "had problems"} when signed</span>` : ""}</li>`).join("")}</ul>` : "<p>No sign-offs yet.</p>"}
     ${canSign ? `<form class="stack" data-form="signoff"><p class="small muted">There is no approve button. Say what the paper claims, in your own words, and answer each question.</p>
@@ -645,6 +672,7 @@ async function draft() {
       <label><span>What you changed and why</span><input type="text" name="summary" required></label>
       <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></section>` : ""}`;
 }
+const okFigures = () => S.state.figures.filter((f) => S.state.analyses[f.analysis_id]?.status === "ok");
 async function maybeOpenDraft() {
   const s = S.state, v = s.draft_version;
   if (!v || S.version !== v || S.busy || !(isAuthor() || isReviewer())) return;

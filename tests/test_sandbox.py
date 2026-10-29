@@ -84,3 +84,44 @@ def test_timeout():
     code = "def analyse(data_path, seed):\n    while True:\n        pass"
     r = LocalExecutor().run(code, data_bytes(), seed=1, timeout=2)
     assert r.status == "timeout"
+
+
+ROC = GOOD.replace('''    return {"n": int(len(d))''', '''    p = m.predict(d)
+    from sklearn.metrics import roc_auc_score
+    est.append({"name": "AUC", "measure": "AUC", "estimate": float(roc_auc_score(d["gdm"], p)),
+                "ci_lower": None, "ci_upper": None, "p_value": None})
+    return {"n": int(len(d))''') + '''
+
+def figures(data_path, seed):
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import roc_curve
+    df = pd.read_csv(data_path).dropna(subset=["gdm", "booking_bmi", "age", "parity", "previous_gdm"])
+    m = smf.logit("gdm ~ booking_bmi + age + parity + previous_gdm", data=df).fit(disp=0)
+    fpr, tpr, _ = roc_curve(df["gdm"], m.predict(df))
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.plot(fpr, tpr)
+    ax.plot([0, 1], [0, 1], linestyle="--")
+    ax.set_xlabel("1 - specificity"); ax.set_ylabel("Sensitivity")
+    return {"roc_curve": {"figure": fig, "caption": "ROC curve of the primary model."}}
+'''
+
+
+def test_figures_are_drawn_in_the_sandbox_as_svg_and_are_reproducible():
+    check_code(ROC)
+    a = LocalExecutor().run(ROC, data_bytes(), seed=7)
+    b = LocalExecutor().run(ROC, data_bytes(), seed=7)
+    assert a.status == "ok" and a.figure_error is None, a.figure_error
+    assert [f["name"] for f in a.figures] == ["roc_curve"] and a.figures[0]["svg"].lstrip().startswith("<?xml")
+    assert a.figures[0]["svg"] == b.figures[0]["svg"]                    # same code, data and seed: same figure
+    assert "figures" not in a.to_payload() and a.meta["packages"]["matplotlib"]
+
+
+def test_broken_figure_does_not_fail_the_analysis():
+    code = GOOD + "\n\ndef figures(data_path, seed):\n    raise RuntimeError('no plot')\n"
+    r = LocalExecutor().run(code, data_bytes(), seed=7)
+    assert r.status == "ok" and r.figures == [] and "no plot" in r.figure_error
+
+
+def test_analysis_code_cannot_save_or_show_figures_itself():
+    with pytest.raises(CodeRejected, match="savefig"):
+        check_code(GOOD + "\nimport matplotlib.pyplot as plt\ndef f():\n    plt.savefig('x.png')\n")

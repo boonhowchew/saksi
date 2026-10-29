@@ -162,6 +162,17 @@ def demo() -> dict:
         else:
             print(f"     error: {a['error'][:300]}")
 
+    print("\n== Figures (drawn by code, never by a model) ==")
+    for f in s.figures:
+        print(f"  Figure {f['number']} [{f['analysis_id']}] {f['name']}, drawn by {f['drawn_by']} | caption check ok:"
+              f" {f['caption_check']['ok']}{' | WARNING: ' + f['warning'] if f.get('warning') else ''}")
+        print(f"     {f['caption'][:200]}")
+    for aid, a in s.analyses.items():
+        ex = a["execution"]
+        if ex.get("required_figure"):
+            print(f"  {aid}: rule requires {ex['required_figure']}; drawn: {ex.get('required_figure_drawn')}"
+                  + (f" | figure error: {ex['figure_error'][-200:]}" if ex.get("figure_error") else ""))
+
     planned_ok = all(any(a["plan_analysis_id"] == pid and a["status"] == "ok" for a in s.analyses.values())
                      for pid in s.plan_locked["order"])
     if planned_ok:

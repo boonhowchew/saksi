@@ -21,7 +21,8 @@ NUM = re.compile(r"(?<![\w.])(<\s*)?(-?\d+(?:,\d{3})*(?:\.\d+)?)(\s*%)?")
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])|\n+")
 # Numbers that are conventions, not results.
 CONVENTIONAL = (re.compile(r"\b95\s*%\s*(?:CI|confidence)", re.I), re.compile(r"\b(?:19|20)\d{2}\b"),
-                re.compile(r"\bp\s*<\s*0?\.05\b", re.I), re.compile(r"\balpha\b.*0\.05", re.I))
+                re.compile(r"\bp\s*<\s*0?\.05\b", re.I), re.compile(r"\balpha\b.*0\.05", re.I),
+                re.compile(r"\b(?:Fig(?:ure)?s?\.?|Tables?)\s*S?\d+(?:\s*(?:and|,|-|to)\s*S?\d+)*\b", re.I))
 
 
 def numeric_leaves(obj: Any) -> Iterable[float]:

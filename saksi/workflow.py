@@ -40,9 +40,10 @@ from typing import Any
 from .blobs import BlobStore
 from .canonical import sha256_bytes, sha256_obj
 from .design import assess, sample_check
+from .figures import saksi_figures
 from .documents import extract_text
 from .events import Event, EventLog
-from .tracing import trace
+from .tracing import SENTENCE, trace
 
 STAGES = ("INGEST", "ANALYSIS", "DRAFTING", "AUTHOR_REVISION", "REVIEW", "RESPONSE", "ATTESTATION", "FINAL")
 HUMAN_ROLES = {"author", "corresponding_author", "reviewer"}
@@ -105,6 +106,7 @@ class State:
     signoffs: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
     briefings: list[dict[str, Any]] = field(default_factory=list)
     reviewed_versions: dict[int, int] = field(default_factory=dict)
+    figures: list[dict[str, Any]] = field(default_factory=list)
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_decisions: dict[int, str] = field(default_factory=dict)
     attestations: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
@@ -146,6 +148,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
+            "figures": self.figures,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -181,6 +184,7 @@ def apply(s: State, ev: Event) -> State:
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
         s.analyses[p["analysis_id"]] = p | {"by": ev.actor_id, "seq": ev.seq}
+        s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
     elif t == "analyses.accepted":
         s.analyses_accepted_by.setdefault(p["analysis_set_sha256"], set()).add(ev.actor_id)
     elif t in ("draft.created", "draft.edited"):
@@ -419,7 +423,8 @@ class Project:
                           spec: dict[str, Any], code_sha256: str, outputs_sha256: str | None,
                           execution: dict[str, Any], status: str, error: str | None = None,
                           request_id: str | None = None, call: dict[str, Any] | None = None,
-                          requested_by: str | None = None, call_seqs: list[int] | None = None) -> State:
+                          requested_by: str | None = None, call_seqs: list[int] | None = None,
+                          figures: list[dict[str, Any]] | None = None) -> State:
         s = self.state()
         a = self._require_role(s, by, "analyst")
         self._require_stage(s, "ANALYSIS", "RESPONSE")
@@ -434,16 +439,41 @@ class Project:
         outputs = self.blobs.get_json(outputs_sha256) if status == "ok" and outputs_sha256 \
             and self.blobs.has(outputs_sha256) else None
         check = sample_check(planned.get("design") if planned else None, outputs)
+        figs = self._figures(s, analysis_id, spec, outputs, label, "pre-specified" if planned else "post hoc",
+                             figures or []) if outputs is not None else []
         call_seq = self._log_call(by, call)
         self._emit(by, "analysis.completed", {
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
-            "basis": "pre-specified" if planned else "post hoc", "sample_check": check,
+            "basis": "pre-specified" if planned else "post hoc", "sample_check": check, "figures": figs,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
             "execution": execution, "status": status, "error": error, "request_id": request_id,
             "added_in_stage": s.stage, "added_in_round": s.round, "llm_call_seq": call_seq,
             "llm_call_seqs": (call_seqs or []) + ([call_seq] if call_seq else []), "requested_by": requested_by,
         })
         return self.state()
+
+    def _figures(self, s: State, analysis_id: str, spec: dict[str, Any], outputs: dict[str, Any], label: str,
+                 basis: str, from_code: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Saksi's own figures plus those drawn by the analysis code. Numbered in order of creation;
+        every caption is number-checked against this analysis's results."""
+        rows = None
+        if s.curator_reports:
+            rows = self.blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("profile", {}).get("rows")
+        made = [{**f, "svg_sha256": self.blobs.put_text(f.pop("svg")), "drawn_by": "saksi"}
+                for f in saksi_figures(spec, outputs, rows, label, basis)]
+        seen = {f["svg_sha256"] for f in s.figures}
+        made = [f for f in made if f["svg_sha256"] not in seen]        # e.g. the same flow diagram twice
+        made += [{"name": str(f["name"]), "caption": str(f.get("caption", "")), "svg_sha256": f["svg_sha256"],
+                  "drawn_by": "analysis code"} for f in from_code if self.blobs.has(f.get("svg_sha256", ""))]
+        out = []
+        for i, f in enumerate(made, start=len(s.figures) + 1):
+            cited = " ".join(f"{x.strip().rstrip('.')} [A:{analysis_id}]."      # cite inside every sentence
+                             for x in SENTENCE.split(f["caption"]) if x.strip())
+            r = trace(cited, {analysis_id: {"label": label}}, {analysis_id: outputs},
+                      [rows] if rows else [])
+            out.append({**f, "number": i, "label": label, "caption_check": summarise_checks(r),
+                        "warning": f.get("warning")})
+        return out
 
     def accept_analyses(self, by: str, analysis_set_sha256: str) -> State:
         s = self.state()

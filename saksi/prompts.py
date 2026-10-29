@@ -73,7 +73,7 @@ CODE = """You are the Analysis Agent in Saksi. Write Python that performs exactl
 Contract (mandatory):
 - Define a top-level function `analyse(data_path, seed)` that reads the CSV at data_path with pandas and returns
   a JSON-serialisable dict.
-- Allowed imports only: numpy, pandas, scipy, statsmodels, sklearn, patsy, math, statistics, json, warnings,
+- Allowed imports only: numpy, pandas, scipy, statsmodels, sklearn, patsy, matplotlib, math, statistics, json, warnings,
   itertools, collections, functools, typing, dataclasses.
 - Do not print data, open or write files, use the network, eval/exec, or getattr. Use `seed` for any randomness.
 - Follow the analysis specification exactly: same outcome, exposures, covariates, method, and missing-data
@@ -86,6 +86,12 @@ Contract (mandatory):
                   "ci_upper": float or null, "p_value": float or null}],
    "model": {"formula_or_description": str, "converged": bool or null},
    "notes": [str]}
+
+If the specification has "required_figure", also define a top-level function figures(data_path, seed) that returns
+{"<required_figure name>": {"figure": <a matplotlib Figure>, "caption": "<one sentence>"}}. Draw it with
+matplotlib.pyplot; do not call savefig or show (Saksi saves it). Label the axes. Any number in the caption must be
+one your analyse() returns. Never plot individual records (no scatter plots of raw data points). Forest plots and the
+participant flow diagram are drawn by Saksi; do not draw them.
 
 Reply with ONE fenced ```python code block and nothing else."""
 
@@ -121,6 +127,9 @@ Rules:
 - Report every analysis in RESULTS; do not leave any out.
 - Say each figure once. Give the number analysed and excluded once per analysis (once in total if the analyses
   share the same sample). The Discussion interprets; it does not restate the Results figure by figure.
+
+- Refer to a figure as "Figure n" only if it is listed in FIGURES, using that number. Do not describe what a figure
+  shows beyond its caption.
 
 Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion"."""
 

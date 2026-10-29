@@ -34,13 +34,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 ALLOWED_IMPORTS = {
-    "numpy", "pandas", "scipy", "statsmodels", "sklearn", "patsy",
+    "numpy", "pandas", "scipy", "statsmodels", "sklearn", "patsy", "matplotlib",
     "math", "statistics", "json", "warnings", "itertools", "collections", "functools", "typing", "dataclasses",
 }
 BANNED_CALLS = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals", "locals",
                 "vars", "getattr", "setattr", "delattr"}
 BANNED_ATTRS = {"to_csv", "to_excel", "to_pickle", "to_parquet", "to_sql", "to_hdf", "to_feather", "savefig",
-                "system", "popen", "remove", "unlink", "rmdir", "read_pickle", "read_sql", "load"}
+                "system", "popen", "remove", "unlink", "rmdir", "read_pickle", "read_sql", "load", "show", "imsave",
+                "use"}
 WORK = "/work"
 RUNNER = r'''
 import hashlib, json, os, platform, random, sys, time, traceback, warnings
@@ -65,7 +66,8 @@ meta = {
     "data_sha256": hashlib.sha256(open(data_path, "rb").read()).hexdigest(),
     "code_sha256": hashlib.sha256(open(os.path.join(work, "analysis.py"), "rb").read()).hexdigest(),
     "seed": seed, "python": sys.version.split()[0], "platform": platform.platform(),
-    "packages": {p: ver(p) for p in ("numpy", "pandas", "scipy", "statsmodels", "scikit-learn", "patsy")},
+    "packages": {p: ver(p) for p in ("numpy", "pandas", "scipy", "statsmodels", "scikit-learn", "patsy",
+                                     "matplotlib")},
     "container_image_id": os.environ.get("MODAL_IMAGE_ID"), "sandbox_id": os.environ.get("MODAL_SANDBOX_ID"),
 }
 t0 = time.time()
@@ -81,10 +83,29 @@ try:
 except Exception:
     status, error = "error", traceback.format_exc()[-3000:]
     results = None
+# Figures: optional figures(data_path, seed) -> {name: {"figure": Figure, "caption": str}}.
+# This runner, not the analysis code, turns them into SVG. A figure problem never fails the analysis.
+figures, figure_error = [], None
+if status == "ok" and callable(ns.get("figures")):
+    try:
+        import io
+        import matplotlib
+        matplotlib.rcParams["svg.hashsalt"] = str(seed)       # stable element ids: same code, same SVG
+        figs = ns["figures"](data_path, seed) or {}
+        for name, f in list(figs.items())[:4]:
+            buf = io.StringIO()
+            f["figure"].savefig(buf, format="svg", bbox_inches="tight", metadata={"Date": None})
+            svg = buf.getvalue()
+            if len(svg) > 1_500_000:
+                raise ValueError(f"figure {name!r} is larger than 1.5 MB")
+            figures.append({"name": str(name)[:60], "caption": str(f.get("caption", ""))[:600], "svg": svg})
+    except Exception:
+        figure_error = traceback.format_exc()[-1500:]
+        figures = []
 meta["seconds"] = round(time.time() - t0, 3)
 meta["warnings"] = caught
-json.dump({"status": status, "error": error, "results": results, "meta": meta},
-          open(os.path.join(out, "result.json"), "w"), default=str)
+json.dump({"status": status, "error": error, "results": results, "meta": meta, "figures": figures,
+           "figure_error": figure_error}, open(os.path.join(out, "result.json"), "w"), default=str)
 '''
 
 
@@ -138,10 +159,13 @@ class ExecResult:
     stdout_tail: str = ""
     stderr_tail: str = ""
     wall_seconds: float | None = None
+    figures: list[dict[str, Any]] = field(default_factory=list)      # SVG text; stored as blobs, not in payloads
+    figure_error: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("results")
+        d.pop("figures")
         return d
 
 
@@ -155,7 +179,7 @@ def _parse(raw: str | None, backend: str, exit_code, stdout, stderr, wall) -> Ex
                           stdout[-2000:], stderr[-2000:], wall)
     r = json.loads(raw)
     return ExecResult(backend, r["status"], r["results"], r["error"], r["meta"], exit_code,
-                      stdout[-2000:], stderr[-2000:], wall)
+                      stdout[-2000:], stderr[-2000:], wall, r.get("figures") or [], r.get("figure_error"))
 
 
 class LocalExecutor:
@@ -171,7 +195,7 @@ class LocalExecutor:
             (work / "analysis.py").write_text(code)
             (work / "runner.py").write_text(RUNNER)
             env = {"SAKSI_WORK": str(work), "SAKSI_SEED": str(seed), "PATH": os.environ.get("PATH", ""),
-                   "PYTHONHASHSEED": str(seed)}
+                   "PYTHONHASHSEED": str(seed), "MPLBACKEND": "Agg", "MPLCONFIGDIR": str(work / "mpl")}
             t0 = time.monotonic()
             try:
                 p = subprocess.run([sys.executable, "-I", str(work / "runner.py")], cwd=work, env=env,
@@ -186,7 +210,7 @@ class LocalExecutor:
 
 # Exact versions the analyses run with; recorded again from inside the sandbox.
 SANDBOX_PACKAGES = ("numpy==2.5.4", "pandas==3.1.0", "scipy==1.18.1", "statsmodels==0.15.0",
-                    "scikit-learn==1.9.1", "patsy==1.0.3")
+                    "scikit-learn==1.9.1", "patsy==1.0.3", "matplotlib==3.11.2")
 
 
 class ModalExecutor:
@@ -217,7 +241,7 @@ class ModalExecutor:
             sb.filesystem.write_text(RUNNER, f"{WORK}/runner.py")
             p = sb.exec("python", "-I", f"{WORK}/runner.py", timeout=timeout,
                         env={"SAKSI_WORK": WORK, "SAKSI_SEED": str(seed), "PYTHONHASHSEED": str(seed),
-                             "MODAL_SANDBOX_ID": sb.object_id})
+                             "MODAL_SANDBOX_ID": sb.object_id, "MPLBACKEND": "Agg", "MPLCONFIGDIR": "/tmp/mpl"})
             p.wait()
             stdout, stderr = p.stdout.read(), p.stderr.read()
             try:

@@ -40,7 +40,7 @@ under "New in this repository" was built on top of them.
 | **Modal** | Serverless platform (partner) | Hosts the API, the private data volume and the analysis sandboxes |
 | FastAPI (MIT), Starlette (BSD-3), Pydantic (MIT), python-multipart (Apache-2.0) | Open-source libraries | HTTP API, request validation and file upload |
 | httpx | Open-source library (BSD) | Calls to the model endpoints |
-| NumPy, pandas, SciPy, statsmodels, scikit-learn, patsy | Open-source libraries (BSD) | Statistical analysis inside the sandbox |
+| NumPy, pandas, SciPy, statsmodels, scikit-learn, patsy (BSD); Matplotlib (Matplotlib licence, BSD-style) | Open-source libraries | Statistical analysis and data-dependent figures inside the sandbox |
 | openpyxl (MIT), pypdf (BSD-3), python-docx (MIT) | Open-source libraries | Reading uploaded datasets (Excel) and protocols (PDF, Word) |
 | pytest (MIT) | Open-source library | Tests |
 | Uvicorn (BSD-3), Playwright (Apache-2.0) with Chromium (BSD) | Open-source tools, development only | Offline rehearsal server and the browser walk-through in `scripts/` |
@@ -80,6 +80,7 @@ under "New in this repository" was built on top of them.
 - **A shortfall against the planned sample is flagged, not hidden.** After the analysis runs, code compares the participants and events analysed with the protocol's targets. The label stays as fixed before the results, and the draft must state the planned and achieved numbers.
 - **Approvals bind to exact content.** A changed plan, a new analysis or an edited draft voids earlier confirmations, acceptances and sign-offs.
 - **Every number is traced.** Each draft and each edit, by agent or author, is checked by code: every number must match a result from an analysis the sentence cites, exploratory results must be called exploratory, and every analysis that ran must be reported (no selective reporting). Sign-offs record the check for the exact version signed.
+- **Figures are drawn by code, never by a model.** Saksi draws forest plots and the participant flow diagram from the recorded results. Figures that need the data, such as a ROC or Kaplan-Meier curve, are required by a fixed rule from the plan and drawn by the analysis code in the sandbox, saved by Saksi as SVG with the analysis's provenance. Every caption is number-checked, and a flow diagram whose counts do not add up is flagged. Models see captions, never images.
 - **Models are given facts, not asked to compare numbers.** Whether each 95% interval includes its null value (1 for ratios, 0.5 for AUC, 0 for differences) is computed by code and given to the Writing Agent, the Reviewer Assistant and the reviewer.
 - **No bare "Approve" button.** Sign-off requires restating the primary claim in your own words and answering verification questions, and records the time spent.
 - **Agents never act anonymously for a person.** An agent edit must name the author who requested it, and the Contribution Ledger credits both.
@@ -134,6 +135,8 @@ variants, which are discounted in exchange for training on prompts, are
 | Review loop over the API: two rounds, from draft to the final version | |
 | Number tracer: every number in every draft and edit checked against the results; every analysis must be reported | |
 | Interval facts: whether each interval includes its null value, computed by code for the models and the reviewer | |
+| Confirmatory only for the pre-specified, powered primary analysis, checked against the protocol; shortfall against the planned sample flagged | |
+| Figures: forest plot and participant flow by Saksi; ROC, Kaplan-Meier or calibration curves by the analysis code when the plan calls for them; captions checked | |
 | Web page: every stage for authors and the reviewer, next step for each person, live record with integrity check, provenance and ledger. No third-party scripts or fonts | |
 | Live runs on Modal with both Meta models, from upload to the Reviewer Assistant's briefing (see PLAN.md) | |
 

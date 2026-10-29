@@ -48,7 +48,8 @@ def test_unknown_reference_is_flagged():
 
 
 def test_headings_and_conventions_ignored():
-    text = "## 2. Methods\n\nWe used a significance level of p < 0.05 and report 95% confidence intervals."
+    text = ("## 2. Methods\n\nWe used a significance level of p < 0.05 and report 95% confidence intervals. "
+            "See Figure 2 and Tables 1 and 3.")
     r = trace(text, ANALYSES, OUTPUTS)
     assert r["numbers_checked"] == 0 and r["ok"]
 

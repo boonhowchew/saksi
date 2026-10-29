@@ -45,6 +45,18 @@ def analyse(data_path, seed):
                            "ci_lower": float(np.percentile(boots, 2.5)), "ci_upper": float(np.percentile(boots, 97.5)),
                            "p_value": None}],
             "model": {"formula_or_description": "same as primary", "converged": True}, "notes": []}
+
+
+def figures(data_path, seed):
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import roc_curve
+    df = pd.read_csv(data_path).dropna(subset=["gdm", "booking_bmi", "age", "parity", "previous_gdm"])
+    m = smf.logit("gdm ~ booking_bmi + age + parity + previous_gdm", data=df).fit(disp=0)
+    fpr, tpr, _ = roc_curve(df["gdm"], m.predict(df))
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.plot(fpr, tpr); ax.plot([0, 1], [0, 1], linestyle="--")
+    ax.set_xlabel("1 - specificity"); ax.set_ylabel("Sensitivity")
+    return {"roc_curve": {"figure": fig, "caption": "ROC curve of the primary model in 388 women."}}
 '''
 CURATOR_REPLY = {
     "summary": "400 records, 10 columns. Two direct identifiers should be removed.",
@@ -153,6 +165,21 @@ def test_curate_plan_run_end_to_end(setup):
                                                "events": {"target": 40, "achieved": 18, "short": True}}
     assert auc["label"] == "exploratory" and auc["basis"] == "pre-specified"     # secondary: not powered for it
     assert "not the primary hypothesis" in s.plan_locked["analyses"]["auc"]["design"]["reasons_not_confirmatory"][0]
+
+    # Figures: Saksi draws the forest plot and flow diagram from the recorded results; the ROC curve,
+    # required by rule for an AUC analysis, is drawn by the analysis code in the sandbox.
+    figs = {(f["analysis_id"], f["name"]): f for f in s.figures}
+    assert figs[("primary", "forest_plot")]["drawn_by"] == "saksi" and figs[("primary", "forest_plot")]["number"] == 1
+    assert figs[("primary", "participant_flow")]["drawn_by"] == "saksi"
+    assert auc["spec"]["required_figure"]["name"] == "roc_curve" and auc["execution"]["required_figure_drawn"]
+    roc = figs[("auc", "roc_curve")]
+    assert roc["drawn_by"] == "analysis code" and roc["label"] == "exploratory"
+    assert roc["caption_check"]["exploratory_not_labelled"] == 1          # its caption forgot to say exploratory
+    assert p.blobs.get_text(roc["svg_sha256"]).lstrip().startswith("<?xml")
+    assert all(f["caption_check"]["untraced"] == 0 for f in s.figures)
+    # AUC_FIXED claims 0 excluded while 12 of 400 records were dropped: Saksi flags the flow diagram.
+    assert "do not add up" in figs[("auc", "participant_flow")]["warning"]
+    assert figs[("primary", "participant_flow")]["warning"] is None
     assert len(prim["execution"]["attempts"]) == 1
     assert prim["execution"]["provenance"]["data_sha256"] == ds_sha
     assert auc["status"] == "ok" and [a["outcome"] for a in auc["execution"]["attempts"]] == ["error", "ok"]
@@ -270,6 +297,7 @@ def test_writer_fixes_its_own_draft_after_check(setup):
     assert d["writer_attempts"][1]["prompt"]["name"] == "rewrite"
     # The rewrite request told the agent exactly what was wrong.
     assert '"interval_includes_null": true' in model.bodies[-2]["messages"][1]["content"]   # facts, not judgement
+    assert "Figure 1 [A:primary]: Adjusted odds ratio with 95% confidence intervals" in model.bodies[-2]["messages"][1]["content"]
     rewrite_msg = model.bodies[-1]["messages"][1]["content"]
     assert "UNTRACED 9.99" in rewrite_msg and "EXPLORATORY NOT LABELLED" in rewrite_msg
     # Both model calls are in the log: the failed attempt and the final one.
