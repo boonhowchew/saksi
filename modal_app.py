@@ -131,6 +131,10 @@ def demo() -> dict:
         a = s.plan["analyses"][aid]
         print(f"  {aid}: {a.get('title')} | quote verified: {a['protocol_quote_verified']}"
               f" | columns not in data: {a['columns_not_in_data']}")
+        d = a.get("design") or {}
+        print(f"     role: {d.get('role')} | will be: {d.get('label')}"
+              + (f" | because: {'; '.join(d.get('reasons_not_confirmatory', []))}" if d.get('label') != 'confirmatory' else "")
+              + f" | planned: {d.get('sample_size_target')}")
     for author in ("author-a", "author-b"):
         s = p.confirm_plan(author, s.plan["sha"])
 
@@ -139,14 +143,16 @@ def demo() -> dict:
     for aid, a in s.analyses.items():
         ex = a["execution"]
         prov = ex.get("provenance", {})
-        print(f"  {aid} [{a['label']}] {a['status']} | attempts: {[x['outcome'] for x in ex['attempts']]}"
+        print(f"  {aid} [{a['label']}, {a.get('basis')}] {a['status']} | attempts: {[x['outcome'] for x in ex['attempts']]}"
               f" | backend: {ex['backend']} | network: {prov.get('network')} | sandbox: {prov.get('sandbox_object_id')}")
         print(f"     data hash matches upload: {prov.get('data_sha256') == ex['dataset_sha256']}"
               f" | packages: {prov.get('packages')}")
         if a["status"] == "ok":
             out = p.blobs.get_json(a["outputs_sha256"])
-            print(f"     n analysed: {out.get('n_analysed')} | excluded: {out.get('n_excluded')}"
+            print(f"     n analysed: {out.get('n_analysed')} | events: {out.get('n_events')} | excluded: {out.get('n_excluded')}"
                   f" ({out.get('exclusion_reason')})")
+            if a.get("sample_check"):
+                print(f"     sample check: {a['sample_check']}")
             print(f"     model: {(out.get('model') or {}).get('formula_or_description')}")
             for e in out.get("estimates", [])[:6]:
                 print(f"     {e.get('name')}: {e.get('estimate')} ({e.get('ci_lower')}, {e.get('ci_upper')})"
@@ -175,6 +181,7 @@ def demo() -> dict:
         print(f"\n== Number check (final draft) ==\n  numbers checked: {c['numbers_checked']} | untraced: {c['untraced']}"
               f" | exploratory not labelled: {c['exploratory_not_labelled']}"
               f" | analyses not reported: {c.get('analyses_not_reported')}"
+              f" | shortfall not stated: {c.get('shortfall_not_reported')}"
               f" | unknown refs: {c['unknown_analysis_refs']} | all clear: {c['ok']}")
         for u in p.blobs.get_json(d["checks_sha256"])["untraced"][:8]:
             print(f"  UNTRACED {u['number']}: {u['sentence'][:160]}")

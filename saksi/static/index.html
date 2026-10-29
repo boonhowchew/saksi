@@ -264,7 +264,7 @@ function describe(e) {
     case "plan.locked": return "The plan was locked: every author confirmed it";
     case "stage.advanced": return `Moved to ${esc(stageName(p.to))}: ${esc(p.reason)}`;
     case "analysis.requested": return `${who} asked for an exploratory analysis`;
-    case "analysis.completed": return `${who} ran ${esc(p.analysis_id)} (${esc(p.label)}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
+    case "analysis.completed": return `${who} ran ${esc(p.analysis_id)} (${esc(labelText(p))}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
     case "analyses.accepted": return `${who} accepted the results`;
     case "draft.created": return `${who} wrote draft version ${p.version}${forWhom}`;
     case "draft.edited": return `${who} edited the draft, making version ${p.version}${forWhom}`;
@@ -281,6 +281,8 @@ function describe(e) {
     default: return esc(e.type);
   }
 }
+const labelText = (a) => a.label === "confirmatory" ? "confirmatory" : `exploratory${a.basis ? ", " + a.basis : ""}`;
+const labelTag = (a) => `<span class="tag ${a.label === "confirmatory" ? "conf" : "expl"}" title="${a.label === "confirmatory" ? "The pre-specified primary analysis the study was designed and powered for" : "Not what the study was designed and powered for"}">${esc(labelText(a))}</span>`;
 const stageName = (code) => (STAGES.find(([c]) => c === code) || [code, code])[1];
 
 /* ---------- what should I do next ---------- */
@@ -493,18 +495,38 @@ function plan() {
       : `Proposed by ${esc(name(p.by))}. Confirmed by: ${p && s.plan_confirmed_by.length ? esc(s.plan_confirmed_by.map(name).join(", ")) : "nobody yet"}.`}</p>
     <p class="small muted">Plan hash <span class="hash">${short(p.sha)}</span>. Confirming binds you to exactly this version.</p>
     ${p.order.map((id, i) => { const a = p.analyses[id]; return `<div class="item ${a.protocol_quote_verified && !a.columns_not_in_data?.length ? "good" : "attn"}">
-      <h3>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span></h3>
+      <h3>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span> ${a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""}</h3>
       <dl class="facts"><dt>Objective</dt><dd>${esc(a.objective)}</dd><dt>Outcome</dt><dd>${col(a.outcome)}</dd>
       <dt>Exposures</dt><dd>${(a.exposures || []).map(col).join(", ") || "none"}</dd><dt>Covariates</dt><dd>${(a.covariates || []).map(col).join(", ") || "none"}</dd>
       <dt>Method</dt><dd>${esc(a.method)}</dd><dt>Effect measure</dt><dd>${esc(a.effect_measure)}</dd><dt>Missing data</dt><dd>${esc(a.missing_data)}</dd></dl>
       <blockquote>${esc(a.protocol_quote)}</blockquote>
       <p>${a.protocol_quote_verified ? `<span class="tag good">Quotation found in the protocol</span>` : `<span class="tag attn">Quotation not found in the protocol: check this analysis</span>`}
       ${a.columns_not_in_data?.length ? ` <span class="tag attn">Not in the data: ${esc(a.columns_not_in_data.join(", "))}</span>` : ""}</p>
+      ${a.design ? designBlock(a.design) : ""}
       ${a.unresolved?.length ? `<p class="small">Unresolved: ${esc(a.unresolved.join("; "))}</p>` : ""}</div>`; }).join("")}
     ${isAuthor() && s.stage === "INGEST" && !s.plan_confirmed_by.includes(S.you)
       ? `<button class="btn" data-action="confirm_plan" data-label="Confirming">Confirm this plan</button>` : ""}
     ${canPropose && !locked ? ` <button class="btn quiet" data-agent="propose_plan" data-label="The Analysis Agent is reading the protocol">Ask for a new draft of the plan</button>` : ""}
   </section>`;
+}
+
+function designBlock(d) {
+  const found = (ok) => ok ? `<span class="tag good">found in the protocol</span>` : `<span class="tag attn">not found in the protocol</span>`;
+  const t = d.sample_size_target || {};
+  return `<details ${d.label === "confirmatory" ? "" : "open"}><summary>Why ${d.label === "confirmatory" ? "confirmatory" : "exploratory"}</summary>
+    <p class="small">${d.label === "confirmatory"
+      ? "The protocol names this the primary analysis and its sample-size justification covers it. Both quotations were found in the protocol by code."
+      : "Confirmatory needs the protocol to name it the primary analysis and its sample-size justification to cover it. Here: " + esc(d.reasons_not_confirmatory.join("; ")) + "."}</p>
+    <dl class="facts"><dt>Role in the protocol</dt><dd>${esc(d.role)}</dd>
+    ${d.primary_quote ? `<dt>Named primary</dt><dd>“${esc(d.primary_quote)}” ${found(d.checks.primary_quote_verified)}</dd>` : ""}
+    ${d.sample_size_quote ? `<dt>Sample size</dt><dd>“${esc(d.sample_size_quote)}” ${found(d.checks.sample_size_quote_verified)}</dd>` : ""}
+    ${t.n || t.events ? `<dt>Planned</dt><dd>${t.n ? esc(t.n) + " participants" : ""}${t.n && t.events ? ", " : ""}${t.events ? esc(t.events) + " events" : ""}</dd>` : ""}</dl></details>`;
+}
+function sampleBlock(c) {
+  if (!c) return "";
+  const rows = Object.entries(c.targets).map(([k, r]) => `${k === "n" ? "Participants" : "Outcome events"}: ${r.achieved ?? "not reported"} analysed, ${r.target} planned${r.short ? " (short)" : ""}`);
+  return `<div class="msg ${c.shortfall ? "warn" : "ok"} small"><strong>${c.shortfall ? "Below the protocol's planned sample." : "The protocol's planned sample was reached."}</strong> ${esc(rows.join("; "))}.
+    ${c.shortfall ? " The label stays confirmatory, because it was fixed before any result; the draft must state the shortfall." : ""}</div>`;
 }
 
 /* Analyses */
@@ -517,10 +539,11 @@ async function analyses() {
     const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
     const est = out?.estimates || [];
     return `<div class="item ${a.status === "ok" ? "good" : "attn"}">
-      <h3>${esc(a.spec?.title || id)} <span class="tag ${a.label === "confirmatory" ? "conf" : "expl"}">${esc(a.label)}</span>
+      <h3>${esc(a.spec?.title || id)} ${labelTag(a)}
         <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
+      ${sampleBlock(a.sample_check)}
       ${a.requested_by ? `<p class="small muted">Requested by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
-      ${out ? `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}, excluded ${esc(out.n_excluded ?? 0)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
+      ${out ? `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}${out.n_events != null ? `, with ${esc(out.n_events)} outcome events` : ""}${out.n_excluded != null ? `; excluded ${esc(out.n_excluded)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}` : "; exclusions not reported"}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
         ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
         ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
         ${(out.notes || []).length ? `<ul class="small">${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : `<p class="msg err small">${esc(a.error || "")}</p>`}
@@ -538,6 +561,7 @@ async function analyses() {
   const allPlanned = order.every((pid) => Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
   const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
   return `<section><h2>Analyses</h2>
+    <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, either pre-specified (in the plan) or post hoc (added later).</p>
     <p class="muted small">The Analysis Agent writes code for each planned analysis. It runs in a sandbox with the network blocked, on the uploaded file, checked by hash. The model never sees a data row.</p>
     ${canRun && !allPlanned ? `<button class="btn" data-agent="run_planned" data-label="Running the planned analyses">Run the planned analyses</button>` : ""}
     ${blocks.join("") || (s.stage === "INGEST" ? "<p>Analyses start once every author has confirmed the plan.</p>" : "")}
@@ -602,7 +626,7 @@ async function draft() {
       <label class="small"><span class="hidden">Version</span><select data-change="version" aria-label="Version">${versions.map((x) => `<option value="${x}" ${x === v ? "selected" : ""}>Version ${x}${x === s.draft_version ? " (current)" : ""}</option>`).join("")}</select></label></div>
     <p class="small muted">${d.type === "draft.created" ? "Written" : "Edited"} by ${esc(name(d.by))}${d.requested_by ? " for " + esc(name(d.requested_by)) : ""}, ${fmtTime(d.ts)}${d.summary ? `: “${esc(d.summary)}”` : ""}${d.diff ? ` (${d.diff.words_added} words added, ${d.diff.words_removed} removed)` : ""}.</p>
     <div class="msg ${checks.ok ? "ok" : "warn"}"><strong>${checks.ok ? "Number check passed." : "Number check found problems."}</strong>
-      ${esc(checks.numbers_checked)} numbers checked against the computed results${checks.untraced ? `; ${checks.untraced} could not be traced` : ""}${checks.exploratory_not_labelled ? `; ${checks.exploratory_not_labelled} exploratory result${checks.exploratory_not_labelled > 1 ? "s" : ""} not called exploratory` : ""}${checks.analyses_not_reported?.length ? `; not reported: ${esc(checks.analyses_not_reported.join(", "))}` : ""}${checks.unknown_analysis_refs?.length ? `; unknown analyses cited: ${esc(checks.unknown_analysis_refs.join(", "))}` : ""}.</div>
+      ${esc(checks.numbers_checked)} numbers checked against the computed results${checks.untraced ? `; ${checks.untraced} could not be traced` : ""}${checks.exploratory_not_labelled ? `; ${checks.exploratory_not_labelled} exploratory result${checks.exploratory_not_labelled > 1 ? "s" : ""} not called exploratory` : ""}${checks.analyses_not_reported?.length ? `; not reported: ${esc(checks.analyses_not_reported.join(", "))}` : ""}${checks.unknown_analysis_refs?.length ? `; unknown analyses cited: ${esc(checks.unknown_analysis_refs.join(", "))}` : ""}${checks.shortfall_not_reported?.length ? `; sample shortfall not stated for: ${esc(checks.shortfall_not_reported.join(", "))}` : ""}.</div>
     ${full?.untraced?.length ? `<details open><summary>Numbers that could not be traced</summary><ul class="small">${full.untraced.map((u) => `<li><mark>${esc(u.number)}</mark> in: ${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${full?.exploratory_not_labelled?.length ? `<details open><summary>Exploratory results not called exploratory</summary><ul class="small">${full.exploratory_not_labelled.map((u) => `<li>${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${attempts.length > 1 ? `<p class="small muted">The Writing Agent's first attempt failed the check; it rewrote the draft once from the findings${attempts.at(-1).passed_check ? " and passed" : ", and what remains is for the authors"}.</p>` : ""}

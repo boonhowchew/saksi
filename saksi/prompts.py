@@ -39,6 +39,12 @@ Rules:
 - Map variables to dataset columns using the data dictionary. If a protocol variable has no matching column,
   say so in "unresolved"; do not guess.
 - State the missing-data approach the protocol specifies; if it specifies none, write "not specified".
+- Say what role the protocol gives each analysis: "primary" only if the protocol names it (or its objective or
+  hypothesis) as primary; "secondary" if it names it secondary; otherwise "other". For a primary analysis, quote the
+  protocol sentence that names it primary.
+- If the protocol's sample-size justification covers an analysis (usually only the primary), quote it verbatim and
+  give the planned numbers exactly as written there. Leave these empty for analyses it does not cover.
+- Do not decide whether an analysis is confirmatory or exploratory. Saksi decides that from these quotations.
 
 Return ONLY a JSON object:
 {
@@ -53,6 +59,10 @@ Return ONLY a JSON object:
     "effect_measure": str,
     "missing_data": str,
     "protocol_quote": str,
+    "role": "primary|secondary|other",
+    "primary_quote": str,
+    "sample_size_quote": str,
+    "sample_size_target": {"n": int or null, "events": int or null},
     "unresolved": [str]
   }],
   "protocol_items_not_analysable": [str]
@@ -71,6 +81,7 @@ Contract (mandatory):
   {"error": "reason"} instead of improvising.
 - Return this shape:
   {"n_analysed": int, "n_excluded": int, "exclusion_reason": str,
+   "n_events": int or null (outcome events among those analysed, for binary or time-to-event outcomes),
    "estimates": [{"name": str, "measure": str, "estimate": float, "ci_lower": float or null,
                   "ci_upper": float or null, "p_value": float or null}],
    "model": {"formula_or_description": str, "converged": bool or null},
@@ -94,8 +105,12 @@ Rules:
   A sentence may carry more than one tag.
 - Whether each 95% interval includes the null value (no association) is given in INTERVAL FACTS, computed by code.
   Follow it; never judge it from rounded numbers.
-- Describe each analysis exactly as labelled: "confirmatory" means pre-specified in the protocol; "exploratory"
-  means it was not. Every sentence about an exploratory analysis must contain the word "exploratory".
+- Describe each analysis exactly as labelled. "confirmatory" means the pre-specified primary analysis that the study
+  was designed and powered for. "exploratory" means anything else: pre-specified secondary analyses (basis
+  "pre-specified") and analyses added after the plan was confirmed (basis "post hoc"). Every sentence about an
+  exploratory analysis must contain the word "exploratory", and say whether it was pre-specified or post hoc.
+- If an analysis has a sample_check with a shortfall, state the planned and the achieved numbers from it in the
+  Results, citing that analysis, and treat the shortfall as a limitation.
 - Report the number analysed and excluded for each analysis.
 - If a planned analysis failed, say so in Methods and report no result for it.
 - Observational data: no causal language ("effect of", "caused", "led to", "reduced"). Use "associated with".
@@ -140,6 +155,9 @@ Rules:
   Quotes are checked automatically; a point whose quote is not in the draft is marked unverified.
 - Whether each 95% interval includes its null value is given in INTERVAL FACTS, computed by code. Rely on it;
   never judge it from rounded numbers. If the draft contradicts it, raise that.
+- Labels are set by code before any result: "confirmatory" is the pre-specified primary analysis covered by the
+  protocol's sample-size justification; everything else is "exploratory" (pre-specified or post hoc). A shortfall
+  against the planned sample is in sample_check.
 - Phrase each point as a question to the authors. Do not assert that something is wrong.
 - At most 10 points, most important first. Fewer is better than padding.
 - Use only the materials given. Do not cite literature.

@@ -69,11 +69,15 @@ def _conventional_spans(sentence: str) -> list[tuple[int, int]]:
 
 
 def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any],
-          dataset_counts: Iterable[float] = (), required_refs: Iterable[str] = ()) -> dict[str, Any]:
+          dataset_counts: Iterable[float] = (), required_refs: Iterable[str] = (),
+          must_state: dict[str, list[float]] | None = None) -> dict[str, Any]:
     """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON.
-    required_refs: analyses the draft must report (guards against selective reporting)."""
+    required_refs: analyses the draft must report (guards against selective reporting).
+    must_state: id -> numbers that a sentence citing that analysis must state (e.g. the planned
+    sample size when the achieved sample fell short of it)."""
     counts = [float(c) for c in dataset_counts]
     rows, untraced, unlabelled, unknown_refs = [], [], [], set()
+    stated: dict[str, set[float]] = {}
     for para in text.split("\n\n"):
         # Drop heading LINES only. A heading followed directly by text on the next
         # line is common in model output; skipping the whole paragraph would hide it.
@@ -88,6 +92,8 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
                 if any(a <= m.start() < b for a, b in skip):
                     continue
                 token = m.group(2)
+                for r in refs:
+                    stated.setdefault(r, set()).add(float(token.replace(",", "")))
                 hit = _matches(token, bool(m.group(1)), bool(m.group(3)), pool)
                 row = {"number": m.group(0).strip(), "sentence": sent[:300], "cited": refs,
                        "status": "traced" if hit else "untraced", "matched": hit}
@@ -105,11 +111,14 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
         body = pat.sub("", body)
     nothing_checked = not rows and bool(re.search(r"\d", body))
     not_reported = sorted(set(required_refs) - set(CITE.findall(text)))
+    shortfall_unreported = sorted(k for k, vals in (must_state or {}).items()
+                                  if any(float(v) not in stated.get(k, set()) for v in vals))
     return {
         "numbers_checked": len(rows), "traced": len(rows) - len(untraced), "untraced": untraced,
         "exploratory_not_labelled": unlabelled, "unknown_analysis_refs": sorted(unknown_refs),
         "nothing_checked_but_numbers_present": nothing_checked, "analyses_not_reported": not_reported,
-        "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported),
+        "shortfall_not_reported": shortfall_unreported,
+        "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported or shortfall_unreported),
     }
 
 

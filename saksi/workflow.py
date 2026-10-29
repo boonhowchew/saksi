@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Any
 
 from .blobs import BlobStore
-from .canonical import sha256_obj
+from .canonical import sha256_bytes, sha256_obj
+from .design import assess, sample_check
+from .documents import extract_text
 from .events import Event, EventLog
 from .tracing import trace
 
@@ -356,7 +358,14 @@ class Project:
         ids = [x.get("id") for x in analyses]
         if not analyses or any(not i for i in ids) or len(set(ids)) != len(ids):
             raise WorkflowError("plan needs at least one analysis, each with a unique id")
-        plan = {x["id"]: x for x in analyses}
+        # Confirmatory or exploratory is decided here, by code, against the stored protocol,
+        # whoever proposed the plan. Anything the proposer claimed about it is overwritten.
+        text = self._protocol_text(s, protocol_ref)
+        plan = {}
+        for x in analyses:
+            d = assess(x, text)
+            plan[x["id"]] = {**x, "design": d, "label": d["label"],
+                             "protocol_quote_verified": d["checks"]["protocol_quote_verified"]}
         order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
         call_seq = self._log_call(by, call)
         self._emit(by, "plan.proposed", {"analyses": plan, "order": order,
@@ -364,6 +373,20 @@ class Project:
                                          "protocol_ref": protocol_ref, "llm_call_seq": call_seq,
                                          "requested_by": requested_by})
         return self.state()
+
+    def _protocol_text(self, s: State, ref: str | None) -> str | None:
+        """The stored protocol's text, only if the file is present and still matches its hash."""
+        m = next((m for m in reversed(s.materials) if m["kind"] == "protocol" and m["sha256"] == ref
+                  and m.get("storage_ref")), None)
+        if m is None:
+            return None
+        path = self.root / m["storage_ref"]
+        if not path.exists():
+            return None
+        data = path.read_bytes()
+        if sha256_bytes(data) != m["sha256"]:
+            return None
+        return extract_text(data, m["filename"])
 
     def confirm_plan(self, by: str, plan_sha256: str) -> State:
         s = self.state()
@@ -405,11 +428,16 @@ class Project:
             raise WorkflowError("status must be 'ok' or 'error'")
         if plan_analysis_id is not None and plan_analysis_id not in s.plan_locked["analyses"]:
             raise WorkflowError(f"{plan_analysis_id!r} is not in the confirmed plan")
-        # The label is decided here, from the confirmed plan — never by the caller.
-        label = "confirmatory" if plan_analysis_id is not None else "exploratory"
+        # The label comes from the confirmed plan, fixed before any result; never from the caller.
+        planned = s.plan_locked["analyses"][plan_analysis_id] if plan_analysis_id is not None else None
+        label = planned.get("label", "exploratory") if planned else "exploratory"
+        outputs = self.blobs.get_json(outputs_sha256) if status == "ok" and outputs_sha256 \
+            and self.blobs.has(outputs_sha256) else None
+        check = sample_check(planned.get("design") if planned else None, outputs)
         call_seq = self._log_call(by, call)
         self._emit(by, "analysis.completed", {
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
+            "basis": "pre-specified" if planned else "post hoc", "sample_check": check,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
             "execution": execution, "status": status, "error": error, "request_id": request_id,
             "added_in_stage": s.stage, "added_in_round": s.round, "llm_call_seq": call_seq,
@@ -444,12 +472,18 @@ class Project:
         s = s or self.state()
         ok = {k: v for k, v in s.analyses.items()
               if v["status"] == "ok" and v.get("outputs_sha256") and self.blobs.has(v["outputs_sha256"])}
-        outputs = {k: self.blobs.get_json(v["outputs_sha256"]) for k, v in ok.items()}
+        # A sample-size shortfall's numbers are facts about the analysis, so they can be cited.
+        outputs = {k: {**self.blobs.get_json(v["outputs_sha256"]), **({"sample_check": v["sample_check"]}
+                                                                      if v.get("sample_check") else {})}
+                   for k, v in ok.items()}
+        must_state = {k: [r["target"] for r in v["sample_check"]["targets"].values() if r.get("short")]
+                      for k, v in ok.items() if (v.get("sample_check") or {}).get("shortfall")}
         counts = []
         if s.curator_reports:
             rep = self.blobs.get_json(s.curator_reports[-1]["report_sha256"])
             counts.append(rep.get("profile", {}).get("rows"))
-        return trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok))
+        return trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok),
+                     must_state=must_state)
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
                      call: dict[str, Any] | None, requested_by: str | None = None,
@@ -707,6 +741,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
             "unknown_analysis_refs": r["unknown_analysis_refs"],
             "analyses_not_reported": r.get("analyses_not_reported", []),
             "nothing_checked_but_numbers_present": r.get("nothing_checked_but_numbers_present", False),
+            "shortfall_not_reported": r.get("shortfall_not_reported", []),
             "ok": r["ok"]}
 
 

@@ -272,7 +272,8 @@ class Agents:
         failed = {k: v for k, v in s.analyses.items() if v["status"] != "ok"}
         if not ok:
             raise AgentError("there are no successful analyses to write up")
-        results = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"], "spec": v["spec"],
+        results = {k: {"label": v["label"], "basis": v.get("basis"), "plan_analysis_id": v["plan_analysis_id"],
+                       "spec": v["spec"], "sample_check": v.get("sample_check"),
                        "results": self.project.blobs.get_json(v["outputs_sha256"])} for k, v in ok.items()}
         failed_brief = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
                             "title": v["spec"].get("title"), "error": (v.get("error") or "")[:300]}
@@ -335,6 +336,9 @@ def _brief(findings: dict[str, Any]) -> str:
         lines.append(f"- UNKNOWN ANALYSIS TAG [A:{ref}]: use only keys from RESULTS")
     for ref in findings.get("analyses_not_reported", []):
         lines.append(f"- ANALYSIS NOT REPORTED: [A:{ref}] must be reported")
+    for ref in findings.get("shortfall_not_reported", []):
+        lines.append(f"- SAMPLE SHORTFALL NOT STATED for [A:{ref}]: state the planned and achieved numbers "
+                     "from its sample_check, citing it")
     if findings.get("nothing_checked_but_numbers_present"):
         lines.append("- Numbers present but none could be checked: tag result sentences with [A:<key>]")
     return "\n".join(lines) or "- (no specific findings)"

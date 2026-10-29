@@ -94,8 +94,9 @@ class ReviewerAssistant:
         plan = {aid: {k: v for k, v in a.items() if k not in ("prompt",)}
                 for aid, a in (s.plan_locked or {}).get("analyses", {}).items()}
         ok = {k: v for k, v in s.analyses.items() if v["status"] == "ok" and blobs.has(v.get("outputs_sha256") or "")}
-        results = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
-                       "title": v["spec"].get("title"), "results": blobs.get_json(v["outputs_sha256"])}
+        results = {k: {"label": v["label"], "basis": v.get("basis"), "plan_analysis_id": v["plan_analysis_id"],
+                       "title": v["spec"].get("title"), "sample_check": v.get("sample_check"),
+                       "results": blobs.get_json(v["outputs_sha256"])}
                    for k, v in ok.items()}
         facts = interval_facts({k: v["results"] for k, v in results.items()})
         code = {k: blobs.get_text(v["code_sha256"])[:CODE_CHARS] for k, v in ok.items() if blobs.has(v["code_sha256"])}

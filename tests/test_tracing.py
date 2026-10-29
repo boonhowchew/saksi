@@ -136,3 +136,14 @@ def test_interval_facts_computed_by_code():
     assert f == {("primary", "booking_bmi"): (1.0, True), ("primary", "previous_gdm"): (1.0, True),
                  ("auc", "AUC"): (0.5, False),
                  ("lin", "age"): (0.0, False), ("lin", "x"): (0.0, True)}
+
+
+def test_sample_shortfall_must_be_stated():
+    outputs = {"primary": {**OUTPUTS["primary"], "n_events": 18,
+                           "sample_check": {"targets": {"events": {"target": 40, "achieved": 18, "short": True}}}}}
+    silent = "OR 1.07 (0.96 to 1.19) [A:primary]."
+    r = trace(silent, ANALYSES, outputs, must_state={"primary": [40]})
+    assert r["shortfall_not_reported"] == ["primary"] and not r["ok"]
+    told = silent + " There were 18 GDM events, against 40 planned [A:primary]."
+    r = trace(told, ANALYSES, outputs, must_state={"primary": [40]})
+    assert r["ok"] and r["shortfall_not_reported"] == []

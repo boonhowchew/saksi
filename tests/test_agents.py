@@ -64,11 +64,18 @@ PLAN_REPLY = {"analyses": [
      "method": "multivariable logistic regression", "effect_measure": "adjusted odds ratio",
      "missing_data": "complete case",
      "protocol_quote": "Multivariable logistic regression with GDM as the outcome and booking BMI as the exposure",
+     "role": "primary",
+     "primary_quote": "Primary objective: To estimate the association between booking body mass index (BMI) and "
+                      "gestational diabetes mellitus (GDM)",
+     "sample_size_quote": "400 women (about 40 GDM events) give 80% power to detect an odds ratio of 1.10 per kg/m2",
+     "sample_size_target": {"n": 400, "events": 40},
      "unresolved": []},
     {"id": "auc", "title": "Discrimination", "objective": "AUC", "outcome": {"name": "GDM", "column": "gdm"},
      "exposures": [], "covariates": [{"name": "waist", "column": "waist_cm"}], "method": "AUC with 95% CI",
      "effect_measure": "AUC", "missing_data": "complete case",
-     "protocol_quote": "The model was externally validated in three cohorts", "unresolved": []},
+     "protocol_quote": "The model was externally validated in three cohorts", "role": "secondary",
+     "primary_quote": "", "sample_size_quote": "", "sample_size_target": {"n": None, "events": None},
+     "unresolved": []},
 ]}
 
 
@@ -139,7 +146,13 @@ def test_curate_plan_run_end_to_end(setup):
 
     s = agents.run_planned("bhc")
     prim, auc = s.analyses["primary"], s.analyses["auc"]
-    assert prim["status"] == "ok" and prim["label"] == "confirmatory"
+    assert prim["status"] == "ok" and prim["label"] == "confirmatory" and prim["basis"] == "pre-specified"
+    # Planned for 400 women and 40 events; 388 and 18 were analysed. Flagged; the label stays.
+    assert prim["sample_check"]["shortfall"] is True
+    assert prim["sample_check"]["targets"] == {"n": {"target": 400, "achieved": 388, "short": True},
+                                               "events": {"target": 40, "achieved": 18, "short": True}}
+    assert auc["label"] == "exploratory" and auc["basis"] == "pre-specified"     # secondary: not powered for it
+    assert "not the primary hypothesis" in s.plan_locked["analyses"]["auc"]["design"]["reasons_not_confirmatory"][0]
     assert len(prim["execution"]["attempts"]) == 1
     assert prim["execution"]["provenance"]["data_sha256"] == ds_sha
     assert auc["status"] == "ok" and [a["outcome"] for a in auc["execution"]["attempts"]] == ["error", "ok"]
@@ -149,7 +162,7 @@ def test_curate_plan_run_end_to_end(setup):
 
     s = agents.run_request("coauthor", "q1", "Same model stratified by ethnicity")
     x = s.analyses["x_q1"]
-    assert x["label"] == "exploratory" and x["requested_by"] == "coauthor"
+    assert x["label"] == "exploratory" and x["basis"] == "post hoc" and x["requested_by"] == "coauthor"
 
     for a in s.authors:
         s = p.accept_analyses(a, s.analysis_set_sha())
@@ -235,7 +248,8 @@ def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
            exploratory="A further model gave a similar estimate [A:x_q1]."):
     return ("[Authors: introduction]\n\n## Methods\nA multivariable logistic regression was pre-specified.\n\n"
             "## Results\n"
-            f"Of 400 records, 388 were analysed [A:primary]. Booking BMI was associated with GDM "
+            f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned [A:primary]. "
+            f"Booking BMI was associated with GDM "
             f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
             f"{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
 

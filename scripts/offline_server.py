@@ -34,7 +34,7 @@ DRAFT = f"""[Authors: introduction]
 As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis).
 
 ## Results
-Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
+Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events [A:primary]. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
 ## Discussion
 The intervals are wide and include no association, so the data are compatible with both no association and a modest one. [Authors: comparison with previous studies]

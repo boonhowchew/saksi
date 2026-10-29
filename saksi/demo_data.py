@@ -42,4 +42,8 @@ with 95% confidence intervals. Complete-case analysis will be used.
 
 Secondary analysis: Discrimination of the primary model will be summarised with the area under the receiver
 operating characteristic curve (AUC) with a 95% confidence interval.
+
+Sample size: Assuming a GDM prevalence of 10% and a standard deviation of booking BMI of 5 kg/m2, 400 women
+(about 40 GDM events) give 80% power to detect an odds ratio of 1.10 per kg/m2 for the primary analysis at a
+two-sided 5% significance level.
 """

@@ -23,7 +23,7 @@ def analyse(data_path, seed):
         est.append({"name": term, "measure": "adjusted odds ratio", "estimate": float(np.exp(m.params[term])),
                     "ci_lower": float(np.exp(ci.loc[term, 0])), "ci_upper": float(np.exp(ci.loc[term, 1])),
                     "p_value": float(m.pvalues[term])})
-    return {"n": int(len(d)), "estimates": est}
+    return {"n": int(len(d)), "n_analysed": int(len(d)), "n_events": int(d["gdm"].sum()), "estimates": est}
 '''
 
 
