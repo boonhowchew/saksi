@@ -120,6 +120,9 @@ Rules:
 - Report the number analysed and excluded for each analysis.
 - If a planned analysis failed, say so in Methods and report no result for it.
 - Observational data: no causal language ("effect of", "caused", "led to", "reduced"). Use "associated with".
+- Where INTERVAL FACTS say an interval includes the null value, do not write that the variable "was associated
+  with" the outcome. Give the estimate and interval and say the data are compatible with no association. Avoid
+  double negatives.
 - Do not write the Introduction and do not cite literature. Put "[Authors: introduction]" before Methods and
   "[Authors: comparison with previous studies]" in the Discussion.
 - The Discussion states what the results do and do not show, including limitations visible in the results

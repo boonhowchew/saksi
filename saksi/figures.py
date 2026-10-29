@@ -184,6 +184,10 @@ def saksi_figures(spec: dict[str, Any], outputs: dict[str, Any], rows: int | Non
     outcome = ((spec.get("outcome") or {}).get("name") if isinstance(spec.get("outcome"), dict) else None) or "outcome"
     fl = flow_svg(rows, outputs, outcome)
     if fl:
+        n, excl = outputs.get("n_analysed"), outputs.get("n_excluded")
+        if not isinstance(excl, int) and isinstance(rows, int):
+            excl = rows - n
         figs.append({"name": "participant_flow", "svg": fl, "warning": flow_counts_problem(rows, outputs),
+                     "flow_counts": [rows, n, excl, outputs.get("n_events")],
                      "caption": f"{prefix}Participant flow for {title}: records in the dataset, exclusions and records analysed."})
     return figs

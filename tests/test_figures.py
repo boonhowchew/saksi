@@ -30,6 +30,17 @@ def test_flow_diagram_from_counts():
     assert figs[0]["warning"].startswith("counts do not add up")
 
 
+def test_same_flow_is_drawn_once_however_exclusions_are_worded(proj):
+    from tests.conftest import to_analysis
+    to_analysis(proj)
+    for aid, reason in (("primary", "missing BMI"), ("sens1", "complete-case analysis: missing values")):
+        out = proj.blobs.put_json({"n_analysed": 388, "n_excluded": 12, "n_events": 18, "exclusion_reason": reason})
+        proj.complete_analysis("agent:analyst", aid, plan_analysis_id=aid, spec={"id": aid}, code_sha256="a" * 64,
+                               outputs_sha256=out, execution={}, status="ok")
+    flows = [f for f in proj.state().figures if f["name"] == "participant_flow"]
+    assert [f["analysis_id"] for f in flows] == ["primary"]
+
+
 def test_required_figure_is_chosen_by_rule():
     assert required_figure({"method": "AUC with 95% CI", "effect_measure": "AUC"})["name"] == "roc_curve"
     assert required_figure({"method": "Cox proportional hazards", "effect_measure": "hazard ratio"})["name"] == "kaplan_meier"

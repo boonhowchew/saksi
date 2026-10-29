@@ -461,10 +461,20 @@ class Project:
             rows = self.blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("profile", {}).get("rows")
         made = [{**f, "svg_sha256": self.blobs.put_text(f.pop("svg")), "drawn_by": "saksi"}
                 for f in saksi_figures(spec, outputs, rows, label, basis)]
-        seen = {f["svg_sha256"] for f in s.figures}
-        made = [f for f in made if f["svg_sha256"] not in seen]        # e.g. the same flow diagram twice
-        made += [{"name": str(f["name"]), "caption": str(f.get("caption", "")), "svg_sha256": f["svg_sha256"],
-                  "drawn_by": "analysis code"} for f in from_code if self.blobs.has(f.get("svg_sha256", ""))]
+        # One flow diagram per distinct set of counts, however each analysis worded its exclusions.
+        seen_svg = {f["svg_sha256"] for f in s.figures}
+        seen_flow = {tuple(f["flow_counts"]) for f in s.figures if f.get("flow_counts")}
+        made = [f for f in made if f["svg_sha256"] not in seen_svg
+                and not (f.get("flow_counts") and tuple(f["flow_counts"]) in seen_flow)]
+        # The label is Saksi's fact, so Saksi states it on captions written by analysis code.
+        prefix = "" if label == "confirmatory" else f"Exploratory ({basis}) analysis. "
+        for f in from_code:
+            if not self.blobs.has(f.get("svg_sha256", "")):
+                continue
+            cap = str(f.get("caption", ""))
+            made.append({"name": str(f["name"]), "svg_sha256": f["svg_sha256"], "drawn_by": "analysis code",
+                         "caption": cap if not prefix or "exploratory" in cap.lower() else prefix + cap,
+                         "caption_from_code": cap})
         out = []
         for i, f in enumerate(made, start=len(s.figures) + 1):
             cited = " ".join(f"{x.strip().rstrip('.')} [A:{analysis_id}]."      # cite inside every sentence

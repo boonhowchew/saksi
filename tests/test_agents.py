@@ -174,7 +174,10 @@ def test_curate_plan_run_end_to_end(setup):
     assert auc["spec"]["required_figure"]["name"] == "roc_curve" and auc["execution"]["required_figure_drawn"]
     roc = figs[("auc", "roc_curve")]
     assert roc["drawn_by"] == "analysis code" and roc["label"] == "exploratory"
-    assert roc["caption_check"]["exploratory_not_labelled"] == 1          # its caption forgot to say exploratory
+    # The code's caption did not say exploratory; Saksi states the label, keeping the original.
+    assert roc["caption"].startswith("Exploratory (pre-specified) analysis. ROC curve")
+    assert roc["caption_from_code"] == "ROC curve of the primary model in 388 women."
+    assert roc["caption_check"]["ok"] is True
     assert p.blobs.get_text(roc["svg_sha256"]).lstrip().startswith("<?xml")
     assert all(f["caption_check"]["untraced"] == 0 for f in s.figures)
     # AUC_FIXED claims 0 excluded while 12 of 400 records were dropped: Saksi flags the flow diagram.
