@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 Boon-How Chew
+
+"""Trace every number in a draft back to a computed result.
+
+Deterministic, no model involved. For each sentence:
+  * every number must match, at the precision written, a value produced by an
+    analysis the sentence cites ([A:analysis_id]), or a dataset count;
+  * a sentence citing an exploratory analysis must say "exploratory".
+Anything that fails is reported; nothing is silently corrected.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from typing import Any, Iterable
+
+CITE = re.compile(r"\[A:([A-Za-z0-9_.\-]+)\]")
+NUM = re.compile(r"(?<![\w.])(<\s*)?(-?\d+(?:,\d{3})*(?:\.\d+)?)(\s*%)?")
+SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])|\n+")
+# Numbers that are conventions, not results.
+CONVENTIONAL = (re.compile(r"\b95\s*%\s*(?:CI|confidence)", re.I), re.compile(r"\b(?:19|20)\d{2}\b"),
+                re.compile(r"\bp\s*<\s*0?\.05\b", re.I), re.compile(r"\balpha\b.*0\.05", re.I))
+
+
+def numeric_leaves(obj: Any) -> Iterable[float]:
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        if not (isinstance(obj, float) and math.isnan(obj)):
+            yield float(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from numeric_leaves(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from numeric_leaves(v)
+
+
+def _decimals(token: str) -> int:
+    return len(token.split(".")[1]) if "." in token else 0
+
+
+def _matches(token: str, is_less_than: bool, is_percent: bool, values: list[float]) -> str | None:
+    x = float(token.replace(",", ""))
+    d = _decimals(token)
+    for v in values:
+        if is_less_than and 0 <= v < x:
+            return f"{v:.3g} < {token}"
+        candidates = [v, v * 100] if is_percent else [v]
+        for c in candidates:
+            if round(c, d) == x or (d == 0 and abs(c - x) < 0.5 and float(int(x)) == x and round(c) == x):
+                return f"{c:.6g}"
+    return None
+
+
+def _conventional_spans(sentence: str) -> list[tuple[int, int]]:
+    spans = []
+    for pat in CONVENTIONAL:
+        spans += [m.span() for m in pat.finditer(sentence)]
+    return spans
+
+
+def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any],
+          dataset_counts: Iterable[float] = ()) -> dict[str, Any]:
+    """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON."""
+    counts = [float(c) for c in dataset_counts]
+    rows, untraced, unlabelled, unknown_refs = [], [], [], set()
+    for para_no, para in enumerate(text.split("\n\n")):
+        if para.lstrip().startswith("#"):
+            continue
+        for sent in filter(None, (x.strip() for x in SENTENCE.split(para))):
+            refs = CITE.findall(sent)
+            unknown_refs.update(r for r in refs if r not in analyses)
+            pool = [v for r in refs if r in outputs for v in numeric_leaves(outputs[r])] + counts
+            plain = CITE.sub("", sent)
+            skip = _conventional_spans(plain)
+            for m in NUM.finditer(plain):
+                if any(a <= m.start() < b for a, b in skip):
+                    continue
+                token = m.group(2)
+                hit = _matches(token, bool(m.group(1)), bool(m.group(3)), pool)
+                row = {"number": m.group(0).strip(), "sentence": sent[:300], "cited": refs,
+                       "status": "traced" if hit else "untraced", "matched": hit}
+                rows.append(row)
+                if not hit:
+                    untraced.append(row)
+            exploratory = [r for r in refs if analyses.get(r, {}).get("label") == "exploratory"]
+            if exploratory and "exploratory" not in sent.lower() and "exploratory" not in para.lower():
+                unlabelled.append({"sentence": sent[:300], "analyses": exploratory})
+    return {
+        "numbers_checked": len(rows), "traced": len(rows) - len(untraced), "untraced": untraced,
+        "exploratory_not_labelled": unlabelled, "unknown_analysis_refs": sorted(unknown_refs),
+        "ok": not untraced and not unlabelled and not unknown_refs,
+    }

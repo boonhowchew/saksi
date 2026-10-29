@@ -40,6 +40,7 @@ from typing import Any
 from .blobs import BlobStore
 from .canonical import sha256_obj
 from .events import Event, EventLog
+from .tracing import trace
 
 STAGES = ("INGEST", "ANALYSIS", "DRAFTING", "AUTHOR_REVISION", "REVIEW", "RESPONSE", "ATTESTATION", "FINAL")
 HUMAN_ROLES = {"author", "corresponding_author", "reviewer"}
@@ -427,6 +428,21 @@ class Project:
         return self.state()
 
     # -- DRAFTING / AUTHOR_REVISION -----------------------------------------
+    def _trace(self, s: State, text: str) -> dict[str, Any]:
+        """Check every number in a draft against computed results. Runs on every version."""
+        ok = {k: v for k, v in s.analyses.items()
+              if v["status"] == "ok" and v.get("outputs_sha256") and self.blobs.has(v["outputs_sha256"])}
+        outputs = {k: self.blobs.get_json(v["outputs_sha256"]) for k, v in ok.items()}
+        counts = []
+        if s.curator_reports:
+            rep = self.blobs.get_json(s.curator_reports[-1]["report_sha256"])
+            counts.append(rep.get("profile", {}).get("rows"))
+        r = trace(text, s.analyses, outputs, [c for c in counts if c is not None])
+        return {"checks_sha256": self.blobs.put_json(r),
+                "checks": {"numbers_checked": r["numbers_checked"], "untraced": len(r["untraced"]),
+                           "exploratory_not_labelled": len(r["exploratory_not_labelled"]),
+                           "unknown_analysis_refs": r["unknown_analysis_refs"], "ok": r["ok"]}}
+
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
                      call: dict[str, Any] | None, requested_by: str | None = None) -> State:
         s = self.state()
@@ -443,6 +459,7 @@ class Project:
             "version": s.draft_version + 1, "base_version": s.draft_version or None,
             "text_sha256": self.blobs.put_text(text), "sections": sections,
             "source_analysis_ids": source_analysis_ids, "requested_by": requested_by, "llm_call_seq": call_seq,
+            **self._trace(s, text),
         })
         if s.stage == "DRAFTING":
             self._advance(self.state(), "AUTHOR_REVISION", "first draft produced")
@@ -464,6 +481,7 @@ class Project:
             "version": base_version + 1, "base_version": base_version,
             "text_sha256": self.blobs.put_text(text), "summary": summary,
             "diff": _diff_stats(old, text), "requested_by": requested_by, "llm_call_seq": call_seq,
+            **self._trace(s, text),
         })
         return self.state()
 
@@ -493,6 +511,8 @@ class Project:
             "version": version, "claim_restatement": claim_restatement,
             "answers": {q: answers[q] for q in SIGNOFF_QUESTIONS},
             "opened_at": opened,
+            # What the author accepted: the number check of the exact version signed.
+            "checks_at_signoff": s.drafts[version].get("checks"),
         })
         s = self.state()
         if s.stage == "AUTHOR_REVISION" and set(s.authors) <= set(s.signoffs.get(version, {})):
