@@ -71,8 +71,14 @@ Rules:
 - Say what role the protocol gives each analysis: "primary" only if the protocol names it (or its objective or
   hypothesis) as primary; "secondary" if it names it secondary; otherwise "other". For a primary analysis, quote the
   protocol sentence that names it primary.
-- If the protocol's sample-size justification covers an analysis (usually only the primary), quote it verbatim and
-  give the planned numbers exactly as written there. Leave these empty for analyses it does not cover.
+- The sample-size section may contain several calculations. Attach each calculation to every analysis it covers,
+  quoting it verbatim, and give the planned numbers exactly as written there (the overall target too, if the
+  protocol states one). Leave these empty for analyses no calculation covers.
+- Quote ONE unbroken sentence or clause at a time: PDF text is often interrupted by page footers or tables, so a
+  quotation that runs across such a break will not be found. Never write a quotation by analogy with another
+  objective; if the protocol only says one analysis is "similar to" another, quote that sentence.
+- If the protocol names no objective or analysis as primary, set every role to "secondary" or "other". Do not
+  infer a primary from the order of objectives.
 - Do not decide whether an analysis is confirmatory or exploratory. Saksi decides that from these quotations.
 
 Return ONLY a JSON object:

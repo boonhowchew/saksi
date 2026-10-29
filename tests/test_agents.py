@@ -388,3 +388,15 @@ def test_wide_dataset_analysis_sees_only_its_columns():
     dic, p, names = _focus(d, [{"outcome": {"column": "v1"}, "exposures": [{"column": "v2"}], "covariates": []}])
     assert [c["name"] for c in p["columns"]] == ["v1", "v2"] and len(dic) == 2 and len(names) == 100
     assert _focus(d, [{"title": "author request"}])[2] is None          # nothing named: everything
+
+
+def test_plan_cut_off_gives_clear_advice_and_invalid_plan_is_retried(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    model.script["plan"] = [('{"analyses": [{"id": "a1"', "length")]
+    with pytest.raises(AgentError, match="one objective at a time"):
+        agents.propose_plan("bhc")
+    model.script["plan"] = ["not json", {"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.propose_plan("bhc", instructions="Only the primary objective")
+    assert list(s.plan["analyses"]) == ["primary"] and s.plan["note"].endswith("Only the primary objective")
+    assert "THE AUTHORS' INSTRUCTIONS" in model.bodies[-1]["messages"][1]["content"]

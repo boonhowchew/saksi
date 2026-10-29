@@ -45,7 +45,11 @@ def test_sample_check_flags_shortfall_without_changing_label():
     assert c["shortfall"] and c["targets"]["events"] == {"target": 40, "achieved": 18, "short": True}
     assert sample_check(d, {"n_analysed": 410, "n_events": 45})["shortfall"] is False
     assert sample_check(d, {"n_analysed": 410})["not_reported_by_analysis"] == ["events"]
-    assert sample_check(assess({**PRIMARY, "role": "secondary"}, P), {"n_analysed": 1}) is None
+    # Any analysis the sample-size calculation covers gets the check, whatever its label;
+    secondary = assess({**PRIMARY, "role": "secondary"}, P)
+    assert secondary["label"] == "exploratory" and sample_check(secondary, {"n_analysed": 388})["shortfall"]
+    # one it does not cover gets none.
+    assert sample_check(assess({**PRIMARY, "sample_size_quote": "", "sample_size_target": {}}, P), {"n_analysed": 1}) is None
 
 
 def test_engine_decides_whoever_proposes(proj):

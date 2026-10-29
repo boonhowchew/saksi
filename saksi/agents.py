@@ -37,7 +37,7 @@ CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:wri
 # effort is spent only where judgement matters.
 TASKS = {
     "curate": {"reasoning_effort": "low", "max_tokens": 12000},
-    "plan": {"reasoning_effort": "high", "max_tokens": 16000},
+    "plan": {"reasoning_effort": "high", "max_tokens": 32000},
     "code": {"reasoning_effort": "medium", "max_tokens": 12000},
     "repair": {"reasoning_effort": "medium", "max_tokens": 12000},
     "write": {"reasoning_effort": "medium", "max_tokens": 16000},
@@ -222,15 +222,15 @@ class Agents:
                 f"DATASET PROFILE (aggregate only):\n{json.dumps(d['profile'], separators=(',', ':'))}"
                 + (f"\n\nTHE AUTHORS' INSTRUCTIONS FOR THIS PLAN (follow them; the protocol still governs what "
                    f"each analysis is):\n{instructions.strip()}" if instructions and instructions.strip() else ""))
-        r = self._chat("plan", PLAN, user, json_mode=True, purpose="propose_plan")
         try:
-            out = parse_json(r.text)
-            analyses = out.get("analyses") or []
-            if not analyses:
-                raise AgentError("the model proposed no analyses")
-        except AgentError:
-            self.project.record_model_call(ANALYST_ID, r.record.to_payload())
-            raise
+            out, call, _ = self._json_call(ANALYST_ID, "plan", PLAN, user, "propose_plan")
+        except CutOff as e:
+            raise AgentError("the plan was too long for one reply. Ask for a new draft with instructions, "
+                             "for example one objective at a time") from e
+        analyses = out.get("analyses") or []
+        if not analyses:
+            self.project.record_model_call(ANALYST_ID, call)
+            raise AgentError("the model proposed no analyses")
         cols = {c["name"] for c in d["profile"]["columns"]}
         for a in analyses:
             a["protocol_quote_verified"] = quote_found(a.get("protocol_quote", ""), protocol)
@@ -241,7 +241,7 @@ class Agents:
         note = f"Redrafted at the request of {requested_by}: {instructions.strip()}" if instructions and \
             instructions.strip() else None
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
-                                         call=r.record.to_payload(), requested_by=requested_by, note=note)
+                                         call=call, requested_by=requested_by, note=note)
 
     # -- Running analyses ------------------------------------------------------
     def run_planned(self, requested_by: str, plan_analysis_id: str | None = None) -> State:

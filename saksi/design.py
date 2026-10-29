@@ -14,8 +14,8 @@ The quotations are checked here, by code, against the stored protocol, whoever p
 the plan. A missing or unfound quotation fails safe to exploratory.
 
 After the analysis runs, the achieved sample (and events) is compared with the protocol's
-target. A shortfall does not change the label, which was fixed before any result; it is
-flagged, and the draft must state it.
+target, for every analysis the sample-size calculation covers. A shortfall does not change
+the label, which was fixed before any result; it is flagged, and the draft must state it.
 """
 
 from __future__ import annotations
@@ -104,8 +104,13 @@ def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any
 
 
 def sample_check(design: dict[str, Any] | None, outputs: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Achieved versus planned sample for a confirmatory analysis. None when there is no target."""
-    if not design or design.get("label") != "confirmatory" or not isinstance(outputs, dict):
+    """Achieved versus planned sample, for any analysis that the protocol's sample-size calculation
+    covers (checked quotation, planned numbers in it), whatever its label. None otherwise."""
+    if not design or not isinstance(outputs, dict):
+        return None
+    powered = next((c for c in design.get("conditions") or [] if c.get("key") == "powered"), None)
+    covered = powered["met"] if powered is not None else design.get("label") == "confirmatory"
+    if not covered:
         return None
     t = design.get("sample_size_target") or {}
     if t.get("n") is None and t.get("events") is None:

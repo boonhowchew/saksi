@@ -591,7 +591,7 @@ function sampleBlock(c) {
   if (!c) return "";
   const rows = Object.entries(c.targets).map(([k, r]) => `${k === "n" ? "Participants" : "Outcome events"}: ${r.achieved ?? "not reported"} analysed, ${r.target} planned${r.short ? " (short)" : ""}`);
   return `<div class="msg ${c.shortfall ? "warn" : "ok"} small"><strong>${c.shortfall ? "Below the protocol's planned sample." : "The protocol's planned sample was reached."}</strong> ${esc(rows.join("; "))}.
-    ${c.shortfall ? " The label stays confirmatory, because it was fixed before any result; the draft must state the shortfall." : ""}</div>`;
+    ${c.shortfall ? " The label does not change, because it was fixed before any result; the draft must state the shortfall." : ""}</div>`;
 }
 
 /* Figures: SVG text from the record, shown as images so nothing in them can run */
