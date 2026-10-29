@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Boon-How Chew
 
-"""Agents that act on a project: Data Curator and Analysis Agent.
+"""Agents that act on a project: Data Curator, Analysis Agent and Writing Agent.
+The Reviewer Assistant is in reviewer.py.
 
 Every agent action is requested by a named author and is written to the
 event log by the workflow engine, with the model call that produced it.
@@ -9,7 +10,8 @@ event log by the workflow engine, with the model call that produced it.
 What each model sees:
   Curator  - aggregate dataset profile (profiling.py) + protocol text
   Analyst  - protocol text + data dictionary/profile + one analysis spec
-Neither ever receives a data row. Raw data only enters the sandbox.
+  Writer   - protocol text + data dictionary + computed results
+None of them ever receives a data row. Raw data only enters the sandbox.
 """
 
 from __future__ import annotations
@@ -69,6 +71,27 @@ def analysis_seed(project_id: str, analysis_id: str) -> int:
     return int(sha256_text(f"{project_id}:{analysis_id}")[:8], 16)
 
 
+def latest_material(s: State, kind: str, sha: str | None = None) -> dict[str, Any]:
+    ms = [m for m in s.materials if m["kind"] == kind and (sha is None or m["sha256"] == sha)]
+    if not ms:
+        raise AgentError(f"no {kind} uploaded" + (f" with sha {sha[:12]}" if sha else ""))
+    return ms[-1]
+
+
+def material_bytes(project: Project, m: dict[str, Any]) -> bytes:
+    """Read a stored material and refuse it if it no longer matches its recorded hash."""
+    from .canonical import sha256_bytes
+    data = (project.root / m["storage_ref"]).read_bytes()
+    if sha256_bytes(data) != m["sha256"]:
+        raise AgentError(f"stored {m['kind']} does not match its recorded hash")
+    return data
+
+
+def protocol_text(project: Project, s: State) -> tuple[str, dict[str, Any]]:
+    m = latest_material(s, "protocol")
+    return extract_text(material_bytes(project, m), m["filename"])[:PROTOCOL_CHARS], m
+
+
 @dataclass
 class Agents:
     project: Project
@@ -77,21 +100,13 @@ class Agents:
 
     # -- materials ---------------------------------------------------------
     def _latest(self, s: State, kind: str, sha: str | None = None) -> dict[str, Any]:
-        ms = [m for m in s.materials if m["kind"] == kind and (sha is None or m["sha256"] == sha)]
-        if not ms:
-            raise AgentError(f"no {kind} uploaded" + (f" with sha {sha[:12]}" if sha else ""))
-        return ms[-1]
+        return latest_material(s, kind, sha)
 
     def _bytes(self, m: dict[str, Any]) -> bytes:
-        data = (self.project.root / m["storage_ref"]).read_bytes()
-        from .canonical import sha256_bytes
-        if sha256_bytes(data) != m["sha256"]:
-            raise AgentError(f"stored {m['kind']} does not match its recorded hash")
-        return data
+        return material_bytes(self.project, m)
 
     def _protocol_text(self, s: State) -> tuple[str, dict[str, Any]]:
-        m = self._latest(s, "protocol")
-        return extract_text(self._bytes(m), m["filename"])[:PROTOCOL_CHARS], m
+        return protocol_text(self.project, s)
 
     def _dictionary(self, s: State) -> dict[str, Any]:
         """Latest curator report for the current dataset, else a fresh profile."""
@@ -296,6 +311,12 @@ class Agents:
         sections = [ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")]
         return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
                                          requested_by=requested_by, attempts=attempts)
+
+    # -- Review ----------------------------------------------------------------
+    def brief_reviewer(self, requested_by: str) -> State:
+        """Reviewer Assistant briefing. A different model; it gets no executor and cannot edit."""
+        from .reviewer import ReviewerAssistant
+        return ReviewerAssistant(self.project, self.client).brief(requested_by)
 
 
 def _brief(findings: dict[str, Any]) -> str:

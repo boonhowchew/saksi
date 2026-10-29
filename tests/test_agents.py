@@ -82,7 +82,8 @@ class ScriptedModel:
     def post(self, url, headers, json, timeout):
         self.bodies.append(json)
         system = json["messages"][0]["content"]
-        purpose = ("curate" if "Data Curator" in system else "plan" if "structured analysis plan" in system
+        purpose = ("review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
+                   else "plan" if "structured analysis plan" in system
                    else "write" if "Writing Agent" in system else "code")
         reply = self.script[purpose].pop(0)
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)

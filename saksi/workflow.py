@@ -102,6 +102,7 @@ class State:
     opened: dict[tuple[str, int], str] = field(default_factory=dict)
     signoffs: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
     briefings: list[dict[str, Any]] = field(default_factory=list)
+    reviewed_versions: dict[int, int] = field(default_factory=dict)
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_decisions: dict[int, str] = field(default_factory=dict)
     attestations: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
@@ -135,11 +136,13 @@ class State:
             "materials": self.materials, "curator_reports": self.curator_reports,
             "plan": self.plan, "plan_confirmed_by": sorted(self.plan_confirmed_by),
             "plan_locked": self.plan_locked, "analyses": self.analyses,
+            "analysis_set_sha256": self.analysis_set_sha() if self.analyses else None,
             "analyses_accepted_by": sorted(self.analyses_accepted_by.get(self.analysis_set_sha(), set())),
             "draft_version": self.draft_version, "drafts": {str(k): v for k, v in self.drafts.items()},
             "signoffs": {str(k): v for k, v in self.signoffs.items()},
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
+            "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -199,6 +202,8 @@ def apply(s: State, ev: Event) -> State:
         it["status"] = "open" if p["verdict"] == "still_concerned" else p["verdict"]
     elif t == "review.submitted":
         s.review_decisions[p["round"]] = p["decision"]
+        if "draft_version" in p:
+            s.reviewed_versions[p["round"]] = p["draft_version"]
     elif t == "response.submitted":
         pass
     elif t == "authorship.attested":
@@ -540,19 +545,29 @@ class Project:
     # -- REVIEW ------------------------------------------------------------
     def add_briefing(self, by: str, briefing: dict[str, Any], call: dict[str, Any] | None,
                      requested_by: str | None = None) -> State:
+        """The Reviewer Assistant's briefing. It works for the reviewer, so only a reviewer may ask for one."""
         s = self.state()
-        a = self._require_role(s, by, "reviewer_assist")
+        self._require_role(s, by, "reviewer_assist")
         self._require_stage(s, "REVIEW")
-        self._requested_by(s, a, requested_by)
+        if requested_by is None:
+            raise WorkflowError("a briefing must name the reviewer who asked for it")
+        self._require_role(s, requested_by, "reviewer")
+        if briefing.get("draft_version") != s.draft_version:
+            raise WorkflowError(f"briefing is about version {briefing.get('draft_version')}; "
+                                f"the draft under review is version {s.draft_version}")
         call_seq = self._log_call(by, call)
         self._emit(by, "review.briefing", {"round": s.round, "draft_version": s.draft_version,
                                            "briefing_sha256": self.blobs.put_json(briefing),
+                                           "inputs": briefing.get("inputs", {}),
                                            "points_of_inquiry": briefing.get("points_of_inquiry", []),
+                                           "item_assessments": briefing.get("item_assessments", []),
                                            "requested_by": requested_by, "llm_call_seq": call_seq})
         return self.state()
 
     def add_item(self, by: str, item_id: str, comment: str, location: str | None = None,
-                 assisted_by_seq: int | None = None) -> State:
+                 assisted_by_seq: int | None = None, from_point: str | None = None) -> State:
+        """A review comment is always the reviewer's own. If it adopts a point from a briefing,
+        say which one, so the record shows what the assistant contributed."""
         s = self.state()
         self._require_role(s, by, "reviewer")
         self._require_stage(s, "REVIEW")
@@ -560,8 +575,17 @@ class Project:
             raise WorkflowError(f"item {item_id} already exists")
         if not comment.strip():
             raise WorkflowError("comment is empty")
+        if from_point is not None and assisted_by_seq is None:
+            raise WorkflowError("from_point needs assisted_by_seq (the briefing it comes from)")
+        if assisted_by_seq is not None:
+            b = next((b for b in s.briefings if b["seq"] == assisted_by_seq), None)
+            if b is None:
+                raise WorkflowError(f"event {assisted_by_seq} is not a review briefing")
+            if from_point is not None and from_point not in {pt.get("id") for pt in b["points_of_inquiry"]}:
+                raise WorkflowError(f"briefing {assisted_by_seq} has no point {from_point}")
         self._emit(by, "review.item_added", {"item_id": item_id, "round": s.round, "comment": comment,
-                                             "location": location, "assisted_by_seq": assisted_by_seq})
+                                             "location": location, "assisted_by_seq": assisted_by_seq,
+                                             "from_point": from_point})
         return self.state()
 
     def give_verdict(self, by: str, item_id: str, verdict: str, note: str = "") -> State:
@@ -591,7 +615,8 @@ class Project:
             unsettled = s.open_items()
             if unsettled:
                 raise WorkflowError(f"cannot accept while items are open: {', '.join(unsettled)}")
-            self._emit(by, "review.submitted", {"round": s.round, "decision": "accept", "summary": summary})
+            self._emit(by, "review.submitted", {"round": s.round, "decision": "accept", "summary": summary,
+                                                "draft_version": s.draft_version})
             self._advance(self.state(), "ATTESTATION", "reviewer accepted; every item settled")
         elif decision == "revise":
             if not s.open_items():
@@ -599,7 +624,8 @@ class Project:
             if s.round >= s.max_rounds:
                 raise WorkflowError(f"round limit ({s.max_rounds}) reached: accept, or settle remaining items "
                                     "as agree-to-disagree so they are published in the commentary")
-            self._emit(by, "review.submitted", {"round": s.round, "decision": "revise", "summary": summary})
+            self._emit(by, "review.submitted", {"round": s.round, "decision": "revise", "summary": summary,
+                                                "draft_version": s.draft_version})
             self._advance(self.state(), "RESPONSE", "reviewer requested revision")
         else:
             raise WorkflowError("decision must be 'accept' or 'revise'")
@@ -717,6 +743,8 @@ def ledger(events: list[Event]) -> dict[str, Any]:
             row["verification_seconds"] += int((datetime.fromisoformat(ev.ts) - start).total_seconds())
         if ev.type == "llm.called":
             row["tokens"] += (p.get("prompt_tokens") or 0) + (p.get("completion_tokens") or 0)
+        if ev.type == "review.item_added" and p.get("from_point"):
+            row["counts"]["review_comments_from_assistant"] = row["counts"].get("review_comments_from_assistant", 0) + 1
         if p.get("requested_by"):
             row["on_behalf_of"][p["requested_by"]] = row["on_behalf_of"].get(p["requested_by"], 0) + 1
     return out

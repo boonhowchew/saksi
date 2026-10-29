@@ -28,13 +28,15 @@ from pydantic import BaseModel
 from .canonical import sha256_bytes, sha256_text
 from .workflow import Project, WorkflowError, ledger
 
-# Agent actions an author can trigger: name -> (Agents method, allowed argument names)
-AGENT_ACTIONS: dict[str, tuple[str, set[str]]] = {
-    "curate": ("curate", {"material_sha256"}),
-    "propose_plan": ("propose_plan", set()),
-    "run_planned": ("run_planned", {"plan_analysis_id"}),
-    "run_request": ("run_request", {"request_id", "prompt"}),
-    "write_draft": ("write_draft", set()),
+# Agent actions: name -> (Agents method, allowed argument names, role that may ask)
+# The authors' agents work for the authors; the Reviewer Assistant works for the reviewer.
+AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
+    "curate": ("curate", {"material_sha256"}, "author"),
+    "propose_plan": ("propose_plan", set(), "author"),
+    "run_planned": ("run_planned", {"plan_analysis_id"}, "author"),
+    "run_request": ("run_request", {"request_id", "prompt"}, "author"),
+    "write_draft": ("write_draft", set(), "author"),
+    "brief_reviewer": ("brief_reviewer", set(), "reviewer"),
 }
 
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,40}$")
@@ -51,7 +53,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "open_draft": ("open_draft", {"version"}),
     "sign_off": ("sign_off", {"version", "claim_restatement", "answers"}),
     "start_review": ("start_review", set()),
-    "add_item": ("add_item", {"item_id", "comment", "location", "assisted_by_seq"}),
+    "add_item": ("add_item", {"item_id", "comment", "location", "assisted_by_seq", "from_point"}),
     "give_verdict": ("give_verdict", {"item_id", "verdict", "note"}),
     "submit_review": ("submit_review", {"decision", "summary"}),
     "respond": ("respond", {"item_id", "response", "note"}),
@@ -210,20 +212,21 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
 
     @app.post("/projects/{pid}/agents/{action}")
     def agent(pid: str, action: str, body: Command, who: str = Depends(actor)):
-        """Ask an agent to act. The request is attributed to the author who sent it."""
+        """Ask an agent to act. The request is attributed to the person who sent it."""
         from .agents import AgentError
         from .llm import LLMError
         if agents_factory is None:
             raise HTTPException(503, "agents are not configured on this server")
         if action not in AGENT_ACTIONS:
             raise HTTPException(404, f"unknown agent action {action}")
-        method, allowed = AGENT_ACTIONS[action]
+        method, allowed, role = AGENT_ACTIONS[action]
         extra = set(body.args) - allowed
         if extra:
             raise HTTPException(422, f"unexpected arguments: {', '.join(sorted(extra))}")
         p = existing(pid)
-        if "author" not in p.state().actors[who]["roles"]:
-            raise HTTPException(403, "only authors can ask the agents to act")
+        if role not in p.state().actors[who]["roles"]:
+            raise HTTPException(403, "only authors can ask the authors' agents to act" if role == "author"
+                                else "only a reviewer can ask the Reviewer Assistant")
         try:
             s = getattr(agents_factory(p), method)(who, **body.args)
         except WorkflowError as e:
