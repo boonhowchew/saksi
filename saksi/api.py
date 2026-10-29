@@ -34,6 +34,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str]]] = {
     "propose_plan": ("propose_plan", set()),
     "run_planned": ("run_planned", {"plan_analysis_id"}),
     "run_request": ("run_request", {"request_id", "prompt"}),
+    "write_draft": ("write_draft", set()),
 }
 
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,40}$")

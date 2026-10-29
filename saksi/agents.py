@@ -22,12 +22,12 @@ from typing import Any
 from .documents import extract_text, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import CODE, CURATOR, PLAN, REPAIR, prompt_ref
+from .prompts import CODE, CURATOR, PLAN, REPAIR, WRITER, prompt_ref
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .workflow import Project, State, WorkflowError
 
-CURATOR_ID, ANALYST_ID = "agent:curator", "agent:analyst"
+CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
 
 # Reasoning effort and output budget per task. Reasoning tokens are billed, so
 # effort is spent only where judgement matters.
@@ -36,6 +36,7 @@ TASKS = {
     "plan": {"reasoning_effort": "high", "max_tokens": 16000},
     "code": {"reasoning_effort": "medium", "max_tokens": 12000},
     "repair": {"reasoning_effort": "medium", "max_tokens": 12000},
+    "write": {"reasoning_effort": "medium", "max_tokens": 16000},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -244,3 +245,35 @@ class Agents:
             outputs_sha256=self.project.blobs.put_json(result.results) if ok else None,
             execution=execution, status="ok" if ok else "error", error=error, request_id=request_id,
             call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs)
+
+    # -- Writing -------------------------------------------------------------
+    def write_draft(self, requested_by: str) -> State:
+        """First draft (or an author-requested redraft) from computed results only."""
+        s = self.project.state()
+        protocol, _ = self._protocol_text(s)
+        d = self._dictionary(s)
+        ok = {k: v for k, v in s.analyses.items() if v["status"] == "ok"}
+        failed = {k: v for k, v in s.analyses.items() if v["status"] != "ok"}
+        if not ok:
+            raise AgentError("there are no successful analyses to write up")
+        results = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"], "spec": v["spec"],
+                       "results": self.project.blobs.get_json(v["outputs_sha256"])} for k, v in ok.items()}
+        failed_brief = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
+                            "title": v["spec"].get("title"), "error": (v.get("error") or "")[:300]}
+                        for k, v in failed.items()
+                        # a failure later superseded by a successful rerun is not a failed analysis
+                        if not any(o["plan_analysis_id"] == v["plan_analysis_id"] and v["plan_analysis_id"]
+                                   for o in ok.values())}
+        rows = d["profile"].get("rows")
+        user = (f"PROTOCOL (for design and objectives only):\n{protocol[:40000]}\n\n"
+                f"DATASET ROWS: {rows}\n\nDATA DICTIONARY:\n{json.dumps(d['dictionary'], indent=1)}\n\n"
+                f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
+                f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}")
+        r = self._chat("write", WRITER, user, json_mode=False, purpose="write_draft")
+        text = r.text.strip()
+        if "## Results" not in text:
+            self.project.record_model_call(WRITER_ID, r.record.to_payload())
+            raise AgentError("the draft has no Results section")
+        sections = [ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")]
+        return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), r.record.to_payload(),
+                                         requested_by=requested_by)

@@ -7,7 +7,7 @@ Thu 5 Nov, 10:00 MYT**. Submit on Wed 4 Nov (MYT) evening.
 |---|---|---|
 | Wed 28 Oct | Event log, workflow engine, model adapter, API, Modal deploy, tests | ✅ tests green; smoke test passes on both endpoints |
 | Thu 29 | Sandboxed analysis execution; Data Curator; confirmatory plan runs automatically | ✅ built 28 Oct; live Modal demo passed 28 Oct 22:17 MYT (sandbox, network blocked, data hash verified) |
-| Thu 29 (cont.) | Honest attempt labels; demo shows model and notes; **Writing Agent** | Draft v1 written from computed outputs only, every number traced |
+| Thu 29 (cont.) | Honest attempt labels; demo shows model and notes; **Writing Agent**; number tracer | Built and tested locally 29 Oct; live demo pending |
 | Fri 30 | Reviewer Assistant (Muse Spark Open); review loop over the API. *Author-requested exploratory analyses already built 28 Oct* | Two review rounds run end to end over the API |
 | Sat 31 | Web interface: authors, reviewer, ledger, provenance | Whole flow usable in a browser |
 | Sun 1 Nov | Qualitative (review-stage) path; evaluation harness | Harness runs from one command |

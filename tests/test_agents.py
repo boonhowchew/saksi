@@ -83,7 +83,7 @@ class ScriptedModel:
         self.bodies.append(json)
         system = json["messages"][0]["content"]
         purpose = ("curate" if "Data Curator" in system else "plan" if "structured analysis plan" in system
-                   else "code")
+                   else "write" if "Writing Agent" in system else "code")
         reply = self.script[purpose].pop(0)
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
         return {"choices": [{"message": {"content": content}, "finish_reason": "stop"}],
@@ -212,3 +212,51 @@ def test_returned_error_is_labelled_honestly(setup):
     a = s.analyses["primary"]
     assert a["status"] == "ok"
     assert [x["outcome"] for x in a["execution"]["attempts"]] == ["returned_error", "ok"]
+
+
+def test_writer_draft_is_number_checked(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.propose_plan("bhc")
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    model.script["code"] = [fence(GOOD), fence(GOOD)]
+    agents.run_planned("bhc")
+    s = agents.run_request("coauthor", "q1", "Same model, any extra")
+    for a in s.authors:
+        s = p.accept_analyses(a, s.analysis_set_sha())
+    assert s.stage == "DRAFTING"
+
+    est = {e["name"]: e for e in p.blobs.get_json(s.analyses["primary"]["outputs_sha256"])["estimates"]}
+    bmi = est["booking_bmi"]
+    model.script["write"] = [
+        "[Authors: introduction]\n\n## Methods\n\nA multivariable logistic regression was pre-specified.\n\n"
+        "## Results\n\n"
+        f"Of 400 records, 388 were analysed [A:primary]. Booking BMI was associated with GDM "
+        f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
+        "The adjusted OR for previous GDM was 9.99 [A:primary]. "
+        "A further model gave a similar estimate [A:x_q1].\n\n"
+        "## Discussion\n\nThe estimate was imprecise.\n"
+    ]
+    s = agents.write_draft("bhc")
+    assert s.stage == "AUTHOR_REVISION"
+    d = s.drafts[1]
+    assert d["by"] == "agent:writer" and d["requested_by"] == "bhc"
+    assert d["sections"] == ["Methods", "Results", "Discussion"]
+    c = d["checks"]
+    assert c["untraced"] == 1 and c["exploratory_not_labelled"] == 1 and c["ok"] is False
+    full = p.blobs.get_json(d["checks_sha256"])
+    assert full["untraced"][0]["number"] == "9.99"
+
+    # An author edit that fixes both problems is re-checked automatically.
+    text = p.blobs.get_text(d["text_sha256"])
+    text = text.replace("The adjusted OR for previous GDM was 9.99 [A:primary]. ", "")
+    text = text.replace("A further model", "A further exploratory model")
+    s = p.edit_draft("coauthor", 1, text, "removed unsupported figure; labelled exploratory analysis")
+    assert s.drafts[2]["checks"]["ok"] is True
+    # The sign-off records the check of the exact version signed.
+    from tests.conftest import ANSWERS, RESTATE
+    p.open_draft("bhc", 2)
+    s = p.sign_off("bhc", 2, RESTATE, ANSWERS)
+    assert s.signoffs[2]["bhc"]["checks_at_signoff"]["ok"] is True

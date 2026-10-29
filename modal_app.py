@@ -137,6 +137,25 @@ def demo() -> dict:
         else:
             print(f"     error: {a['error'][:300]}")
 
+    planned_ok = all(any(a["plan_analysis_id"] == pid and a["status"] == "ok" for a in s.analyses.values())
+                     for pid in s.plan_locked["order"])
+    if planned_ok:
+        for author in ("author-a", "author-b"):
+            s = p.accept_analyses(author, s.analysis_set_sha())
+        s = agents.write_draft("author-a")
+        d = s.drafts[s.draft_version]
+        text = p.blobs.get_text(d["text_sha256"])
+        print("\n== Draft v1 (Writing Agent) ==")
+        print("\n".join("  " + ln for ln in text.splitlines()[:60]))
+        c = d["checks"]
+        print(f"\n== Number check ==\n  numbers checked: {c['numbers_checked']} | untraced: {c['untraced']}"
+              f" | exploratory not labelled: {c['exploratory_not_labelled']}"
+              f" | unknown refs: {c['unknown_analysis_refs']} | all clear: {c['ok']}")
+        for u in p.blobs.get_json(d["checks_sha256"])["untraced"][:8]:
+            print(f"  UNTRACED {u['number']}: {u['sentence'][:160]}")
+    else:
+        print("\n(Draft skipped: a planned analysis did not succeed.)")
+
     calls = [e.payload for e in p.log.events() if e.type == "llm.called"]
     tokens = sum((c.get("prompt_tokens") or 0) + (c.get("completion_tokens") or 0) for c in calls)
     v = p.log.verify()

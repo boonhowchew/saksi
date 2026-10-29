@@ -76,6 +76,7 @@ under "New in this repository" was built on top of them.
 - **Stage changes are events too**, so the log reads as the project's history.
 - **Confirmatory or exploratory is decided by the engine** from the plan every author confirmed. The caller cannot set the label, and it cannot be removed afterwards.
 - **Approvals bind to exact content.** A changed plan, a new analysis or an edited draft voids earlier confirmations, acceptances and sign-offs.
+- **Every number is traced.** Each draft and each edit, by agent or author, is checked by code: every number must match a result from an analysis the sentence cites, and exploratory results must be called exploratory. Sign-offs record the check for the exact version signed.
 - **No bare "Approve" button.** Sign-off requires restating the primary claim in your own words and answering verification questions, and records the time spent.
 - **Agents never act anonymously for a person.** An agent edit must name the author who requested it, and the Contribution Ledger credits both.
 - **Review always ends.** Each item is *satisfied* or *agree to disagree*; the second kind goes into the published commentary. Rounds are capped.
@@ -115,15 +116,17 @@ variants, which are discounted in exchange for training on prompts, are
 
 | Built and tested | Next |
 |---|---|
-| Hash-chained event log and verification | Writing Agent: first draft from computed outputs only |
-| Workflow engine: every stage, both loops, all rules above | Reviewer Assistant on Muse Spark Open |
-| Contribution Ledger | Web interface |
-| Model adapter for both Meta endpoints, with record/replay | Evaluation on the author's own studies |
-| HTTP API with per-person tokens; file upload | RO-Crate export of the final object |
+| Hash-chained event log and verification | Reviewer Assistant on Muse Spark Open |
+| Workflow engine: every stage, both loops, all rules above | Web interface |
+| Contribution Ledger | Evaluation on the author's own studies |
+| Model adapter for both Meta endpoints, with record/replay | RO-Crate export of the final object |
+| HTTP API with per-person tokens; file upload | |
 | Aggregate dataset profile (no rows, small cells pooled, identifiers withheld) | |
 | Data Curator: data dictionary and flags | |
 | Analysis plan from the protocol, with every quote and column checked against its source | |
 | Analysis code run in Modal sandboxes (network blocked), one repair attempt, every attempt logged | |
+| Writing Agent: draft from computed results only | |
+| Number tracer: every number in every draft and edit checked against the results | |
 
 **Roadmap beyond the hackathon** (designed, not built): ORCID sign-in,
 cryptographic attestation, editor role, open reviewer nomination, DOIs, and
