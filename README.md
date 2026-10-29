@@ -65,7 +65,7 @@ under "New in this repository" was built on top of them.
 | Analysis | Authors iterate by prompting; **every** author accepts the results | **Analysis Agent** writes analysis code; it runs in a sandbox |
 | Drafting | — | **Writing Agent** drafts from computed outputs only; if the number check fails it gets the findings and one rewrite, then the draft goes to the authors with the findings attached |
 | Author revision | Each author edits; every change is attributed; structured sign-off | Writing Agent helps on request, always naming who asked |
-| Review | Human reviewer writes comments item by item | **Reviewer Assistant**: separate open-weights deployment, fresh context, never sees author-side history |
+| Review | Human reviewer writes every comment and gives every verdict | **Reviewer Assistant** (works for the reviewer only): a different, open-weights model; fresh context for every briefing; never opens the data or sees the authors' side. Raises questions anchored to quotes, each quote checked against the draft. In later rounds it says whether each response deals with the item |
 | Response | Authors revise, clarify or rebut each item | As above |
 | Attestation | Every author attests the final version | — |
 
@@ -116,8 +116,8 @@ variants, which are discounted in exchange for training on prompts, are
 
 | Built and tested | Next |
 |---|---|
-| Hash-chained event log and verification | Reviewer Assistant on Muse Spark Open |
-| Workflow engine: every stage, both loops, all rules above | Web interface |
+| Hash-chained event log and verification | Web interface |
+| Workflow engine: every stage, both loops, all rules above | Live run of the review stage on Muse Spark Open |
 | Contribution Ledger | Evaluation on the author's own studies |
 | Model adapter for both Meta endpoints, with record/replay | RO-Crate export of the final object |
 | HTTP API with per-person tokens; file upload | |
@@ -126,6 +126,8 @@ variants, which are discounted in exchange for training on prompts, are
 | Analysis plan from the protocol, with every quote and column checked against its source | |
 | Analysis code run in Modal sandboxes (network blocked), one repair attempt, every attempt logged | |
 | Writing Agent: draft from computed results only; fixes its own draft once from the checker's findings, then hands over to the authors | |
+| Reviewer Assistant: briefing with points of inquiry; quotes checked; item assessments in later rounds; records exactly what it was given | |
+| Review loop over the API: two rounds, from draft to the final version | |
 | Number tracer: every number in every draft and edit checked against the results; every analysis must be reported | |
 
 **Roadmap beyond the hackathon** (designed, not built): ORCID sign-in,

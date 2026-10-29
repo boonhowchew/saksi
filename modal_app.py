@@ -78,11 +78,24 @@ def smoke() -> list[dict]:
 
 @app.function(image=image, secrets=[keys], timeout=1800)
 def demo() -> dict:
-    """Live end to end on synthetic data: curate -> plan -> confirm -> run in sandbox.
+    """Live end to end on synthetic data: curate -> plan -> confirm -> run in sandbox -> draft ->
+    sign-off -> Reviewer Assistant briefing (Muse Spark Open).
 
     Uses a throwaway folder, not the project volume. Prints a summary only.
     """
     import tempfile
+    import time
+
+    from saksi.workflow import SIGNOFF_QUESTIONS
+
+    timings: dict[str, float] = {}
+
+    def timed(stage, fn, *a, **k):
+        t0 = time.perf_counter()
+        try:
+            return fn(*a, **k)
+        finally:
+            timings[stage] = round(time.perf_counter() - t0, 1)
 
     from saksi import demo_data
     from saksi.canonical import sha256_bytes
@@ -92,6 +105,7 @@ def demo() -> dict:
     p = Project(root, "live-demo")
     p.create("Synthetic GDM demo", "primary", {"actor_id": "author-a", "name": "Demo Author A"})
     p.register_human("author-a", {"actor_id": "author-b", "name": "Demo Author B"}, "author")
+    p.register_human("author-a", {"actor_id": "reviewer-1", "name": "Demo Reviewer"}, "reviewer")
     for kind, name, data in (("dataset", "gdm_synthetic.csv", demo_data.make().to_csv(index=False).encode()),
                              ("protocol", "protocol.txt", demo_data.PROTOCOL.encode())):
         sha = sha256_bytes(data)
@@ -100,13 +114,13 @@ def demo() -> dict:
         p.upload_material("author-a", kind, name, sha, len(data), storage_ref=f"materials/{sha}")
 
     agents = _agents_factory(p)
-    s = agents.curate("author-a")
+    s = timed("curate", agents.curate, "author-a")
     rep = p.blobs.get_json(s.curator_reports[-1]["report_sha256"])
     print("\n== Data Curator ==\n", rep["summary"])
     for f in rep["flags"][:6]:
         print(f"  [{f.get('severity')}] {f.get('column')}: {f.get('issue')}")
 
-    s = agents.propose_plan("author-b")
+    s = timed("plan", agents.propose_plan, "author-b")
     print("\n== Proposed plan ==")
     for aid in s.plan["order"]:
         a = s.plan["analyses"][aid]
@@ -115,7 +129,7 @@ def demo() -> dict:
     for author in ("author-a", "author-b"):
         s = p.confirm_plan(author, s.plan["sha"])
 
-    s = agents.run_planned("author-a")
+    s = timed("analyses", agents.run_planned, "author-a")
     print("\n== Analyses ==")
     for aid, a in s.analyses.items():
         ex = a["execution"]
@@ -142,7 +156,7 @@ def demo() -> dict:
     if planned_ok:
         for author in ("author-a", "author-b"):
             s = p.accept_analyses(author, s.analysis_set_sha())
-        s = agents.write_draft("author-a")
+        s = timed("draft", agents.write_draft, "author-a")
         d = s.drafts[s.draft_version]
         text = p.blobs.get_text(d["text_sha256"])
         print("\n== Draft v1 (Writing Agent) ==")
@@ -159,11 +173,36 @@ def demo() -> dict:
               f" | unknown refs: {c['unknown_analysis_refs']} | all clear: {c['ok']}")
         for u in p.blobs.get_json(d["checks_sha256"])["untraced"][:8]:
             print(f"  UNTRACED {u['number']}: {u['sentence'][:160]}")
+
+        # Demo authors sign off so the draft reaches review. (In real use each author reads it first.)
+        answers = {q: "Demo run: checked against the computed outputs." for q in SIGNOFF_QUESTIONS}
+        for author in ("author-a", "author-b"):
+            p.open_draft(author, s.draft_version)
+            s = p.sign_off(author, s.draft_version,
+                           "Demo run: booking BMI and gestational diabetes, as reported in the Results.", answers)
+        print(f"\n== Stage: {s.stage}, round {s.round} ==")
+        try:
+            s = timed("review_brief", agents.brief_reviewer, "reviewer-1")
+            b = s.briefings[-1]
+            full = p.blobs.get_json(b["briefing_sha256"])
+            call = next(e.payload for e in p.log.events() if e.seq == b["llm_call_seq"])
+            print(f"\n== Reviewer Assistant ({call['model']} via {call['provider']}) ==")
+            print("  primary claim:", full["primary_claim"])
+            print("  summary:", full["summary"])
+            for pt in full["points_of_inquiry"]:
+                print(f"  {pt['id']} [{pt['severity']}, {pt['category']}] quote verified: {pt['quote_verified']}")
+                print(f"     \"{pt['quote'][:140]}\"")
+                print(f"     Q: {pt['question'][:300]}")
+        except Exception as e:  # report, don't hide
+            print(f"\n(Reviewer Assistant failed: {str(e)[:300]})")
     else:
         print("\n(Draft skipped: a planned analysis did not succeed.)")
 
     calls = [e.payload for e in p.log.events() if e.type == "llm.called"]
     tokens = sum((c.get("prompt_tokens") or 0) + (c.get("completion_tokens") or 0) for c in calls)
+    print("\n== Cost of the run ==")
+    print("  seconds per stage:", timings)
+    print("  tokens per agent:", {k: v["tokens"] for k, v in ledger(p.log.events()).items() if v["tokens"]})
     v = p.log.verify()
     summary = {"events": v.events, "chain_ok": v.ok, "model_calls": len(calls), "tokens": tokens,
                "analyses_ok": sum(a["status"] == "ok" for a in s.analyses.values()),
