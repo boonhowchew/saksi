@@ -1,0 +1,10 @@
+[Authors: introduction]
+
+## Methods
+The confirmatory primary analysis used multivariable logistic regression with GDM as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and history of previous GDM [A:primary_bmi_gdm_adjusted]. Results were reported as adjusted odds ratios with 95% confidence intervals using complete-case analysis [A:primary_bmi_gdm_adjusted]. The confirmatory secondary analysis summarised discrimination of the primary model with the area under the receiver operating characteristic curve (AUC) with a 95% confidence interval [A:secondary_discrimination_auc].
+
+## Results
+The confirmatory primary analysis analysed 388 participants and excluded 12 with missing data in gdm, booking_bmi, age, parity or previous_gdm [A:primary_bmi_gdm_adjusted]. Among those analysed in the confirmatory primary analysis, 18 had GDM [A:primary_bmi_gdm_adjusted]. In the confirmatory primary analysis, booking BMI was associated with GDM with an adjusted odds ratio of 1.07 (95% confidence interval 0.96 to 1.19; p = 0.225) [A:primary_bmi_gdm_adjusted]. The confirmatory secondary analysis analysed 388 participants and excluded 12 with missing data in gdm, booking_bmi, age, parity or previous_gdm [A:secondary_discrimination_auc]. Among those analysed in the confirmatory secondary analysis, 18 had GDM [A:secondary_discrimination_auc]. The confirmatory secondary analysis showed an AUC of 0.65 (95% confidence interval 0.51 to 0.79) [A:secondary_discrimination_auc].
+
+## Discussion
+The confirmatory primary analysis showed an adjusted odds ratio of 1.07 (95% confidence interval 0.96 to 1.19; p = 0.225) for the association between booking BMI and GDM [A:primary_bmi_gdm_adjusted]. The confirmatory secondary analysis showed an AUC of 0.65 (95% confidence interval 0.51 to 0.79) [A:secondary_discrimination_auc]. These results do not show a conclusive association, as the confidence intervals are wide and the analysed sets included only 18 GDM events with 12 excluded [A:primary_bmi_gdm_adjusted] [A:secondary_discrimination_auc]. [Authors: comparison with previous studies]

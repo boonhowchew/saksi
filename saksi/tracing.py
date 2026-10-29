@@ -25,7 +25,13 @@ CONVENTIONAL = (re.compile(r"\b95\s*%\s*(?:CI|confidence)", re.I), re.compile(r"
 
 
 def numeric_leaves(obj: Any) -> Iterable[float]:
+    """Numbers in an analysis result, including numbers written inside its text
+    fields (e.g. notes produced by the analysis code: "18 GDM events")."""
     if isinstance(obj, bool):
+        return
+    if isinstance(obj, str):
+        for m in re.finditer(r"(?<![\w.])-?\d+(?:\.\d+)?", obj):
+            yield float(m.group(0))
         return
     if isinstance(obj, (int, float)):
         if not (isinstance(obj, float) and math.isnan(obj)):
@@ -67,9 +73,10 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON."""
     counts = [float(c) for c in dataset_counts]
     rows, untraced, unlabelled, unknown_refs = [], [], [], set()
-    for para_no, para in enumerate(text.split("\n\n")):
-        if para.lstrip().startswith("#"):
-            continue
+    for para in text.split("\n\n"):
+        # Drop heading LINES only. A heading followed directly by text on the next
+        # line is common in model output; skipping the whole paragraph would hide it.
+        para = "\n".join(ln for ln in para.splitlines() if not ln.lstrip().startswith("#"))
         for sent in filter(None, (x.strip() for x in SENTENCE.split(para))):
             refs = CITE.findall(sent)
             unknown_refs.update(r for r in refs if r not in analyses)
@@ -89,8 +96,16 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
             exploratory = [r for r in refs if analyses.get(r, {}).get("label") == "exploratory"]
             if exploratory and "exploratory" not in sent.lower() and "exploratory" not in para.lower():
                 unlabelled.append({"sentence": sent[:300], "analyses": exploratory})
+    # Fail safe: a check that found nothing to check must not report a pass when
+    # the body text plainly contains numbers.
+    body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    body = CITE.sub("", body)
+    for pat in CONVENTIONAL:
+        body = pat.sub("", body)
+    nothing_checked = not rows and bool(re.search(r"\d", body))
     return {
         "numbers_checked": len(rows), "traced": len(rows) - len(untraced), "untraced": untraced,
         "exploratory_not_labelled": unlabelled, "unknown_analysis_refs": sorted(unknown_refs),
-        "ok": not untraced and not unlabelled and not unknown_refs,
+        "nothing_checked_but_numbers_present": nothing_checked,
+        "ok": not untraced and not unlabelled and not unknown_refs and not nothing_checked,
     }
