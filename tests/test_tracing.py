@@ -105,3 +105,10 @@ def test_live_writing_agent_draft_2026_10_29():
     bad = trace(draft.replace("1.07 (95% confidence interval 0.96", "1.17 (95% confidence interval 0.96", 1),
                 labels, outputs, dataset_counts=[400])
     assert [u["number"] for u in bad["untraced"]] == ["1.17"]
+
+
+def test_every_successful_analysis_must_be_reported():
+    text = "OR 1.07 (0.96 to 1.19) [A:primary]."
+    r = trace(text, ANALYSES, OUTPUTS, required_refs=["primary", "x_q1"])
+    assert r["analyses_not_reported"] == ["x_q1"] and not r["ok"]
+    assert trace(text, ANALYSES, OUTPUTS, required_refs=["primary"])["ok"]

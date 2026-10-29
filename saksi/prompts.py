@@ -101,10 +101,20 @@ Rules:
   "[Authors: comparison with previous studies]" in the Discussion.
 - The Discussion states what the results do and do not show, including limitations visible in the results
   (sample size, wide intervals, exclusions). No speculation beyond them.
+- Report every analysis in RESULTS; do not leave any out.
+- Say each figure once. Give the number analysed and excluded once per analysis (once in total if the analyses
+  share the same sample). The Discussion interprets; it does not restate the Results figure by figure.
 
 Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion"."""
 
-TEMPLATES = {"curator": CURATOR, "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER}
+REWRITE = """An automatic check of your draft found the problems listed under CHECK FINDINGS. Return the complete
+corrected draft, following all the original rules.
+- An untraced number either does not appear in RESULTS at the precision written, or the sentence does not cite the
+  analysis it came from. Correct the number or the citation. Remove a number only if it is not in RESULTS at all.
+- Do not remove a result, or an analysis, to make the check pass. Every analysis in RESULTS must still be reported."""
+
+TEMPLATES = {"curator": CURATOR, "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
+             "rewrite": REWRITE}
 
 
 def prompt_ref(name: str) -> dict[str, str]:

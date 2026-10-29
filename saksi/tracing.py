@@ -69,8 +69,9 @@ def _conventional_spans(sentence: str) -> list[tuple[int, int]]:
 
 
 def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any],
-          dataset_counts: Iterable[float] = ()) -> dict[str, Any]:
-    """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON."""
+          dataset_counts: Iterable[float] = (), required_refs: Iterable[str] = ()) -> dict[str, Any]:
+    """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON.
+    required_refs: analyses the draft must report (guards against selective reporting)."""
     counts = [float(c) for c in dataset_counts]
     rows, untraced, unlabelled, unknown_refs = [], [], [], set()
     for para in text.split("\n\n"):
@@ -103,9 +104,10 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     for pat in CONVENTIONAL:
         body = pat.sub("", body)
     nothing_checked = not rows and bool(re.search(r"\d", body))
+    not_reported = sorted(set(required_refs) - set(CITE.findall(text)))
     return {
         "numbers_checked": len(rows), "traced": len(rows) - len(untraced), "untraced": untraced,
         "exploratory_not_labelled": unlabelled, "unknown_analysis_refs": sorted(unknown_refs),
-        "nothing_checked_but_numbers_present": nothing_checked,
-        "ok": not untraced and not unlabelled and not unknown_refs and not nothing_checked,
+        "nothing_checked_but_numbers_present": nothing_checked, "analyses_not_reported": not_reported,
+        "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported),
     }

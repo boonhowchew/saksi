@@ -22,7 +22,7 @@ from typing import Any
 from .documents import extract_text, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import CODE, CURATOR, PLAN, REPAIR, WRITER, prompt_ref
+from .prompts import CODE, CURATOR, PLAN, REPAIR, REWRITE, WRITER, prompt_ref
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .workflow import Project, State, WorkflowError
@@ -269,11 +269,48 @@ class Agents:
                 f"DATASET ROWS: {rows}\n\nDATA DICTIONARY:\n{json.dumps(d['dictionary'], indent=1)}\n\n"
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}")
-        r = self._chat("write", WRITER, user, json_mode=False, purpose="write_draft")
-        text = r.text.strip()
+        # Write, check, and give the agent one chance to fix what the check found.
+        # Whatever still fails goes to the authors with the findings attached.
+        attempts, text, last_call = [], "", None
+        messages_user, system = user, WRITER
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            r = self._chat("write", system, messages_user, json_mode=False, purpose=f"write_draft:{attempt}")
+            last_call, text = r.record.to_payload(), r.text.strip()
+            if "## Results" not in text:
+                findings = {"structural": "the draft has no '## Results' section"}
+                passed = False
+            else:
+                findings = self.project.check_text(text)
+                passed = findings["ok"]
+            attempts.append({"attempt": attempt, "text_sha256": self.project.blobs.put_text(text),
+                             "passed_check": passed, "findings_sha256": self.project.blobs.put_json(findings),
+                             "prompt": prompt_ref("writer" if attempt == 1 else "rewrite")})
+            if passed or attempt == MAX_ATTEMPTS:
+                break
+            attempts[-1]["llm_call_seq"] = self.project.record_model_call(WRITER_ID, last_call)
+            system = WRITER + "\n\n" + REWRITE
+            messages_user = f"{user}\n\nYOUR PREVIOUS DRAFT:\n{text}\n\nCHECK FINDINGS:\n{_brief(findings)}"
         if "## Results" not in text:
-            self.project.record_model_call(WRITER_ID, r.record.to_payload())
-            raise AgentError("the draft has no Results section")
+            self.project.record_model_call(WRITER_ID, last_call)
+            raise AgentError("the draft has no Results section after a rewrite")
         sections = [ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")]
-        return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), r.record.to_payload(),
-                                         requested_by=requested_by)
+        return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
+                                         requested_by=requested_by, attempts=attempts)
+
+
+def _brief(findings: dict[str, Any]) -> str:
+    """Findings in a compact form the writer can act on."""
+    if "structural" in findings:
+        return findings["structural"]
+    lines = []
+    for u in findings.get("untraced", [])[:20]:
+        lines.append(f"- UNTRACED {u['number']} in: {u['sentence'][:240]}")
+    for x in findings.get("exploratory_not_labelled", [])[:10]:
+        lines.append(f"- EXPLORATORY NOT LABELLED ({', '.join(x['analyses'])}): {x['sentence'][:240]}")
+    for ref in findings.get("unknown_analysis_refs", []):
+        lines.append(f"- UNKNOWN ANALYSIS TAG [A:{ref}]: use only keys from RESULTS")
+    for ref in findings.get("analyses_not_reported", []):
+        lines.append(f"- ANALYSIS NOT REPORTED: [A:{ref}] must be reported")
+    if findings.get("nothing_checked_but_numbers_present"):
+        lines.append("- Numbers present but none could be checked: tag result sentences with [A:<key>]")
+    return "\n".join(lines) or "- (no specific findings)"

@@ -214,8 +214,7 @@ def test_returned_error_is_labelled_honestly(setup):
     assert [x["outcome"] for x in a["execution"]["attempts"]] == ["returned_error", "ok"]
 
 
-def test_writer_draft_is_number_checked(setup):
-    p, agents, model, _ = setup
+def _to_drafting(p, agents, model):
     agents.curate("bhc")
     model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
     s = agents.propose_plan("bhc")
@@ -227,28 +226,63 @@ def test_writer_draft_is_number_checked(setup):
     for a in s.authors:
         s = p.accept_analyses(a, s.analysis_set_sha())
     assert s.stage == "DRAFTING"
-
     est = {e["name"]: e for e in p.blobs.get_json(s.analyses["primary"]["outputs_sha256"])["estimates"]}
-    bmi = est["booking_bmi"]
-    model.script["write"] = [
-        "[Authors: introduction]\n\n## Methods\n\nA multivariable logistic regression was pre-specified.\n\n"
-        "## Results\n\n"
-        f"Of 400 records, 388 were analysed [A:primary]. Booking BMI was associated with GDM "
-        f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
-        "The adjusted OR for previous GDM was 9.99 [A:primary]. "
-        "A further model gave a similar estimate [A:x_q1].\n\n"
-        "## Discussion\n\nThe estimate was imprecise.\n"
-    ]
+    return est["booking_bmi"]
+
+
+def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
+           exploratory="A further model gave a similar estimate [A:x_q1]."):
+    return ("[Authors: introduction]\n\n## Methods\nA multivariable logistic regression was pre-specified.\n\n"
+            "## Results\n"
+            f"Of 400 records, 388 were analysed [A:primary]. Booking BMI was associated with GDM "
+            f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
+            f"{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
+
+
+def test_writer_fixes_its_own_draft_after_check(setup):
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi),
+                             _draft(bmi, extra="", exploratory="An exploratory model gave a similar estimate [A:x_q1].")]
     s = agents.write_draft("bhc")
-    assert s.stage == "AUTHOR_REVISION"
     d = s.drafts[1]
     assert d["by"] == "agent:writer" and d["requested_by"] == "bhc"
     assert d["sections"] == ["Methods", "Results", "Discussion"]
-    c = d["checks"]
-    assert c["untraced"] == 1 and c["exploratory_not_labelled"] == 1 and c["ok"] is False
+    assert d["checks"]["ok"] is True
+    assert [a["passed_check"] for a in d["writer_attempts"]] == [False, True]
+    first = p.blobs.get_json(d["writer_attempts"][0]["findings_sha256"])
+    assert [u["number"] for u in first["untraced"]] == ["9.99"] and first["exploratory_not_labelled"]
+    assert d["writer_attempts"][1]["prompt"]["name"] == "rewrite"
+    # The rewrite request told the agent exactly what was wrong.
+    rewrite_msg = model.bodies[-1]["messages"][1]["content"]
+    assert "UNTRACED 9.99" in rewrite_msg and "EXPLORATORY NOT LABELLED" in rewrite_msg
+    # Both model calls are in the log: the failed attempt and the final one.
+    calls = [e for e in p.log.events() if e.type == "llm.called" and e.actor_id == "agent:writer"]
+    assert len(calls) == 2
+
+
+def test_writer_cannot_pass_by_dropping_an_analysis(setup):
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    # Second attempt "fixes" things by deleting the awkward analysis.
+    model.script["write"] = [_draft(bmi), _draft(bmi, extra="", exploratory="")]
+    s = agents.write_draft("bhc")
+    d = s.drafts[1]
+    assert d["checks"]["ok"] is False and d["checks"]["analyses_not_reported"] == ["x_q1"]
+    assert [a["passed_check"] for a in d["writer_attempts"]] == [False, False]
+    assert s.stage == "AUTHOR_REVISION"          # escalated to the authors, with the findings
+
+
+def test_unresolved_draft_goes_to_authors_who_can_fix_it(setup):
+    from tests.conftest import ANSWERS, RESTATE
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi), _draft(bmi)]       # agent fails twice
+    s = agents.write_draft("bhc")
+    d = s.drafts[1]
+    assert d["checks"]["untraced"] == 1 and d["checks"]["exploratory_not_labelled"] == 1
     full = p.blobs.get_json(d["checks_sha256"])
     assert full["untraced"][0]["number"] == "9.99"
-
     # An author edit that fixes both problems is re-checked automatically.
     text = p.blobs.get_text(d["text_sha256"])
     text = text.replace("The adjusted OR for previous GDM was 9.99 [A:primary]. ", "")
@@ -256,7 +290,6 @@ def test_writer_draft_is_number_checked(setup):
     s = p.edit_draft("coauthor", 1, text, "removed unsupported figure; labelled exploratory analysis")
     assert s.drafts[2]["checks"]["ok"] is True
     # The sign-off records the check of the exact version signed.
-    from tests.conftest import ANSWERS, RESTATE
     p.open_draft("bhc", 2)
     s = p.sign_off("bhc", 2, RESTATE, ANSWERS)
     assert s.signoffs[2]["bhc"]["checks_at_signoff"]["ok"] is True

@@ -430,6 +430,12 @@ class Project:
     # -- DRAFTING / AUTHOR_REVISION -----------------------------------------
     def _trace(self, s: State, text: str) -> dict[str, Any]:
         """Check every number in a draft against computed results. Runs on every version."""
+        r = self.check_text(text, s)
+        return {"checks_sha256": self.blobs.put_json(r), "checks": summarise_checks(r)}
+
+    def check_text(self, text: str, s: State | None = None) -> dict[str, Any]:
+        """Full number/reporting check of a text against this project's results. Writes nothing."""
+        s = s or self.state()
         ok = {k: v for k, v in s.analyses.items()
               if v["status"] == "ok" and v.get("outputs_sha256") and self.blobs.has(v["outputs_sha256"])}
         outputs = {k: self.blobs.get_json(v["outputs_sha256"]) for k, v in ok.items()}
@@ -437,14 +443,11 @@ class Project:
         if s.curator_reports:
             rep = self.blobs.get_json(s.curator_reports[-1]["report_sha256"])
             counts.append(rep.get("profile", {}).get("rows"))
-        r = trace(text, s.analyses, outputs, [c for c in counts if c is not None])
-        return {"checks_sha256": self.blobs.put_json(r),
-                "checks": {"numbers_checked": r["numbers_checked"], "untraced": len(r["untraced"]),
-                           "exploratory_not_labelled": len(r["exploratory_not_labelled"]),
-                           "unknown_analysis_refs": r["unknown_analysis_refs"], "ok": r["ok"]}}
+        return trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok))
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
-                     call: dict[str, Any] | None, requested_by: str | None = None) -> State:
+                     call: dict[str, Any] | None, requested_by: str | None = None,
+                     attempts: list[dict[str, Any]] | None = None) -> State:
         s = self.state()
         a = self._require_role(s, by, "writer")
         self._require_stage(s, "DRAFTING", "AUTHOR_REVISION", "RESPONSE")
@@ -459,6 +462,7 @@ class Project:
             "version": s.draft_version + 1, "base_version": s.draft_version or None,
             "text_sha256": self.blobs.put_text(text), "sections": sections,
             "source_analysis_ids": source_analysis_ids, "requested_by": requested_by, "llm_call_seq": call_seq,
+            "writer_attempts": attempts or [],
             **self._trace(s, text),
         })
         if s.stage == "DRAFTING":
@@ -668,6 +672,15 @@ def _diff_stats(old: str, new: str) -> dict[str, int]:
             added += j2 - j1
     return {"words_added": added, "words_removed": removed, "words_before": len(old.split()),
             "words_after": len(new.split())}
+
+
+def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
+    return {"numbers_checked": r["numbers_checked"], "untraced": len(r["untraced"]),
+            "exploratory_not_labelled": len(r["exploratory_not_labelled"]),
+            "unknown_analysis_refs": r["unknown_analysis_refs"],
+            "analyses_not_reported": r.get("analyses_not_reported", []),
+            "nothing_checked_but_numbers_present": r.get("nothing_checked_but_numbers_present", False),
+            "ok": r["ok"]}
 
 
 # What each event type counts as in the Contribution Ledger (white paper §3.1).

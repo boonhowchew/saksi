@@ -63,7 +63,7 @@ under "New in this repository" was built on top of them.
 |---|---|---|
 | Ingest | Authors upload the dataset and the protocol; **every** author confirms the analysis plan | **Data Curator** drafts the data dictionary and flags problems |
 | Analysis | Authors iterate by prompting; **every** author accepts the results | **Analysis Agent** writes analysis code; it runs in a sandbox |
-| Drafting | — | **Writing Agent** drafts from computed outputs only |
+| Drafting | — | **Writing Agent** drafts from computed outputs only; if the number check fails it gets the findings and one rewrite, then the draft goes to the authors with the findings attached |
 | Author revision | Each author edits; every change is attributed; structured sign-off | Writing Agent helps on request, always naming who asked |
 | Review | Human reviewer writes comments item by item | **Reviewer Assistant**: separate open-weights deployment, fresh context, never sees author-side history |
 | Response | Authors revise, clarify or rebut each item | As above |
@@ -76,7 +76,7 @@ under "New in this repository" was built on top of them.
 - **Stage changes are events too**, so the log reads as the project's history.
 - **Confirmatory or exploratory is decided by the engine** from the plan every author confirmed. The caller cannot set the label, and it cannot be removed afterwards.
 - **Approvals bind to exact content.** A changed plan, a new analysis or an edited draft voids earlier confirmations, acceptances and sign-offs.
-- **Every number is traced.** Each draft and each edit, by agent or author, is checked by code: every number must match a result from an analysis the sentence cites, and exploratory results must be called exploratory. Sign-offs record the check for the exact version signed.
+- **Every number is traced.** Each draft and each edit, by agent or author, is checked by code: every number must match a result from an analysis the sentence cites, exploratory results must be called exploratory, and every analysis that ran must be reported (no selective reporting). Sign-offs record the check for the exact version signed.
 - **No bare "Approve" button.** Sign-off requires restating the primary claim in your own words and answering verification questions, and records the time spent.
 - **Agents never act anonymously for a person.** An agent edit must name the author who requested it, and the Contribution Ledger credits both.
 - **Review always ends.** Each item is *satisfied* or *agree to disagree*; the second kind goes into the published commentary. Rounds are capped.
@@ -125,8 +125,8 @@ variants, which are discounted in exchange for training on prompts, are
 | Data Curator: data dictionary and flags | |
 | Analysis plan from the protocol, with every quote and column checked against its source | |
 | Analysis code run in Modal sandboxes (network blocked), one repair attempt, every attempt logged | |
-| Writing Agent: draft from computed results only | |
-| Number tracer: every number in every draft and edit checked against the results | |
+| Writing Agent: draft from computed results only; fixes its own draft once from the checker's findings, then hands over to the authors | |
+| Number tracer: every number in every draft and edit checked against the results; every analysis must be reported | |
 
 **Roadmap beyond the hackathon** (designed, not built): ORCID sign-in,
 cryptographic attestation, editor role, open reviewer nomination, DOIs, and

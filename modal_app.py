@@ -148,8 +148,14 @@ def demo() -> dict:
         print("\n== Draft v1 (Writing Agent) ==")
         print("\n".join("  " + ln for ln in text.splitlines()[:60]))
         c = d["checks"]
-        print(f"\n== Number check ==\n  numbers checked: {c['numbers_checked']} | untraced: {c['untraced']}"
+        print("\n== Writing attempts ==")
+        for a in d.get("writer_attempts", []):
+            f = p.blobs.get_json(a["findings_sha256"])
+            print(f"  attempt {a['attempt']} ({a['prompt']['name']}): passed check = {a['passed_check']}"
+                  f" | untraced {len(f.get('untraced', []))} | not reported {f.get('analyses_not_reported', [])}")
+        print(f"\n== Number check (final draft) ==\n  numbers checked: {c['numbers_checked']} | untraced: {c['untraced']}"
               f" | exploratory not labelled: {c['exploratory_not_labelled']}"
+              f" | analyses not reported: {c.get('analyses_not_reported')}"
               f" | unknown refs: {c['unknown_analysis_refs']} | all clear: {c['ok']}")
         for u in p.blobs.get_json(d["checks_sha256"])["untraced"][:8]:
             print(f"  UNTRACED {u['number']}: {u['sentence'][:160]}")
