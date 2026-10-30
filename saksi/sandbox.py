@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 ALLOWED_IMPORTS = {
-    "numpy", "pandas", "scipy", "statsmodels", "sklearn", "patsy", "matplotlib",
+    "numpy", "pandas", "scipy", "statsmodels", "sklearn", "patsy", "matplotlib", "saksi_checks",
     "math", "statistics", "json", "warnings", "itertools", "collections", "functools", "typing", "dataclasses",
 }
 BANNED_CALLS = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals", "locals",
@@ -71,6 +71,7 @@ meta = {
     "container_image_id": os.environ.get("MODAL_IMAGE_ID"), "sandbox_id": os.environ.get("MODAL_SANDBOX_ID"),
 }
 t0 = time.time()
+sys.path.insert(0, work)                  # for saksi_checks, the standard diagnostics Saksi supplies
 status, error, results, caught = "ok", None, None, []
 try:
     with warnings.catch_warnings(record=True) as w:
@@ -107,6 +108,10 @@ meta["warnings"] = caught
 json.dump({"status": status, "error": error, "results": results, "meta": meta, "figures": figures,
            "figure_error": figure_error}, open(os.path.join(out, "result.json"), "w"), default=str)
 '''
+
+
+# Standard model diagnostics, copied into every sandbox as the module `saksi_checks`.
+CHECKS_SOURCE = (Path(__file__).parent / "sandbox_checks.py").read_text()
 
 
 class CodeRejected(ValueError):
@@ -194,6 +199,7 @@ class LocalExecutor:
             (work / "input" / "data.csv").write_bytes(data)
             (work / "analysis.py").write_text(code)
             (work / "runner.py").write_text(RUNNER)
+            (work / "saksi_checks.py").write_text(CHECKS_SOURCE)
             env = {"SAKSI_WORK": str(work), "SAKSI_SEED": str(seed), "PATH": os.environ.get("PATH", ""),
                    "PYTHONHASHSEED": str(seed), "MPLBACKEND": "Agg", "MPLCONFIGDIR": str(work / "mpl")}
             t0 = time.monotonic()
@@ -239,6 +245,7 @@ class ModalExecutor:
             sb.filesystem.write_bytes(data, f"{WORK}/input/data.csv")
             sb.filesystem.write_text(code, f"{WORK}/analysis.py")
             sb.filesystem.write_text(RUNNER, f"{WORK}/runner.py")
+            sb.filesystem.write_text(CHECKS_SOURCE, f"{WORK}/saksi_checks.py")
             p = sb.exec("python", "-I", f"{WORK}/runner.py", timeout=timeout,
                         env={"SAKSI_WORK": WORK, "SAKSI_SEED": str(seed), "PYTHONHASHSEED": str(seed),
                              "MODAL_SANDBOX_ID": sb.object_id, "MPLBACKEND": "Agg", "MPLCONFIGDIR": "/tmp/mpl"})

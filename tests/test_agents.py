@@ -322,6 +322,7 @@ def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
            exploratory="A further model gave a similar estimate [A:x_q1]."):
     return ("[Authors: introduction]\n\n## Methods\nA multivariable logistic regression was pre-specified.\n\n"
             "## Results\n"
+            f"Of 400 records, none was duplicated and 12 lacked booking BMI [A:s_data_quality]. "
             f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned [A:primary]. "
             f"Booking BMI was associated with GDM "
             f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
@@ -454,3 +455,54 @@ def test_wrong_upload_can_be_removed_before_the_plan_is_locked(setup):
     upload(p, "protocol", "protocol-v2.txt", (demo_data.PROTOCOL + "\nVersion 2.").encode())
     with pytest.raises(WorkflowError, match="protocol that has since been removed"):
         p.confirm_plan("bhc", s.plan["sha"])
+
+
+def test_standard_sequence_quality_table1_descriptive_then_multivariable(setup):
+    """Data quality and Table 1 by Saksi's own code first; then the plan's analyses by kind, whatever the
+    protocol order; a multivariable model without diagnostics is sent back once."""
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    multi = dict(PLAN_REPLY["analyses"][0], kind="multivariable")
+    descr = {"id": "gdm_by_clinic", "title": "GDM by clinic", "kind": "descriptive", "role": "other",
+             "outcome": {"name": "GDM", "column": "gdm"}, "exposures": [{"name": "clinic", "column": "clinic"}],
+             "covariates": [], "method": "proportions", "effect_measure": "proportion", "missing_data": "none",
+             "protocol_quote": "Multivariable logistic regression with GDM as the outcome", "unresolved": []}
+    model.script["plan"] = [{"analyses": [multi, descr],
+                             "table1": {"stratify_by": "gdm", "variables": ["age", "parity", "ethnicity", "nope"]}}]
+    proportions = ("import pandas as pd\ndef analyse(data_path, seed):\n    df = pd.read_csv(data_path)\n"
+                   "    t = df.groupby('clinic')['gdm'].mean()\n"
+                   "    return {'n_analysed': int(len(df)), 'estimates': [{'name': str(k), 'measure': 'proportion', "
+                   "'estimate': float(v), 'ci_lower': None, 'ci_upper': None, 'p_value': None} for k, v in t.items()]}\n")
+    model.script["code"] = [fence(proportions), fence(GOOD), fence(GOOD_WITH_DIAGNOSTICS)]
+    s = agents.propose_plan("bhc")
+    assert s.plan["table1"]["variables"] == ["age", "parity", "ethnicity"]          # unknown column dropped
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    s = agents.run_planned("bhc")
+    order = [k for k, _ in sorted(s.analyses.items(), key=lambda kv: kv[1]["seq"])]
+    assert order == ["s_data_quality", "s_table1", "gdm_by_clinic", "primary"]
+    assert s.analyses["s_table1"]["label"] == "descriptive" and s.analyses["s_table1"]["by"] == "system"
+    t1 = p.blobs.get_json(s.analyses["s_table1"]["outputs_sha256"])
+    assert [r["variable"] for r in t1["rows"]] == ["age", "parity", "ethnicity"] and t1["groups"][1]["n"] == 20
+    prim = s.analyses["primary"]
+    assert [x["outcome"] for x in prim["execution"]["attempts"]] == ["missing_diagnostics", "ok"]
+    assert "saksi_checks" in model.bodies[-1]["messages"][1]["content"]                # the repair said how
+    assert any(f["name"] == "calibration_plot" for f in s.figures if f["analysis_id"] == "primary")
+    out = p.blobs.get_json(prim["outputs_sha256"])
+    # Diagnostics numbers can be cited and are checked like any other.
+    r = p.check_text("There were 4.5 outcome events per predictor parameter [A:primary].")
+    assert r["untraced"] == [] and out["diagnostics"]["assumptions"]["events_per_parameter"] == 4.5
+
+
+def test_diagnostics_still_missing_after_repair_are_flagged_not_hidden(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    model.script["plan"] = [{"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable")]}]
+    model.script["code"] = [fence(GOOD), fence(GOOD)]
+    s = agents.propose_plan("bhc")
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    s = agents.run_planned("bhc")
+    prim = s.analyses["primary"]
+    assert prim["status"] == "ok" and prim["execution"]["diagnostics_missing"] is True

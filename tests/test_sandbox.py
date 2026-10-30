@@ -125,3 +125,19 @@ def test_broken_figure_does_not_fail_the_analysis():
 def test_analysis_code_cannot_save_or_show_figures_itself():
     with pytest.raises(CodeRejected, match="savefig"):
         check_code(GOOD + "\nimport matplotlib.pyplot as plt\ndef f():\n    plt.savefig('x.png')\n")
+
+
+GOOD_WITH_DIAGNOSTICS = GOOD.replace("import statsmodels.formula.api as smf",
+                                     "import statsmodels.formula.api as smf\nfrom saksi_checks import logistic_checks") \
+    .replace('"estimates": est}', '"estimates": est, "diagnostics": logistic_checks(m)}')
+
+
+def test_standard_diagnostics_are_available_inside_the_sandbox():
+    check_code(GOOD_WITH_DIAGNOSTICS)
+    r = LocalExecutor().run(GOOD_WITH_DIAGNOSTICS, data_bytes(), seed=7)
+    assert r.status == "ok", r.error
+    d = r.results["diagnostics"]
+    assert d["model"] == "logistic" and d["events"] == 18 and d["assumptions"]["events_per_parameter"] == 4.5
+    assert any("events per predictor parameter" in f for f in d["flags"])
+    assert set(d["assumptions"]["collinearity"]["vif"]) == {"booking_bmi", "age", "parity", "previous_gdm"}
+    assert len(d["fit"]["calibration"]["deciles"]) == 10

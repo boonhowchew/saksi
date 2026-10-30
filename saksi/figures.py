@@ -169,6 +169,34 @@ def flow_svg(rows: int | None, outputs: dict[str, Any], outcome: str = "outcome"
             f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>' + "".join(parts) + "</svg>")
 
 
+def calibration_svg(deciles: list[dict[str, Any]]) -> str | None:
+    """Observed proportion against mean predicted risk, by tenths of predicted risk, with the diagonal."""
+    pts = [(d.get("mean_predicted"), d.get("observed_proportion"), d.get("n")) for d in deciles or []]
+    pts = [(x, y, n) for x, y, n in pts if isinstance(x, (int, float)) and isinstance(y, (int, float))]
+    if len(pts) < 3:
+        return None
+    top = max(max(x for x, _, _ in pts), max(y for _, y, _ in pts), 0.05)
+    top = min(1.0, math.ceil(top * 10) / 10)
+    W, H, L, T, S = 420, 400, 60, 20, 320
+    X = lambda v: L + v / top * S
+    Y = lambda v: T + S - v / top * S
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">',
+           f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>',
+           f'<rect x="{L}" y="{T}" width="{S}" height="{S}" fill="none" stroke="{RULE}"/>',
+           f'<line x1="{X(0):.1f}" y1="{Y(0):.1f}" x2="{X(top):.1f}" y2="{Y(top):.1f}" stroke="{MUTED}" stroke-dasharray="4 3"/>']
+    out.append('<polyline fill="none" stroke="' + INK + '" stroke-width="1.5" points="'
+               + " ".join(f"{X(x):.1f},{Y(y):.1f}" for x, y, _ in pts) + '"/>')
+    for x, y, _ in pts:
+        out.append(f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="4" fill="{INK}"/>')
+    for k in range(0, 6):
+        v = top * k / 5
+        out += [_t(X(v), T + S + 16, f"{v:.2g}", 11, "middle", MUTED), _t(L - 8, Y(v) + 4, f"{v:.2g}", 11, "end", MUTED)]
+    out += [_t(L + S / 2, H - 6, "Mean predicted risk, by tenth of risk", 12, "middle", MUTED),
+            f'<text x="16" y="{T + S / 2:.0f}" font-size="12" fill="{MUTED}" text-anchor="middle" style="{FONT}" '
+            f'transform="rotate(-90 16 {T + S / 2:.0f})">Observed proportion</text>', "</svg>"]
+    return "".join(out)
+
+
 def saksi_figures(spec: dict[str, Any], outputs: dict[str, Any], rows: int | None,
                   label: str, basis: str | None) -> list[dict[str, str]]:
     """The figures Saksi draws itself for one analysis, with captions built from recorded numbers only."""
@@ -181,6 +209,13 @@ def saksi_figures(spec: dict[str, Any], outputs: dict[str, Any], rows: int | Non
         what = (measure or "Estimates")
         figs.append({"name": "forest_plot", "svg": svg,
                      "caption": f"{prefix}{what[:1].upper() + what[1:]} with 95% confidence intervals: {title}."})
+    cal = (((outputs.get("diagnostics") or {}).get("fit") or {}).get("calibration") or {}) \
+        if isinstance(outputs.get("diagnostics"), dict) else {}
+    cs = calibration_svg(cal.get("deciles") or [])
+    if cs:
+        figs.append({"name": "calibration_plot", "svg": cs,
+                     "caption": f"{prefix}Calibration of the model for {title}: observed proportion against mean "
+                                "predicted risk by tenth of predicted risk; the dashed line is perfect calibration."})
     outcome = ((spec.get("outcome") or {}).get("name") if isinstance(spec.get("outcome"), dict) else None) or "outcome"
     fl = flow_svg(rows, outputs, outcome)
     if fl:

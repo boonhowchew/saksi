@@ -80,6 +80,13 @@ Rules:
 - If the protocol names no objective or analysis as primary, set every role to "secondary" or "other". Do not
   infer a primary from the order of objectives.
 - Do not decide whether an analysis is confirmatory or exploratory. Saksi decides that from these quotations.
+- Saksi analyses every study in a standard sequence: data quality, Table 1, other descriptive analyses, univariable,
+  multivariable, then model diagnostics. Give each analysis its "kind": "descriptive" (proportions, incidences,
+  summaries, comparisons without adjustment), "univariable" (one independent variable at a time), "multivariable"
+  (adjusted models), or "other".
+- Propose Table 1: the sociodemographic and baseline clinical columns that describe the sample, stratified by the
+  outcome the report is about (or by the main comparison group, if the protocol compares groups). Use dataset
+  column names; at most 25 variables; do not include identifiers.
 
 Return ONLY a JSON object:
 {
@@ -95,12 +102,14 @@ Return ONLY a JSON object:
     "missing_data": str,
     "protocol_quote": str,
     "role": "primary|secondary|other",
+    "kind": "descriptive|univariable|multivariable|other",
     "primary_quote": str,
     "sample_size_quote": str,
     "sample_size_target": {"n": int or null, "events": int or null},
     "unresolved": [str]
   }],
-  "protocol_items_not_analysable": [str]
+  "protocol_items_not_analysable": [str],
+  "table1": {"stratify_by": "column or null", "variables": ["column", ...], "why": "one sentence"}
 }"""
 
 CODE = """You are the Analysis Agent in Saksi. Write Python that performs exactly ONE analysis.
@@ -114,11 +123,20 @@ Contract (mandatory):
 - Follow the analysis specification exactly: same outcome, exposures, covariates, method, and missing-data
   approach. If the specification cannot be followed with the columns available, return
   {"error": "reason"} instead of improvising.
+- The specification's "kind" says where this analysis sits in the standard sequence. For a regression, report for
+  each independent variable its crude (univariable) estimate and, in a multivariable model, its adjusted estimate,
+  naming the measures accordingly (for example "crude odds ratio" and "adjusted odds ratio").
+- For a multivariable model, after fitting it, return its standard diagnostics, which Saksi supplies:
+      from saksi_checks import logistic_checks, linear_checks
+      "diagnostics": logistic_checks(model)    # binary outcome; linear_checks(model) for a continuous outcome
+  Fit the model with statsmodels. Pass clustered_by="<column>" if observations are clustered (for example by
+  clinic). Do not compute your own diagnostics instead.
 - Return this shape:
   {"n_analysed": int, "n_excluded": int, "exclusion_reason": str,
    "n_events": int or null (outcome events among those analysed, for binary or time-to-event outcomes),
    "estimates": [{"name": str, "measure": str, "estimate": float, "ci_lower": float or null,
                   "ci_upper": float or null, "p_value": float or null}],
+   "diagnostics": {...} (multivariable models only, from saksi_checks),
    "model": {"formula_or_description": str, "converged": bool or null},
    "notes": [str]}
 
@@ -167,6 +185,17 @@ Rules:
 - Say each figure once. Give the number analysed and excluded once per analysis (once in total if the analyses
   share the same sample). The Discussion interprets; it does not restate the Results figure by figure.
 
+- Follow the standard sequence. Methods (statistical analysis): the data checks (missing values, duplicates,
+  outliers); how Table 1 was summarised and compared (its notes give the rules); the univariable analyses, then the
+  multivariable models; name the model diagnostics that were checked.
+- Results, in this order: the records and their completeness [A:s_data_quality]; the sample's characteristics,
+  referring to Table 1 and describing patterns across groups rather than repeating its numbers [A:s_table1] (only
+  if present); other descriptive results; univariable results; multivariable results with crude and adjusted
+  estimates; then, right after the last multivariable result, at least one paragraph on that model's diagnostics,
+  from its "diagnostics": events per predictor parameter, collinearity (VIF), linearity, influential observations,
+  overall fit, discrimination and calibration, and independence. State every flag it lists plainly. Calibration on
+  the data the model was fitted to is "apparent": say so, and do not present it as evidence for new patients.
+- Refer to Table 1 as "Table 1"; Saksi builds the table itself from the computed results.
 - Refer to a figure as "Figure n" only if it is listed in FIGURES, using that number. Do not describe what a figure
   shows beyond its caption.
 
@@ -203,6 +232,9 @@ Rules:
   Quotes are checked automatically; a point whose quote is not in the draft is marked unverified.
 - Whether each 95% interval includes its null value is given in INTERVAL FACTS, computed by code. Rely on it;
   never judge it from rounded numbers. If the draft contradicts it, raise that.
+- Saksi applies a standard sequence: data quality, Table 1, descriptive, univariable, multivariable, then model
+  diagnostics computed by fixed code (saksi_checks). Check that the draft reports the diagnostics and their flags
+  honestly, and that its conclusions respect them.
 - Labels are set by code before any result: "confirmatory" is the pre-specified primary analysis covered by the
   protocol's sample-size justification; everything else is "exploratory" (pre-specified or post hoc). A shortfall
   against the planned sample is in sample_check.

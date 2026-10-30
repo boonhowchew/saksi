@@ -17,31 +17,49 @@ os.environ.pop("SAKSI_CREATE_TOKEN", None)
 import numpy as np
 import statsmodels.formula.api as smf
 import uvicorn
-from saksi import demo_data
+from saksi import demo_data, standard
 from saksi.agents import Agents
 from saksi.api import create_app
 from saksi.llm import ModelClient
 from saksi.sandbox import LocalExecutor
 from sklearn.metrics import roc_auc_score
-from tests.test_agents import AUC_FIXED, CURATOR_REPLY, GOOD, PLAN_REPLY, ScriptedModel, fence
+from tests.test_agents import AUC_FIXED, CURATOR_REPLY, PLAN_REPLY, ScriptedModel, fence
+from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
 
 df = demo_data.make().dropna(subset=["gdm", "booking_bmi", "age", "parity", "previous_gdm"])
 m = smf.logit("gdm ~ booking_bmi + age + parity + previous_gdm", data=df).fit(disp=0)
 ci = np.exp(m.conf_int()); orr = np.exp(m.params)
 f = lambda t: f"{orr[t]:.2f} (95% CI {ci.loc[t,0]:.2f} to {ci.loc[t,1]:.2f})"
 auc = roc_auc_score(df["gdm"], m.predict(df))
+# The standard steps and the diagnostics, computed the way the server will compute them, so the draft's numbers trace.
+CSV = demo_data.make().to_csv(index=False).encode()
+TABLE1 = {"stratify_by": "gdm", "variables": ["age", "booking_bmi", "parity", "previous_gdm", "ethnicity", "clinic"],
+          "why": "Characteristics of the women by the outcome."}
+run = lambda code: LocalExecutor().run(code, CSV, seed=7).results
+dq, t1 = run(standard.code("data_quality")), run(standard.code("table1", TABLE1))
+diag = run(GOOD_WITH_DIAGNOSTICS)["diagnostics"]
+bmi_missing = next(c["missing"] for c in dq["columns"] if c["column"] == "booking_bmi")
+vif_max = max(diag["assumptions"]["collinearity"]["vif"].values())
+cal = diag["fit"]["calibration"]
 AUC_PLAN = {"id": "auc", "title": "Discrimination of the primary model", "objective": "discrimination",
             "outcome": {"name": "GDM", "column": "gdm"}, "exposures": [], "covariates": [],
             "method": "AUC with 95% CI", "effect_measure": "AUC", "missing_data": "complete case",
             "protocol_quote": "Discrimination of the primary model will be summarised with the area under the receiver",
-            "role": "secondary", "primary_quote": "", "sample_size_quote": "", "sample_size_target": {}, "unresolved": []}
+            "role": "secondary", "primary_quote": "", "sample_size_quote": "", "sample_size_target": {}, "unresolved": [],
+            "kind": "other"}
 DRAFT = f"""[Authors: introduction]
 
 ## Methods
-As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis).
+As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration.
 
 ## Results
-Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events [A:primary]. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary]. In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} [A:auc].
+The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status [A:s_table1].
+
+Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events [A:primary]. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
+
+The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
+
+In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} [A:auc].
 
 ## Discussion
 The intervals are wide and include no association, so the data are compatible with both no association and a modest one. [Authors: comparison with previous studies]
@@ -58,8 +76,9 @@ REVIEW1 = {"primary_claim": "Booking BMI was not clearly associated with GDM aft
                 "why_it_matters": "Readers over-interpret non-significant results."}]}
 REVIEW2 = {"primary_claim": "Unchanged.", "summary": "R1 is dealt with in the Discussion.", "points_of_inquiry": [],
            "item_assessments": [{"item_id": "R1", "assessment": "addressed", "quote": LIMIT[:70], "note": "A limitation now states this."}]}
-model = ScriptedModel({"curate": [CURATOR_REPLY], "plan": [{"analyses": [PLAN_REPLY["analyses"][0], AUC_PLAN]}],
-                       "code": [fence(GOOD), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
+model = ScriptedModel({"curate": [CURATOR_REPLY],
+                       "plan": [{"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable"), AUC_PLAN], "table1": TABLE1}],
+                       "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
 root = tempfile.mkdtemp()
 app = create_app(root, agents_factory=lambda p: Agents(p, ModelClient(p.blobs, transport=model, mode="live"), LocalExecutor()))
 print(f"Offline Saksi on http://127.0.0.1:8765 (data in {root})")

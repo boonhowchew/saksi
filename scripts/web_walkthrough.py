@@ -90,7 +90,7 @@ with sync_playwright() as p:
     signout(page); signin(page, toks["siti"])
     page.get_by_role("tab", name="Plan").click(); click(page, "Confirm this plan")
     print("stage after both confirm:", page.locator(".progress .where strong").inner_text())
-    page.get_by_role("tab", name="Analyses").click(); click(page, "Run the planned analyses"); click(page, "Accept these results")
+    page.get_by_role("tab", name="Analyses").click(); click(page, "Run the analyses"); click(page, "Accept these results")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")  # resume saved identity (author A)
     print("acting as:", page.locator(".next strong").inner_text())
     page.get_by_role("tab", name="Analyses").click(); page.get_by_text("How it ran").first.click(); shot(page, "05-analyses")

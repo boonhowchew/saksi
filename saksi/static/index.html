@@ -80,6 +80,13 @@ label.radio input { margin-top: .25rem; }
 fieldset.roles { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
 .copyrow { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; }
 .copyrow .secret { flex: 1 1 18rem; }
+.diag { border-top: 1px dashed var(--rule); margin-top: .9rem; padding-top: .6rem; }
+.diag h4 { margin: 0 0 .4rem; }
+ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
+table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
+table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
+h2.step { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+h2.step .who { font: 400 .8rem var(--sans); color: var(--muted); }
 ol.howto { padding-left: 1.2rem; margin: 0 0 1.5rem; max-width: 40rem; }
 ol.howto li { margin-bottom: .35rem; }
 
@@ -320,7 +327,8 @@ function describe(e) {
     case "plan.locked": return "The plan was locked: every author confirmed it";
     case "stage.advanced": return `Moved to ${esc(stageName(p.to))}: ${esc(p.reason)}`;
     case "analysis.requested": return `${who} asked for an exploratory analysis`;
-    case "analysis.completed": return `${who} ran ${esc(p.analysis_id)} (${esc(labelText(p))}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
+    case "analysis.completed": if (p.standard) return `Saksi ran its standard ${p.standard === "table1" ? "Table 1" : "data-quality check"}${forWhom}: ${p.status === "ok" ? "done" : "failed"}`;
+      return `${who} ran ${esc(p.analysis_id)} (${esc(labelText(p))}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
     case "analyses.accepted": return `${who} accepted the results`;
     case "draft.created": return `${who} wrote draft version ${p.version}${forWhom}`;
     case "draft.edited": return `${who} edited the draft, making version ${p.version}${forWhom}`;
@@ -357,9 +365,7 @@ function nextStep() {
         return ["Waiting for co-authors to confirm the plan: " + waiting(s.authors.filter((a) => !s.plan_confirmed_by.includes(a))), "plan"];
       }
       case "ANALYSIS": {
-        const order = s.plan_locked?.order || [];
-        const missing = order.filter((pid) => !Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
-        if (missing.length) return ["Run the planned analyses.", "analyses"];
+        if (pendingSteps().length) return ["Run the analyses. Saksi runs them in the standard order: data quality, Table 1, descriptive, univariable, multivariable with diagnostics.", "analyses"];
         if (!s.analyses_accepted_by.includes(S.you)) return ["Check the results and accept them. You can also ask for an exploratory analysis.", "analyses"];
         return ["Waiting for co-authors to accept the results: " + waiting(s.authors.filter((a) => !s.analyses_accepted_by.includes(a))), "analyses"];
       }
@@ -630,13 +636,15 @@ function plan() {
   return `<section>
     <p><strong>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol</strong>: ${nConf} confirmatory, ${inc.length - nConf} exploratory${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.
       ${p.by.startsWith("agent:") ? `Drafted by the ${esc(name(p.by))}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: ${esc(p.note)}` : "."}</p>
+    <p class="small">${p.table1 ? `<strong>Table 1</strong> describes ${esc(p.table1.variables.length)} characteristics${p.table1.stratify_by ? `, by ${esc(p.table1.stratify_by)}` : ""}: ${esc(p.table1.variables.join(", "))}.` : `No Table 1 was proposed; ask for a new draft, or add it under “Correct the details myself”.`}
+      The analyses then run in the standard order: data quality, Table 1, descriptive, univariable, multivariable with diagnostics.</p>
     <p class="small">${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed.`
       : `Confirmed by ${confirmedBy.length} of ${s.authors.length} authors${confirmedBy.length ? ` (${esc(confirmedBy.map(name).join(", "))})` : ""}. A change to the plan needs every author to confirm again.`}</p>
     <form data-form="planconfirm">
       <div class="tablewrap"><table class="plantable"><thead><tr><th title="Include in this paper">Include</th><th>Analysis</th><th>Label</th><th title="Described in the protocol; named primary; covered by the sample-size calculation">Checks</th></tr></thead><tbody>
       ${items.map((a, i) => { const out = a.included === false; return `<tr>
         <td class="inc"><input type="checkbox" name="inc:${esc(a.id)}" data-inc="${esc(a.id)}" ${out ? "" : "checked"} ${editable ? "" : "disabled"} aria-label="Include ${esc(a.title || a.id)}"></td>
-        <td><strong>${i + 1}. ${esc(a.title || a.id)}</strong>
+        <td><strong>${i + 1}. ${esc(a.title || a.id)}</strong> <span class="tag">${esc(a.kind || "other")}</span>
           <div id="why-${esc(a.id)}" style="${out ? "" : "display:none"};margin-top:.35rem"><input type="text" name="why:${esc(a.id)}" value="${esc(a.exclusion_reason || "")}" placeholder="Why is it left out? The draft will say." ${editable ? "" : "disabled"} style="width:100%"></div>
           <details class="small"><summary>Why ${out ? "left out" : a.label === "confirmatory" ? "confirmatory" : "exploratory"}, and the details</summary>${planItemBody(a)}</details></td>
         <td>${out ? `<span class="tag">left out</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""}</td>
@@ -690,10 +698,14 @@ function planEditor(p) {
   return `<section><h2>Edit the plan</h2>
     <p class="small">Choose which of the protocol's analyses this paper includes, and correct what the Analysis Agent got wrong. For quotations, paste the protocol's own words: code checks them against the protocol again when you save. Saving creates a revised plan that every author confirms; the record keeps both versions.</p>
     <form class="stack" data-form="planedit" style="max-width:none">
+    <fieldset class="edit"><legend>Table 1</legend>
+      <label><span>Stratify by (a column, usually the outcome; leave empty for no stratification)</span><input type="text" name="t1by" value="${esc(p.table1?.stratify_by || "")}"></label>
+      <label><span>Characteristics (column names, separated by commas)</span><textarea name="t1vars">${esc((p.table1?.variables || []).join(", "))}</textarea></label></fieldset>
     ${p.order.map((id, i) => { const a = p.analyses[id], d = a.design || {}, t = d.sample_size_target || {}; return `<fieldset class="edit">
       <legend>${i + 1}. ${esc(a.title || id)} <span class="muted small">${esc(id)}</span></legend>
       <label class="inline"><input type="checkbox" name="${f(id, "inc")}" ${a.included === false ? "" : "checked"}> Include in this paper</label>
       <label><span>If left out, why (required; the draft will report it)</span><input type="text" name="${f(id, "why")}" value="${esc(a.exclusion_reason || "")}"></label>
+      <label><span>Place in the standard sequence</span><select name="${f(id, "kind")}">${["descriptive", "univariable", "multivariable", "other"].map((k) => `<option value="${k}" ${a.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>
       <label><span>Role in the protocol</span><select name="${f(id, "role")}">${["primary", "secondary", "other"].map((r) => `<option value="${r}" ${(d.role || a.role) === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
       <label><span>Protocol sentence describing this analysis</span><textarea name="${f(id, "pq")}">${esc(a.protocol_quote || "")}</textarea></label>
       <label><span>Protocol sentence naming it the primary analysis (primary analyses only)</span><textarea name="${f(id, "prq")}">${esc(d.primary_quote || a.primary_quote || "")}</textarea></label>
@@ -734,53 +746,150 @@ async function figureHtml(f) {
     <a class="small" href="${uri}" download="saksi-figure-${f.number}.svg">Download SVG</a></figcaption></figure>`;
 }
 
-/* Analyses */
+/* Analyses: the standard sequence */
+const SEQ = [
+  ["quality", "1. Data quality", "Saksi's own code, not a model: missing values, duplicate records and outliers. Counts only."],
+  ["table1", "2. Table 1: characteristics of the sample", "Saksi's own code, not a model. Summary and test chosen by rule from the data; the plan chose the variables and the grouping."],
+  ["descriptive", "3. Other descriptive analyses", "From the plan, written by the Analysis Agent."],
+  ["univariable", "4. Univariable analyses", "One independent variable at a time, before any adjustment."],
+  ["multivariable", "5. Multivariable analyses and model diagnostics", "Adjusted models. After each, Saksi's standard checks: fit, calibration, influence and assumptions."],
+  ["other", "6. Other planned analyses", ""],
+  ["posthoc", "7. Exploratory analyses added after the plan", "Not in the confirmed plan, so always exploratory."]];
+const KIND_RANK = { descriptive: 0, univariable: 1, multivariable: 2, other: 3 };
+function stepOf(a) {
+  if (a.standard === "data_quality") return "quality";
+  if (a.standard === "table1") return "table1";
+  if (a.basis === "post hoc") return "posthoc";
+  return ["descriptive", "univariable", "multivariable"].includes(a.kind) ? a.kind : "other";
+}
+function sequenceIds(plan) {
+  const ids = (plan?.order || []).filter((i) => plan.analyses[i].included !== false);
+  return [...ids].sort((x, y) => (KIND_RANK[plan.analyses[x].kind] ?? 3) - (KIND_RANK[plan.analyses[y].kind] ?? 3) || ids.indexOf(x) - ids.indexOf(y));
+}
+function pendingSteps() {
+  const s = S.state, done = (pred) => Object.values(s.analyses).some((a) => pred(a) && a.status === "ok"), q = [];
+  if (!done((a) => a.standard === "data_quality")) q.push({ args: { standard_step: "data_quality" }, label: "data quality" });
+  if (s.plan_locked?.table1 && !done((a) => a.standard === "table1")) q.push({ args: { standard_step: "table1" }, label: "Table 1" });
+  for (const id of sequenceIds(s.plan_locked)) {
+    if (!done((a) => a.plan_analysis_id === id)) q.push({ args: { plan_analysis_id: id }, label: s.plan_locked.analyses[id].title || id });
+  }
+  return q;
+}
+
+function qualityHtml(o) {
+  const issues = (o.columns || []).filter((c) => c.missing || c.outliers_beyond_1_5_iqr).sort((a, b) => b.missing - a.missing);
+  return `<p>${esc(o.n_rows)} records and ${esc(o.n_columns)} columns. Duplicated records: ${esc(o.duplicate_rows)}. Records missing more than a fifth of their values: ${esc(o.rows_over_20pct_missing)}. Columns with any missing value: ${esc(o.columns_with_missing)}.${o.constant_columns?.length ? ` Columns holding a single value: ${esc(o.constant_columns.join(", "))}.` : ""}</p>
+    ${issues.length ? `<details ${issues.length <= 12 ? "open" : ""}><summary>${issues.length} column${issues.length > 1 ? "s" : ""} with missing values or outliers</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Missing</th><th>%</th><th>Outliers (1.5 × IQR)</th><th>Extreme (3 × IQR)</th><th>Range</th></tr></thead><tbody>
+      ${issues.map((c) => `<tr><td>${esc(c.column)}</td><td class="num">${esc(c.missing)}</td><td class="num">${esc(c.missing_pct)}</td><td class="num">${esc(c.outliers_beyond_1_5_iqr ?? "")}</td><td class="num">${esc(c.extreme_beyond_3_iqr ?? "")}</td><td class="num">${c.min != null ? `${num(c.min, 1)} to ${num(c.max, 1)}` : ""}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Outliers are counted, not removed. Removing one needs a reason, and the analysis is then reported with and without it.</p></details>` : `<p class="small">No missing values or outliers.</p>`}`;
+}
+
+function table1Html(t) {
+  const g = t.groups || [], by = t.stratify_by;
+  const fmt = (x, summary) => !x || !x.n ? "" : summary === "mean (SD)" ? `${num(x.mean, 1)} (${num(x.sd, 1)})` : `${num(x.median, 1)} (${num(x.q1, 1)} to ${num(x.q3, 1)})`;
+  const np = (x) => x ? `${esc(x.n)} (${num(x.pct, 1)})` : "";
+  const tests = [...new Set((t.rows || []).map((r) => r.test).filter(Boolean))];
+  const body = (t.rows || []).map((r) => {
+    if (r.error) return `<tr><td>${esc(r.variable)}</td><td colspan="${g.length + 2}" class="small muted">${esc(r.error)}</td></tr>`;
+    const miss = r.missing ? ` <span class="small muted">(${esc(r.missing)} missing)</span>` : "";
+    const p = g.length ? `<td title="${esc(r.test || "")}${r.test_note ? ": " + esc(r.test_note) : ""}">${pval(r.p_value)}${r.test_note ? "*" : ""}</td>` : "";
+    if (r.type === "continuous") return `<tr><td>${esc(r.variable)}, ${esc(r.summary)}${miss}</td><td>${fmt(r.overall, r.summary)}</td>${g.map((x) => `<td>${fmt(r.by_group?.[x.level], r.summary)}</td>`).join("")}${p}</tr>`;
+    return `<tr><td>${esc(r.variable)}, n (%)${miss}</td><td></td>${g.map(() => "<td></td>").join("")}${p}</tr>`
+      + (r.categories || []).map((c) => `<tr class="cat"><td>${esc(c.level)}</td><td>${np(c.overall)}</td>${g.map((x) => `<td>${np(c.by_group?.[x.level])}</td>`).join("")}${g.length ? "<td></td>" : ""}</tr>`).join("");
+  }).join("");
+  return `<div class="tablewrap"><table class="t1"><thead><tr><th>Characteristic</th><th>Overall<br><span class="small muted">n = ${esc(t.n_analysed)}</span></th>
+    ${g.map((x) => `<th>${esc(by)} = ${esc(x.level)}<br><span class="small muted">n = ${esc(x.n)}</span></th>`).join("")}${g.length ? "<th>p</th>" : ""}</tr></thead><tbody>${body}</tbody></table></div>
+    <p class="small muted">${t.rows?.some((r) => r.test_note) ? "* More than a fifth of the expected counts are below 5; read this p-value with care. " : ""}${tests.length ? `Tests: ${esc(tests.join(", "))}. ` : ""}${t.n_excluded ? `${esc(t.n_excluded)} records without ${esc(by)} are not shown. ` : ""}${esc((t.notes || []).join(" "))}</p>`;
+}
+
+function diagnosticsHtml(d) {
+  if (!d || typeof d !== "object") return "";
+  const a = d.assumptions || {}, f = d.fit || {}, i = d.influence || {}, col = a.collinearity || {};
+  const vifs = Object.entries(col.vif || {}).map(([k, v]) => `${esc(k)} ${num(v, 2)}`).join(", ");
+  const bt = Object.entries(a.linearity_box_tidwell || {}).map(([k, v]) => `${esc(k)}: p ${pval(v.p_value)}${v.nonlinear ? " (may not be linear)" : ""}`).join("; ");
+  const lr = f.likelihood_ratio || {}, cal = f.calibration || {}, hl = cal.hosmer_lemeshow || {};
+  return `<div class="diag"><h4>Model diagnostics <span class="small muted">computed by Saksi's standard checks</span></h4>
+    ${(d.flags || []).length ? `<ul class="msg warn small flags">${d.flags.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="msg ok small">Nothing flagged by the standard thresholds.</p>`}
+    <dl class="facts">
+      <dt>Sample</dt><dd>${esc(d.n)} analysed${d.events != null ? `, ${esc(d.events)} with the outcome` : ""}; ${esc(d.predictor_parameters)} predictor parameters${a.events_per_parameter != null ? `; ${esc(a.events_per_parameter)} events per parameter (at least 10 recommended)` : ""}${a.observations_per_parameter != null ? `; ${esc(a.observations_per_parameter)} observations per parameter` : ""}</dd>
+      ${d.model === "logistic" ? `<dt>Overall fit</dt><dd>Likelihood-ratio χ² ${num(lr.chi2, 2)} on ${esc(lr.df)} df against the null model, p ${pval(lr.p_value)}</dd>
+      <dt>Discrimination</dt><dd>C-statistic ${num(f.c_statistic, 3)}</dd>
+      <dt>Calibration</dt><dd>Slope ${num(cal.slope, 2)}, intercept ${num(cal.intercept, 2)}; Hosmer-Lemeshow χ² ${num(hl.chi2, 2)}, p ${pval(hl.p_value)} (read with the calibration plot)${cal.apparent ? `<br><span class="small muted">Apparent calibration: ${esc(cal.apparent)}.</span>` : ""}</dd>
+      <dt>Pseudo-R²</dt><dd>${num(f.pseudo_r2_mcfadden, 3)} (McFadden; a secondary indicator only)</dd>`
+      : `<dt>Fit</dt><dd>R² ${num(f.r2, 3)}, adjusted R² ${num(f.adjusted_r2, 3)}; F-test p ${pval(f.f_test?.p_value)}</dd>
+      <dt>Residuals</dt><dd>Shapiro-Wilk p ${pval(a.residual_normality_shapiro?.p_value)}; Breusch-Pagan p ${pval(a.homoscedasticity_breusch_pagan?.p_value)}</dd>`}
+      <dt>Collinearity</dt><dd>${vifs ? `VIF ${vifs}` : "a single predictor"}${(col.high_correlations || []).length ? `; correlations above 0.8: ${col.high_correlations.map((c) => `${esc(c.a)} and ${esc(c.b)} (${num(c.r, 2)})`).join(", ")}` : ""}</dd>
+      ${bt ? `<dt>Linearity of the logit</dt><dd>Box-Tidwell: ${bt}</dd>` : ""}
+      <dt>Influence</dt><dd>${esc(i.cooks_above_4_over_n)} observations with Cook's distance above 4/n (largest ${num(i.cooks_distance_max, 3)}; ${esc(i.cooks_above_1 ?? 0)} above 1)${d.model === "logistic" ? `; ${esc(i.pearson_residuals_beyond_2)} Pearson residuals beyond ±2; DfBeta above ${num(i.dfbeta_threshold, 3)}: ${esc(Object.entries(i.dfbeta_above_threshold || {}).map(([k, v]) => `${k} ${v}`).join(", "))}` : `; ${esc(i.standardised_residuals_beyond_2)} standardised residuals beyond ±2`}</dd>
+      <dt>Independence</dt><dd>${esc(a.independence)}</dd>
+    </dl></div>`;
+}
+
+async function analysisBlock(id, a) {
+  const s = S.state, ex = a.execution || {}, pv = ex.provenance || {};
+  const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
+  const est = out?.estimates || [];
+  let body;
+  if (!out) body = `<p class="msg err small">${esc(a.error || "")}</p>`;
+  else if (a.standard === "data_quality") body = qualityHtml(out);
+  else if (a.standard === "table1") body = table1Html(out);
+  else body = `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}${out.n_events != null ? `, with ${esc(out.n_events)} outcome events` : ""}${out.n_excluded != null ? `; excluded ${esc(out.n_excluded)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}` : "; exclusions not reported"}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
+      ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
+      ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${(out.notes || []).length ? `<ul class="small">${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${diagnosticsHtml(out.diagnostics)}
+      ${a.kind === "multivariable" && !out.diagnostics ? `<p class="msg warn small">The standard diagnostics are missing for this multivariable model${ex.diagnostics_missing ? ", even after the Analysis Agent was asked to add them" : ""}. Its results should not be relied on until they are checked.</p>` : ""}`;
+  return `<div class="item ${a.status === "ok" ? "good" : "attn"}">
+    <h3>${esc(a.spec?.title || id)} ${a.standard ? `<span class="tag">descriptive</span>` : labelTag(a)}
+      <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
+    ${sampleBlock(a.sample_check)}
+    ${a.requested_by ? `<p class="small muted">${a.standard ? "Run" : "Requested"} by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
+    ${body}
+    ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
+    ${ex.required_figure && !ex.required_figure_drawn ? `<p class="msg warn small">The rule for this analysis requires a ${esc(ex.required_figure.replaceAll("_", " "))}, but the analysis code did not draw one.${ex.figure_error ? " The figure code failed; see How it ran." : ""}</p>` : ""}
+    <details><summary>How it ran</summary><dl class="facts">
+      <dt>Code by</dt><dd>${esc(ex.code_by || "the Analysis Agent (" + (s.actors["agent:analyst"]?.model || "") + ")")}</dd>
+      <dt>Where</dt><dd>${esc(ex.backend)}${pv.sandbox_object_id ? `, sandbox <span class="hash">${esc(pv.sandbox_object_id)}</span>` : ""}</dd>
+      <dt>Network</dt><dd>${pv.network === "blocked" ? `<span class="tag good">blocked</span>` : esc(pv.network || "not recorded")}</dd>
+      <dt>Data</dt><dd>${pv.data_sha256 && pv.data_sha256 === ex.dataset_sha256 ? `<span class="tag good">same file as uploaded</span>` : `<span class="tag attn">not confirmed</span>`} <span class="hash">${short(ex.dataset_sha256)}</span></dd>
+      <dt>Seed</dt><dd>${esc(ex.seed)}</dd>
+      <dt>Attempts</dt><dd>${(ex.attempts || []).map((t) => esc(t.outcome.replaceAll("_", " "))).join(", then ")}</dd>
+      <dt>Packages</dt><dd class="small">${esc(Object.entries(pv.packages || {}).map(([k, v]) => k + " " + v).join(", "))}</dd>
+      <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd>
+      ${ex.figure_error ? `<dt>Figure error</dt><dd><pre>${esc(ex.figure_error)}</pre></dd>` : ""}</dl>
+      <div id="code-${esc(a.code_sha256)}"></div></details></div>`;
+}
+
 async function analyses() {
   const s = S.state;
-  const ids = Object.keys(s.analyses);
   const canRun = isAuthor() && s.stage === "ANALYSIS";
-  const blocks = await Promise.all(ids.map(async (id) => {
-    const a = s.analyses[id], ex = a.execution || {}, pv = ex.provenance || {};
-    const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
-    const est = out?.estimates || [];
-    return `<div class="item ${a.status === "ok" ? "good" : "attn"}">
-      <h3>${esc(a.spec?.title || id)} ${labelTag(a)}
-        <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
-      ${sampleBlock(a.sample_check)}
-      ${a.requested_by ? `<p class="small muted">Requested by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
-      ${out ? `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}${out.n_events != null ? `, with ${esc(out.n_events)} outcome events` : ""}${out.n_excluded != null ? `; excluded ${esc(out.n_excluded)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}` : "; exclusions not reported"}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
-        ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
-        ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-        ${(out.notes || []).length ? `<ul class="small">${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : `<p class="msg err small">${esc(a.error || "")}</p>`}
-      ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
-      ${ex.required_figure && !ex.required_figure_drawn ? `<p class="msg warn small">The rule for this analysis requires a ${esc(ex.required_figure.replaceAll("_", " "))}, but the analysis code did not draw one.${ex.figure_error ? " The figure code failed; see How it ran." : ""}</p>` : ""}
-      <details><summary>How it ran</summary><dl class="facts">
-        <dt>Where</dt><dd>${esc(ex.backend)}${pv.sandbox_object_id ? `, sandbox <span class="hash">${esc(pv.sandbox_object_id)}</span>` : ""}</dd>
-        <dt>Network</dt><dd>${pv.network === "blocked" ? `<span class="tag good">blocked</span>` : esc(pv.network || "not recorded")}</dd>
-        <dt>Data</dt><dd>${pv.data_sha256 && pv.data_sha256 === ex.dataset_sha256 ? `<span class="tag good">same file as uploaded</span>` : `<span class="tag attn">not confirmed</span>`} <span class="hash">${short(ex.dataset_sha256)}</span></dd>
-        <dt>Seed</dt><dd>${esc(ex.seed)}</dd>
-        <dt>Attempts</dt><dd>${(ex.attempts || []).map((t) => esc(t.outcome)).join(", then ")}</dd>
-        <dt>Packages</dt><dd class="small">${esc(Object.entries(pv.packages || {}).map(([k, v]) => k + " " + v).join(", "))}</dd>
-        <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd>
-        ${ex.figure_error ? `<dt>Figure error</dt><dd><pre>${esc(ex.figure_error)}</pre></dd>` : ""}</dl>
-        <div id="code-${esc(a.code_sha256)}"></div></details></div>`;
-  }));
-  const order = s.plan_locked?.order || [];
-  const allPlanned = order.every((pid) => Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
+  const pending = s.plan_locked ? pendingSteps() : [];
+  const byStep = {};
+  for (const [id, a] of Object.entries(s.analyses).sort((x, y) => x[1].seq - y[1].seq)) (byStep[stepOf(a)] ||= []).push([id, a]);
+  const sections = [];
+  for (const [key, title, who] of SEQ) {
+    const list = byStep[key] || [];
+    const waiting = s.plan_locked && pending.some((q) => (key === "quality" && q.args.standard_step === "data_quality")
+      || (key === "table1" && q.args.standard_step === "table1")
+      || (q.args.plan_analysis_id && stepOf({ kind: s.plan_locked.analyses[q.args.plan_analysis_id].kind }) === key));
+    if (!list.length && !waiting) continue;
+    sections.push(`<section><h2 class="step">${esc(title)} ${who ? `<span class="who">${esc(who)}</span>` : ""}</h2>
+      ${(await Promise.all(list.map(([id, a]) => analysisBlock(id, a)))).join("")}
+      ${waiting ? `<p class="small muted">Not run yet.</p>` : ""}</section>`);
+  }
   const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
-  return `<section><h2>Analyses</h2>
-    <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, either pre-specified (in the plan) or post hoc (added later).</p>
-    <p class="muted small">The Analysis Agent writes code for each planned analysis. It runs in a sandbox with the network blocked, on the uploaded file, checked by hash. The model never sees a data row.</p>
-    ${canRun && !allPlanned ? `<button class="btn" data-agent="run_planned" data-label="Running the planned analyses">Run the planned analyses</button>` : ""}
-    ${blocks.join("") || (s.stage === "INGEST" ? "<p>Analyses start once every author has confirmed the plan.</p>" : "")}
-  </section>
-  ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
-    <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
-      <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
-      <div><button class="btn" data-label="Running the exploratory analysis">Run exploratory analysis</button></div></form></section>
-    ${allPlanned && ids.length ? `<section><h2>Accept the results</h2>
-      <p>Accepted by: ${esc(s.analyses_accepted_by.map(name).join(", ") || "nobody yet")}. Accepting binds to exactly this set of results (<span class="hash">${short(s.analysis_set_sha256)}</span>); a new analysis needs fresh acceptance.</p>
-      ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
+  return `${s.stage === "INGEST" ? `<p>The analyses run once every author has confirmed the plan, in this order: data quality, Table 1, other descriptive analyses, univariable, then multivariable analyses with their diagnostics.</p>` : ""}
+    <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, pre-specified or added later. <strong>Descriptive</strong>: the standard data-quality check and Table 1.</p>
+    ${canRun && pending.length ? `<div class="bigaction"><p><strong>${pending.length} step${pending.length > 1 ? "s" : ""} to run</strong>, in order: ${esc(pending.map((q) => q.label).join("; "))}. Each runs in a locked-down sandbox on the uploaded file; the models never see a data row.</p>
+      <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
+    ${sections.join("")}
+    ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
+      <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
+        <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
+        <div><button class="btn" data-label="Running the exploratory analysis">Run exploratory analysis</button></div></form></section>
+      ${!pending.length && Object.keys(s.analyses).length ? `<section><h2>Accept the results</h2>
+        <p>Accepted by: ${esc(s.analyses_accepted_by.map(name).join(", ") || "nobody yet")}. Accepting binds to exactly this set of results (<span class="hash">${short(s.analysis_set_sha256)}</span>); a new analysis needs fresh acceptance.</p>
+        ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
 }
 
 /* Draft */
@@ -841,6 +950,7 @@ async function draft() {
     ${marks.length ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
     <article class="manuscript-view">${renderManuscript(text || "", marks)}</article>
   </section>
+  ${await draftTable1()}
   ${okFigures().length ? `<section><h2>Figures</h2><p class="small muted">Numbered in the order they were made. The draft may cite them by these numbers.</p>
     ${(await Promise.all(okFigures().map(figureHtml))).join("")}</section>` : ""}
   <section><h2>Sign-offs for version ${v}</h2>
@@ -854,6 +964,12 @@ async function draft() {
     <form class="stack" data-form="edit" style="max-width:none"><textarea class="manuscript" name="text">${esc(text)}</textarea>
       <label><span>What you changed and why</span><input type="text" name="summary" required></label>
       <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></section>` : ""}`;
+}
+async function draftTable1() {
+  const a = Object.values(S.state.analyses).filter((x) => x.standard === "table1" && x.status === "ok").at(-1);
+  if (!a) return "";
+  const t = await blobJSON(a.outputs_sha256);
+  return t ? `<section><h2>Table 1</h2><p class="small muted">Built by Saksi from the computed results; the draft refers to it as Table 1.</p>${table1Html(t)}</section>` : "";
 }
 const okFigures = () => S.state.figures.filter((f) => S.state.analyses[f.analysis_id]?.status === "ok");
 async function maybeOpenDraft() {
@@ -1013,6 +1129,17 @@ document.addEventListener("click", async (ev) => {
     case "resume": { const x = store.get()[+t.dataset.i]; try { await openProject(x.pid, x.token, true); } catch (e) { S.pid = null; S.state = null; S.notice = { kind: "err", text: e.message }; } return render(); }
     case "forget": { const list = store.get(); list.splice(+t.dataset.i, 1); store.set(list); return render(); }
     case "confirm_plan": return act(t, () => command("confirm_plan", { plan_sha256: s.plan.sha }), "You confirmed the plan.");
+    case "runall": {
+      const queue = pendingSteps(), failures = [];
+      return act(t, async () => {
+        for (const [i, q] of queue.entries()) {
+          S.notice = { kind: "warn", text: `Running ${i + 1} of ${queue.length}: ${q.label}. Each step takes up to a minute or two.` };
+          const box = $("#status"); if (box) box.innerHTML = noticeHtml();
+          try { await agent("run_planned", q.args); } catch (e) { failures.push(`${q.label}: ${e.message}`); }
+        }
+        if (failures.length) throw new Error(`${failures.length} step${failures.length > 1 ? "s" : ""} did not finish: ${failures.join(" | ")}`);
+      }, "All the analyses ran, in the standard order. Check the results, then accept them.");
+    }
     case "accept": return act(t, () => command("accept_analyses", { analysis_set_sha256: s.analysis_set_sha256 }), "You accepted the results.");
     case "start_review": return act(t, () => command("start_review"), "The review has started.");
     case "submit_response": return act(t, () => command("submit_response"), "The response went to the reviewer.");
@@ -1118,7 +1245,7 @@ document.addEventListener("submit", async (ev) => {
         return act(btn, () => command("confirm_plan", { plan_sha256: p.sha }), "You confirmed the plan.");
       }
       return act(btn, async () => {
-        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
+        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
         return command("confirm_plan", { plan_sha256: r.state.plan.sha });
       }, `Your choice was saved as a revised plan, and you confirmed it.${s.authors.length > 1 ? " Your co-authors now confirm the new version." : ""}`);
     }
@@ -1129,11 +1256,13 @@ document.addEventListener("submit", async (ev) => {
       const analyses = p.order.map((id) => {
         const a = { ...p.analyses[id] }, g = (k) => val(`${k}:${id}`);
         delete a.design; delete a.label; delete a.protocol_quote_verified;
-        return { ...a, included: !!fd.get(`inc:${id}`), exclusion_reason: g("why") || null, role: g("role"),
+        return { ...a, included: !!fd.get(`inc:${id}`), exclusion_reason: g("why") || null, role: g("role"), kind: g("kind"),
           protocol_quote: g("pq"), primary_quote: g("prq"), sample_size_quote: g("ssq"),
           sample_size_target: { n: num(g("n")), events: num(g("ev")) }, method: g("method"), missing_data: g("md") };
       });
-      return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note") }); S.planEdit = false; return r; },
+      const t1vars = val("t1vars").split(",").map((x) => x.trim()).filter(Boolean);
+      const table1 = t1vars.length ? { stratify_by: val("t1by") || null, variables: t1vars } : null;
+      return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note"), table1 }); S.planEdit = false; return r; },
         "Saved as a revised plan. Code re-checked every quotation against the protocol; every author now confirms it.");
     }
     case "explore": return act(btn, () => agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }), "The exploratory analysis ran. It is labelled exploratory.",

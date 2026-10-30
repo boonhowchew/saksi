@@ -129,21 +129,22 @@ def demo() -> dict:
     print("\n== Proposed plan ==")
     for aid in s.plan["order"]:
         a = s.plan["analyses"][aid]
-        print(f"  {aid}: {a.get('title')} | quote verified: {a['protocol_quote_verified']}"
+        print(f"  {aid} ({a.get('kind')}): {a.get('title')} | quote verified: {a['protocol_quote_verified']}"
               f" | columns not in data: {a['columns_not_in_data']}")
         d = a.get("design") or {}
         print(f"     role: {d.get('role')} | will be: {d.get('label')}"
               + (f" | because: {'; '.join(d.get('reasons_not_confirmatory', []))}" if d.get('label') != 'confirmatory' else "")
               + f" | planned: {d.get('sample_size_target')}")
+    print(f"  Table 1: {s.plan.get('table1')}")
     for author in ("author-a", "author-b"):
         s = p.confirm_plan(author, s.plan["sha"])
 
     s = timed("analyses", agents.run_planned, "author-a")
-    print("\n== Analyses ==")
-    for aid, a in s.analyses.items():
+    print("\n== Analyses, in the standard sequence ==")
+    for aid, a in sorted(s.analyses.items(), key=lambda kv: kv[1]["seq"]):
         ex = a["execution"]
         prov = ex.get("provenance", {})
-        print(f"  {aid} [{a['label']}, {a.get('basis')}] {a['status']} | attempts: {[x['outcome'] for x in ex['attempts']]}"
+        print(f"  {aid} [{a['label']}, {a.get('basis')}, {a.get('standard') or a.get('kind')}] {a['status']} | attempts: {[x['outcome'] for x in ex['attempts']]}"
               f" | backend: {ex['backend']} | network: {prov.get('network')} | sandbox: {prov.get('sandbox_object_id')}")
         print(f"     data hash matches upload: {prov.get('data_sha256') == ex['dataset_sha256']}"
               f" | packages: {prov.get('packages')}")
@@ -154,6 +155,20 @@ def demo() -> dict:
             if a.get("sample_check"):
                 print(f"     sample check: {a['sample_check']}")
             print(f"     model: {(out.get('model') or {}).get('formula_or_description')}")
+            if a.get("standard") == "data_quality":
+                print(f"     {out.get('n_rows')} records x {out.get('n_columns')} columns | duplicates {out.get('duplicate_rows')}"
+                      f" | columns with missing values {out.get('columns_with_missing')}")
+            if a.get("standard") == "table1":
+                print(f"     Table 1 by {out.get('stratify_by')}: {out.get('groups')} | {len(out.get('rows') or [])} rows"
+                      f" | tests: {sorted({r.get('test') for r in out.get('rows') or [] if r.get('test')})}")
+            dg = out.get("diagnostics")
+            if isinstance(dg, dict):
+                fit, asm = dg.get("fit") or {}, dg.get("assumptions") or {}
+                print(f"     diagnostics: EPV {asm.get('events_per_parameter')} | C {fit.get('c_statistic')}"
+                      f" | calibration slope {(fit.get('calibration') or {}).get('slope')}"
+                      f" | VIF {(asm.get('collinearity') or {}).get('vif')} | flags: {dg.get('flags')}")
+            elif a.get("kind") == "multivariable":
+                print(f"     DIAGNOSTICS MISSING (flagged: {ex.get('diagnostics_missing')})")
             for e in out.get("estimates", [])[:6]:
                 print(f"     {e.get('name')}: {e.get('estimate')} ({e.get('ci_lower')}, {e.get('ci_upper')})"
                       f" {e.get('measure')}")

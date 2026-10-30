@@ -41,6 +41,7 @@ from .blobs import BlobStore
 from .canonical import sha256_bytes, sha256_obj
 from .design import assess, sample_check
 from .figures import saksi_figures
+from .standard import KIND_ORDER, STEPS, clean_table1
 from .documents import extract_text
 from .events import Event, EventLog
 from .tracing import SENTENCE, trace
@@ -178,13 +179,14 @@ def apply(s: State, ev: Event) -> State:
     elif t == "plan.proposed":
         s.plan = {"sha": p["plan_sha256"], "analyses": p["analyses"], "protocol_ref": p.get("protocol_ref"),
                   "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq,
-                  "note": p.get("note"), "changes": p.get("changes"), "requested_by": p.get("requested_by")}
+                  "note": p.get("note"), "changes": p.get("changes"), "requested_by": p.get("requested_by"),
+                  "table1": p.get("table1")}
         s.plan_confirmed_by = set()
     elif t == "plan.confirmed":
         s.plan_confirmed_by.add(ev.actor_id)
     elif t == "plan.locked":
         s.plan_locked = {"sha": p["plan_sha256"], "analyses": s.plan["analyses"], "order": s.plan["order"],
-                         "seq": ev.seq}
+                         "table1": s.plan.get("table1"), "seq": ev.seq}
     elif t == "analysis.requested":
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
@@ -385,7 +387,7 @@ class Project:
 
     def propose_plan(self, by: str, analyses: list[dict[str, Any]], protocol_ref: str | None,
                      call: dict[str, Any] | None = None, requested_by: str | None = None,
-                     note: str | None = None) -> State:
+                     note: str | None = None, table1: dict[str, Any] | None = None) -> State:
         """A plan from the Analysis Agent, or a revision by an author. Authors decide which protocol
         analyses this paper includes; leaving one out needs a reason, which the record and the draft keep."""
         s = self.state()
@@ -410,12 +412,15 @@ class Project:
         for x in analyses:
             d = assess(x, text)
             plan[x["id"]] = {**x, "design": d, "label": d["label"],
+                             "kind": x.get("kind") if x.get("kind") in KIND_ORDER else "other",
                              "protocol_quote_verified": d["checks"]["protocol_quote_verified"]}
         order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
         changes = _plan_changes(s.plan, plan) if s.plan else None
+        t1 = clean_table1(table1)
+        hashed = {"analyses": plan, "order": order} | ({"table1": t1} if t1 else {})
         call_seq = self._log_call(by, call)
         self._emit(by, "plan.proposed", {"analyses": plan, "order": order, "note": note, "changes": changes,
-                                         "plan_sha256": sha256_obj({"analyses": plan, "order": order}),
+                                         "table1": t1, "plan_sha256": sha256_obj(hashed),
                                          "protocol_ref": protocol_ref, "llm_call_seq": call_seq,
                                          "requested_by": requested_by})
         return self.state()
@@ -471,9 +476,19 @@ class Project:
                           execution: dict[str, Any], status: str, error: str | None = None,
                           request_id: str | None = None, call: dict[str, Any] | None = None,
                           requested_by: str | None = None, call_seqs: list[int] | None = None,
-                          figures: list[dict[str, Any]] | None = None) -> State:
+                          figures: list[dict[str, Any]] | None = None, standard: str | None = None) -> State:
         s = self.state()
-        a = self._require_role(s, by, "analyst")
+        if standard is not None:
+            # A step of the standard sequence, run with Saksi's own code (see standard.py).
+            if standard not in STEPS or plan_analysis_id is not None:
+                raise WorkflowError(f"no standard step {standard!r}")
+            if by != SYSTEM:
+                raise WorkflowError("standard steps are run by Saksi itself")
+            if requested_by is not None:
+                self._require_role(s, requested_by, "author")
+            a = {"kind": "system"}
+        else:
+            a = self._require_role(s, by, "analyst")
         self._require_stage(s, "ANALYSIS", "RESPONSE")
         self._requested_by(s, a, requested_by)
         if status not in {"ok", "error"}:
@@ -484,16 +499,18 @@ class Project:
             raise WorkflowError(f"{plan_analysis_id!r} was left out of this paper when the plan was confirmed")
         # The label comes from the confirmed plan, fixed before any result; never from the caller.
         planned = s.plan_locked["analyses"][plan_analysis_id] if plan_analysis_id is not None else None
-        label = planned.get("label", "exploratory") if planned else "exploratory"
+        label = "descriptive" if standard else planned.get("label", "exploratory") if planned else "exploratory"
         outputs = self.blobs.get_json(outputs_sha256) if status == "ok" and outputs_sha256 \
             and self.blobs.has(outputs_sha256) else None
         check = sample_check(planned.get("design") if planned else None, outputs)
-        figs = self._figures(s, analysis_id, spec, outputs, label, "pre-specified" if planned else "post hoc",
-                             figures or []) if outputs is not None else []
+        basis = "standard approach" if standard else "pre-specified" if planned else "post hoc"
+        figs = self._figures(s, analysis_id, spec, outputs, label, basis, figures or []) \
+            if outputs is not None and not standard else []
         call_seq = self._log_call(by, call)
         self._emit(by, "analysis.completed", {
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
-            "basis": "pre-specified" if planned else "post hoc", "sample_check": check, "figures": figs,
+            "basis": basis, "standard": standard, "kind": standard or (planned or {}).get("kind") or "other",
+            "sample_check": check, "figures": figs,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
             "execution": execution, "status": status, "error": error, "request_id": request_id,
             "added_in_stage": s.stage, "added_in_round": s.round, "llm_call_seq": call_seq,

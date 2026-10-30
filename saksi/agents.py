@@ -30,7 +30,8 @@ from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .figures import required_figure
 from .tracing import interval_facts
-from .workflow import Project, State, WorkflowError, included_order
+from . import standard
+from .workflow import SYSTEM, Project, State, WorkflowError, included_order
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
 
@@ -247,7 +248,8 @@ class Agents:
             asked = f"Redrafted at the request of {requested_by}: {instructions.strip()}"
             note = f"{asked}. {note}" if note else asked
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
-                                         call=call, requested_by=requested_by, note=note)
+                                         call=call, requested_by=requested_by, note=note,
+                                         table1=_table1_in_data(out.get("table1"), cols))
 
     QUOTE_FIELDS = (("protocol_quote", "the sentence specifying the analysis"),
                     ("primary_quote", "the sentence naming it the primary analysis"),
@@ -293,11 +295,21 @@ class Agents:
         return self.propose_plan(requested_by, instructions)
 
     # -- Running analyses ------------------------------------------------------
-    def run_planned(self, requested_by: str, plan_analysis_id: str | None = None) -> State:
+    def run_planned(self, requested_by: str, plan_analysis_id: str | None = None,
+                    standard_step: str | None = None) -> State:
+        """The standard sequence: data quality, Table 1, then the plan's analyses, descriptive before
+        univariable before multivariable. One step at a time if one is named (keeps web requests short)."""
         s = self.project.state()
         if s.plan_locked is None:
             raise WorkflowError("the analysis plan has not been confirmed by every author")
-        ids = [plan_analysis_id] if plan_analysis_id else included_order(s.plan_locked)
+        if standard_step:
+            if any(a.get("standard") == standard_step and a["status"] == "ok" for a in s.analyses.values()):
+                return s                                     # already done; never a second Table 1
+            return self._run_standard(requested_by, standard_step)
+        if not plan_analysis_id:
+            for step in pending_standard(s):
+                s = self._run_standard(requested_by, step)
+        ids = [plan_analysis_id] if plan_analysis_id else sequence(s.plan_locked)
         for pid in ids:
             if pid not in s.plan_locked["analyses"]:
                 raise WorkflowError(f"{pid!r} is not in the confirmed plan")
@@ -307,6 +319,37 @@ class Agents:
                               analysis_id=self._next_id(pid))
                 s = self.project.state()
         return s
+
+    def _run_standard(self, requested_by: str, step: str) -> State:
+        """A standard step, with Saksi's own code, in the same sandbox and with the same record."""
+        s = self.project.state()
+        if step not in standard.STEPS:
+            raise WorkflowError(f"no standard step {step!r}")
+        t1 = (s.plan_locked or {}).get("table1")
+        if step == "table1" and not t1:
+            raise WorkflowError("the confirmed plan has no Table 1 specification")
+        ds = self._latest(s, "dataset")
+        aid = f"s_{step}"
+        code = standard.code(step, t1)
+        seed = analysis_seed(s.project_id, aid)
+        result = self.executor.run(code, self._bytes(ds), seed=seed)
+        ok = result.status == "ok" and isinstance(result.results, dict) and "error" not in result.results
+        error = None
+        if ok and result.meta.get("data_sha256") != ds["sha256"]:
+            ok, error = False, "the sandbox reports a different data hash from the uploaded dataset"
+        if not ok and error is None:
+            error = result.error or (json.dumps(result.results)[:500] if result.results else "step failed")
+        execution = {"backend": getattr(self.executor, "backend", "unknown"), "seed": seed,
+                     "dataset_sha256": ds["sha256"], "code_by": "saksi (standard code, no model)",
+                     "attempts": [{"attempt": 1, "outcome": "ok" if ok else result.status,
+                                   "execution": result.to_payload()}], "provenance": result.meta}
+        spec = {"id": aid, "title": standard.STEPS[step], "standard": step} | ({"table1": t1} if step == "table1" else {})
+        return self.project.complete_analysis(
+            SYSTEM, self._next_id(aid), plan_analysis_id=None, spec=spec,
+            code_sha256=self.project.blobs.put_text(code),
+            outputs_sha256=self.project.blobs.put_json(result.results) if ok else None,
+            execution=execution, status="ok" if ok else "error", error=error, requested_by=requested_by,
+            standard=step)
 
     def run_request(self, requested_by: str, request_id: str, prompt: str) -> State:
         self.project.request_analysis(requested_by, request_id, prompt)
@@ -357,13 +400,16 @@ class Agents:
                 if result.status == "ok" and not ok:
                     # Ran without crashing but did not deliver: say so, don't call it "ok".
                     outcome = "returned_error" if isinstance(result.results, dict) else "bad_result"
+                if ok and spec.get("kind") == "multivariable" and not isinstance(result.results.get("diagnostics"), dict):
+                    ok, outcome = False, "missing_diagnostics"   # the standard sequence requires them
                 attempts.append({"attempt": attempt, "code_sha256": code_sha, "outcome": outcome,
                                  "execution": result.to_payload()})
                 if ok:
                     break
                 if result.status == "infrastructure_error":
                     break                       # not the code's fault; don't spend a repair on it
-                problem = (f"Running it failed:\n{result.error}" if result.error
+                problem = (MISSING_DIAGNOSTICS if outcome == "missing_diagnostics" else
+                           f"Running it failed:\n{result.error}" if result.error
                            else f"analyse() returned: {json.dumps(result.results)[:1500]}")
             if attempt < MAX_ATTEMPTS:
                 failed_call_seqs.append(self.project.record_model_call(ANALYST_ID, last_call))
@@ -371,7 +417,10 @@ class Agents:
                 messages_user = f"{base_user}\n\nPREVIOUS CODE:\n```python\n{code}```\n\nPROBLEM:\n{problem}"
 
         final = attempts[-1]
-        ok = final["outcome"] == "ok" and result is not None and "error" not in (result.results or {})
+        # Results without diagnostics after one repair are kept, but flagged in the record.
+        diagnostics_missing = final["outcome"] == "missing_diagnostics"
+        ok = final["outcome"] in ("ok", "missing_diagnostics") and result is not None \
+            and "error" not in (result.results or {})
         error = None
         if ok and result.meta.get("data_sha256") != ds["sha256"]:
             ok, error = False, "the sandbox reports a different data hash from the uploaded dataset"
@@ -383,7 +432,7 @@ class Agents:
         execution = {"backend": getattr(self.executor, "backend", "unknown"), "seed": seed,
                      "dataset_sha256": ds["sha256"], "attempts": attempts,
                      "provenance": result.meta if result else {}, "prompt": prompt_ref("code"),
-                     "required_figure": rf["name"] if rf else None,
+                     "required_figure": rf["name"] if rf else None, "diagnostics_missing": diagnostics_missing,
                      "required_figure_drawn": bool(rf) and any(f["name"] == rf["name"] for f in figs),
                      "figure_error": result.figure_error if result else None}
         return self.project.complete_analysis(
@@ -403,9 +452,11 @@ class Agents:
         failed = {k: v for k, v in s.analyses.items() if v["status"] != "ok"}
         if not ok:
             raise AgentError("there are no successful analyses to write up")
-        results = {k: {"label": v["label"], "basis": v.get("basis"), "plan_analysis_id": v["plan_analysis_id"],
-                       "spec": v["spec"], "sample_check": v.get("sample_check"),
-                       "results": self.project.blobs.get_json(v["outputs_sha256"])} for k, v in ok.items()}
+        results = {k: {"label": v["label"], "basis": v.get("basis"), "kind": v.get("kind"),
+                       "plan_analysis_id": v["plan_analysis_id"], "spec": v["spec"],
+                       "sample_check": v.get("sample_check"),
+                       "results": _for_writer(v, self.project.blobs.get_json(v["outputs_sha256"]), ok)}
+                   for k, v in sorted(ok.items(), key=lambda kv: _position(kv[1]))}
         failed_brief = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
                             "title": v["spec"].get("title"), "error": (v.get("error") or "")[:300]}
                         for k, v in failed.items()
@@ -456,6 +507,59 @@ class Agents:
         """Reviewer Assistant briefing. A different model; it gets no executor and cannot edit."""
         from .reviewer import ReviewerAssistant
         return ReviewerAssistant(self.project, self.client).brief(requested_by)
+
+
+MISSING_DIAGNOSTICS = (
+    "This is a multivariable model, so the standard sequence requires its diagnostics. After fitting the model, "
+    "add: from saksi_checks import logistic_checks, linear_checks, and return "
+    "\"diagnostics\": logistic_checks(model) for a binary outcome (linear_checks(model) for a continuous one), "
+    "passing clustered_by=\"<column>\" if observations are clustered. Keep everything else the same.")
+
+
+def _table1_in_data(raw: Any, cols: set[str]) -> dict[str, Any] | None:
+    """The agent's Table 1 proposal, keeping only columns that exist."""
+    t1 = standard.clean_table1(raw)
+    if not t1:
+        return None
+    vs = [v for v in t1["variables"] if v in cols]
+    by = t1["stratify_by"] if t1["stratify_by"] in cols else None
+    return {**t1, "variables": vs, "stratify_by": by} if vs else None
+
+
+def _position(a: dict[str, Any]) -> tuple[int, int]:
+    """Standard order: data quality, Table 1, descriptive, univariable, multivariable, other, post hoc."""
+    if a.get("standard"):
+        return (0, 0 if a["standard"] == "data_quality" else 1)
+    if a.get("basis") == "post hoc":
+        return (6, a.get("seq", 0))
+    return (2 + standard.KIND_ORDER.get(a.get("kind"), 3), a.get("seq", 0))
+
+
+def _for_writer(a: dict[str, Any], out: dict[str, Any], ok: dict[str, Any]) -> dict[str, Any]:
+    """The data-quality step reports every column; the writer needs only the analysed ones."""
+    if a.get("standard") != "data_quality":
+        return out
+    used = set()
+    for v in ok.values():
+        sp = v.get("spec") or {}
+        for x in [sp.get("outcome") or {}] + list(sp.get("exposures") or []) + list(sp.get("covariates") or []):
+            if isinstance(x, dict) and x.get("column"):
+                used.add(x["column"])
+        used.update((sp.get("table1") or {}).get("variables") or [])
+    return {**out, "columns": [c for c in out.get("columns", []) if c["column"] in used] if used else out.get("columns", [])}
+
+
+def sequence(plan: dict[str, Any]) -> list[str]:
+    """Included analyses in the standard order: descriptive, univariable, multivariable, other;
+    protocol order within each."""
+    ids = included_order(plan)
+    return sorted(ids, key=lambda i: (standard.KIND_ORDER.get(plan["analyses"][i].get("kind"), 3), ids.index(i)))
+
+
+def pending_standard(s: State) -> list[str]:
+    steps = ["data_quality"] + (["table1"] if (s.plan_locked or {}).get("table1") else [])
+    done = {a.get("standard") for a in s.analyses.values() if a.get("standard") and a["status"] == "ok"}
+    return [x for x in steps if x not in done]
 
 
 def not_performed(s: State) -> list[dict[str, Any]]:
