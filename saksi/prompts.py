@@ -198,7 +198,8 @@ Rules:
   from its "diagnostics": events per predictor parameter, collinearity (VIF), linearity, influential observations,
   overall fit, discrimination and calibration, and independence. State every flag it lists plainly. Calibration on
   the data the model was fitted to is "apparent": say so, and do not present it as evidence for new patients.
-- Refer to Table 1 as "Table 1"; Saksi builds the table itself from the computed results.
+- Saksi builds the tables itself from the computed results (listed in TABLES). Refer to a table as "Table n" only
+  with its number from TABLES. Point to the table for the full estimates and give only the main ones in the text.
 - Refer to a figure as "Figure n" only if it is listed in FIGURES, using that number. Do not describe what a figure
   shows beyond its caption.
 

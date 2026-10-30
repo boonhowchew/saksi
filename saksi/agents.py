@@ -31,7 +31,8 @@ from .canonical import sha256_text
 from .figures import required_figure
 from .tracing import interval_facts
 from . import standard
-from .workflow import SYSTEM, Project, State, WorkflowError, included_order
+from .workflow import SYSTEM, Project, State, WorkflowError, current, included_order
+from . import tables as tables_mod
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
 
@@ -320,12 +321,13 @@ class Agents:
                 s = self.project.state()
         return s
 
-    def _run_standard(self, requested_by: str, step: str) -> State:
+    def _run_standard(self, requested_by: str, step: str, table1: dict[str, Any] | None = None,
+                      supersedes: str | None = None, reason: str | None = None) -> State:
         """A standard step, with Saksi's own code, in the same sandbox and with the same record."""
         s = self.project.state()
         if step not in standard.STEPS:
             raise WorkflowError(f"no standard step {step!r}")
-        t1 = (s.plan_locked or {}).get("table1")
+        t1 = table1 or (s.plan_locked or {}).get("table1")
         if step == "table1" and not t1:
             raise WorkflowError("the confirmed plan has no Table 1 specification")
         ds = self._latest(s, "dataset")
@@ -349,14 +351,71 @@ class Agents:
             code_sha256=self.project.blobs.put_text(code),
             outputs_sha256=self.project.blobs.put_json(result.results) if ok else None,
             execution=execution, status="ok" if ok else "error", error=error, requested_by=requested_by,
-            standard=step)
+            standard=step, supersedes=supersedes if ok else None, redo_reason=reason if ok else None)
 
-    def run_request(self, requested_by: str, request_id: str, prompt: str) -> State:
+    def change_table1(self, requested_by: str, table1: dict[str, Any], reason: str) -> State:
+        """Authors change Table 1's variables or grouping. Saksi's own code builds it again; no model.
+        The earlier table stays in the record, marked as replaced, with the reason."""
+        s = self.project.state()
+        old = next((k for k, v in current(s).items() if v.get("standard") == "table1"), None)
+        if old is None:
+            raise WorkflowError("Table 1 has not been built yet")
+        cols = list((self._dictionary(s).get("profile") or {}).get("columns") or [])
+        t1 = standard.clean_table1(table1)
+        if t1 is None:
+            raise WorkflowError("give at least one characteristic for Table 1")
+        names = {c.get("name") for c in cols if isinstance(c, dict)} or None
+        if names:
+            unknown = [v for v in t1["variables"] + [t1["stratify_by"] or ""] if v and v not in names]
+            if unknown:
+                raise WorkflowError(f"not columns in the dataset: {', '.join(unknown)}")
+        if not (reason or "").strip():
+            raise WorkflowError("say why Table 1 is changed (kept in the record)")
+        return self._run_standard(requested_by, "table1", table1=t1, supersedes=old, reason=reason)
+
+    def redo(self, requested_by: str, analysis_id: str, reason: str) -> State:
+        """An author asks the Analysis Agent to redo an analysis, for example because its code mis-coded a
+        variable. The new run replaces it and keeps its label, which was fixed before any result; the
+        earlier run stays in the record, marked as replaced with the reason, and the reviewer sees both."""
+        s = self.project.state()
+        old = current(s).get(analysis_id)
+        if old is None or old.get("standard"):
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis the Analysis Agent ran")
+        if not (reason or "").strip():
+            raise WorkflowError("say what is wrong and should be redone")
+        pid = old.get("plan_analysis_id")
+        spec = dict(s.plan_locked["analyses"][pid]) if pid else dict(old["spec"])
+        spec["redo"] = {"of": analysis_id, "reason": reason}
+        context = (f"THE AUTHORS ASKED FOR THIS ANALYSIS TO BE REDONE. Their reason: {reason}\n"
+                   "Keep to the ANALYSIS SPECIFICATION; change only what the reason points to. Its earlier code:\n"
+                   f"```python\n{self.project.blobs.get_text(old['code_sha256'])[:12000]}\n```")
+        base = pid or old["spec"].get("id") or analysis_id
+        return self._run_one(requested_by, spec, plan_analysis_id=pid, analysis_id=self._next_id(base),
+                             request_id=old.get("request_id"), context=context,
+                             supersedes=analysis_id, redo_reason=reason)
+
+    def run_request(self, requested_by: str, request_id: str, prompt: str, based_on: str | None = None) -> State:
+        """An exploratory analysis an author asks for: new, or a variant of an existing analysis (which stays)."""
+        s = self.project.state()
+        parent = current(s).get(based_on) if based_on else None
+        if based_on and (parent is None or parent.get("standard")):
+            raise WorkflowError(f"{based_on!r} is not a current analysis the Analysis Agent ran")
         self.project.request_analysis(requested_by, request_id, prompt)
         spec = {"id": f"x_{request_id}", "title": prompt, "author_request": prompt,
                 "note": "Exploratory: requested by an author, not specified in the protocol."}
+        context = None
+        if parent:
+            ptitle = parent["spec"].get("title") or based_on
+            spec.update({"title": f"{ptitle}: {prompt}"[:160], "kind": parent.get("kind") or "other",
+                         "based_on": {"analysis_id": based_on, "title": ptitle},
+                         "note": f"Exploratory: a variant of {based_on}, asked for by an author after seeing its "
+                                 "results. The original stays and is reported too."})
+            context = (f"THIS IS A VARIANT OF AN EARLIER ANALYSIS ({based_on}). Its specification:\n"
+                       f"{json.dumps(parent['spec'], indent=1)[:6000]}\nIts code:\n```python\n"
+                       f"{self.project.blobs.get_text(parent['code_sha256'])[:12000]}\n```\n"
+                       f"Change it as the author asks: {prompt}")
         return self._run_one(requested_by, spec, plan_analysis_id=None, analysis_id=self._next_id(spec["id"]),
-                             request_id=request_id)
+                             request_id=request_id, context=context)
 
     def _next_id(self, base: str) -> str:
         s = self.project.state()
@@ -364,7 +423,8 @@ class Agents:
         return base if n == 0 else f"{base}.r{n}"
 
     def _run_one(self, requested_by: str, spec: dict[str, Any], *, plan_analysis_id: str | None,
-                 analysis_id: str, request_id: str | None = None) -> State:
+                 analysis_id: str, request_id: str | None = None, context: str | None = None,
+                 supersedes: str | None = None, redo_reason: str | None = None) -> State:
         s = self.project.state()
         ds = self._latest(s, "dataset")
         data = self._bytes(ds)
@@ -378,7 +438,8 @@ class Agents:
                      f"DATA DICTIONARY:\n{json.dumps(dic, indent=1)}\n\n"
                      f"DATASET PROFILE (aggregate only{'; only the columns this analysis names' if all_names else ''}):\n"
                      f"{json.dumps(prof, indent=1)}"
-                     + (f"\n\nALL COLUMN NAMES IN THE CSV:\n{json.dumps(all_names)}" if all_names else ""))
+                     + (f"\n\nALL COLUMN NAMES IN THE CSV:\n{json.dumps(all_names)}" if all_names else "")
+                     + (f"\n\n{context}" if context else ""))
         messages_user, task, attempts, failed_call_seqs = base_user, "code", [], []
         code, result, last_call = "", None, None
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -440,7 +501,8 @@ class Agents:
             code_sha256=self.project.blobs.put_text(code),
             outputs_sha256=self.project.blobs.put_json(result.results) if ok else None,
             execution=execution, status="ok" if ok else "error", error=error, request_id=request_id,
-            call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs, figures=figs)
+            call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs, figures=figs,
+            supersedes=supersedes if ok else None, redo_reason=redo_reason if ok else None)
 
     # -- Writing -------------------------------------------------------------
     def write_draft(self, requested_by: str) -> State:
@@ -448,7 +510,7 @@ class Agents:
         s = self.project.state()
         protocol, _ = self._protocol_text(s)
         d = self._dictionary(s)
-        ok = {k: v for k, v in s.analyses.items() if v["status"] == "ok"}
+        ok = current(s)
         failed = {k: v for k, v in s.analyses.items() if v["status"] != "ok"}
         if not ok:
             raise AgentError("there are no successful analyses to write up")
@@ -473,7 +535,9 @@ class Agents:
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}\n\n"
                 f"PROTOCOL ANALYSES NOT PERFORMED IN THIS PAPER (authors' decision, with reasons):\n"
                 f"{json.dumps(not_performed(s), indent=1)}\n\n"
-                f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}")
+                f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}\n\n"
+                f"TABLES (built by Saksi from RESULTS; refer to them only by these numbers):\n"
+                f"{tables_mod.listing(s, self.project.blobs)}")
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.
         attempts, text, last_call = [], "", None
@@ -526,13 +590,7 @@ def _table1_in_data(raw: Any, cols: set[str]) -> dict[str, Any] | None:
     return {**t1, "variables": vs, "stratify_by": by} if vs else None
 
 
-def _position(a: dict[str, Any]) -> tuple[int, int]:
-    """Standard order: data quality, Table 1, descriptive, univariable, multivariable, other, post hoc."""
-    if a.get("standard"):
-        return (0, 0 if a["standard"] == "data_quality" else 1)
-    if a.get("basis") == "post hoc":
-        return (6, a.get("seq", 0))
-    return (2 + standard.KIND_ORDER.get(a.get("kind"), 3), a.get("seq", 0))
+_position = standard.position
 
 
 def _for_writer(a: dict[str, Any], out: dict[str, Any], ok: dict[str, Any]) -> dict[str, Any]:
@@ -584,7 +642,8 @@ def _focus(d: dict[str, Any], specs: list[dict[str, Any]]):
 
 
 def _figure_list(s: State, ok: dict[str, Any]) -> str:
-    rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}" for f in s.figures if f["analysis_id"] in ok]
+    rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}"
+            for f in sorted(s.figures, key=lambda f: f["number"] or 0) if f["analysis_id"] in ok and f["number"]]
     return "\n".join(rows) or "(none)"
 
 

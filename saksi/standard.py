@@ -161,6 +161,17 @@ def analyse(data_path, seed):
 '''
 
 
+def position(a: dict[str, Any]) -> tuple[int, int]:
+    """Reporting order: data quality, Table 1, descriptive, univariable, multivariable, other, post hoc.
+    A redone analysis keeps the place of the one it replaced (order_seq)."""
+    at = a.get("order_seq", a.get("seq", 0))
+    if a.get("standard"):
+        return (0, 0 if a["standard"] == "data_quality" else 1)
+    if a.get("basis") == "post hoc":
+        return (6, at)
+    return (2 + KIND_ORDER.get(a.get("kind"), 3), at)
+
+
 def code(step: str, table1: dict[str, Any] | None = None) -> str:
     """Saksi's own code for a standard step."""
     if step == "data_quality":

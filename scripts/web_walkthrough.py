@@ -90,7 +90,32 @@ with sync_playwright() as p:
     signout(page); signin(page, toks["siti"])
     page.get_by_role("tab", name="Plan").click(); click(page, "Confirm this plan")
     print("stage after both confirm:", page.locator(".progress .where strong").inner_text())
-    page.get_by_role("tab", name="Analyses").click(); click(page, "Run the analyses"); click(page, "Accept these results")
+    page.get_by_role("tab", name="Analyses").click(); click(page, "Run the analyses")
+    # The AI box under each analysis: a variant of the primary model, a redo of the AUC; and Table 1 rebuilt.
+    def ask(aid, text, redo=False):
+        page.locator(f"details.askai:has(form[data-id='{aid}']) > summary").click()
+        form = page.locator(f"form[data-form=askai][data-id='{aid}']")
+        if redo:
+            form.locator("input[value=redo]").check()
+        form.locator("textarea[name=text]").fill(text)
+        form.get_by_role("button", name="Send to the Analysis Agent").click()
+        page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000); page.wait_for_timeout(250)
+        print(f"ask {aid} ({'redo' if redo else 'variant'}):", note(page)[:90])
+    ask("primary", "Add waist circumference as a covariate")
+    ask("auc", "Use DeLong's method for the confidence interval", redo=True)
+    page.locator("details.askai:has(form[data-form=t1change]) > summary").click()
+    t1 = page.locator("form[data-form=t1change]")
+    t1.locator("textarea[name=vars]").fill("age, booking_bmi, parity, previous_gdm, ethnicity")
+    t1.locator("input[name=reason]").fill("Clinic is described in Methods instead")
+    t1.get_by_role("button", name="Rebuild Table 1").click()
+    page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000); page.wait_for_timeout(250)
+    print("table 1:", note(page)[:80])
+    assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
+    with page.expect_download() as dl:
+        page.get_by_role("button", name="Download all as one Word file").first.click()
+    print("tables docx bytes:", Path(dl.value.path()).stat().st_size)
+    shot(page, "05b-analyses-ai")
+    click(page, "Accept these results")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")  # resume saved identity (author A)
     print("acting as:", page.locator(".next strong").inner_text())
     page.get_by_role("tab", name="Analyses").click(); page.get_by_text("How it ran").first.click(); shot(page, "05-analyses")

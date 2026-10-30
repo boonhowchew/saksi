@@ -28,7 +28,7 @@ from .documents import quote_found
 from .llm import ModelClient
 from .prompts import REVIEW_ASSIST, REVIEW_FOLLOWUP, prompt_ref
 from .tracing import interval_facts
-from .workflow import Project, State, WorkflowError, summarise_checks
+from .workflow import Project, State, WorkflowError, current, summarise_checks
 
 REVIEWER_ASSIST_ID = "agent:reviewer_assist"
 PROVIDER = "baseten"
@@ -93,10 +93,13 @@ class ReviewerAssistant:
         protocol, pm = protocol_text(self.project, s)
         plan = {aid: {k: v for k, v in a.items() if k not in ("prompt",)}
                 for aid, a in (s.plan_locked or {}).get("analyses", {}).items()}
-        ok = {k: v for k, v in s.analyses.items() if v["status"] == "ok" and blobs.has(v.get("outputs_sha256") or "")}
+        ok = {k: v for k, v in current(s).items() if blobs.has(v["outputs_sha256"])}
         results = {k: {"label": v["label"], "basis": v.get("basis"), "plan_analysis_id": v["plan_analysis_id"],
                        "title": v["spec"].get("title"), "sample_check": v.get("sample_check"),
                        "protocol_departure": v.get("protocol_deviation"),
+                       "redone": ({"replaces": v["supersedes"], "authors_reason": v.get("redo_reason")}
+                                  if v.get("supersedes") else None),
+                       "variant_of": (v["spec"].get("based_on") or {}).get("analysis_id"),
                        "results": blobs.get_json(v["outputs_sha256"])}
                    for k, v in ok.items()}
         facts = interval_facts({k: v["results"] for k, v in results.items()})

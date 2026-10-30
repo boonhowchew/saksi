@@ -6,6 +6,8 @@
 import json
 from pathlib import Path
 
+import re
+
 import pytest
 
 from saksi import demo_data
@@ -14,7 +16,7 @@ from saksi.blobs import BlobStore
 from saksi.canonical import sha256_bytes
 from saksi.llm import ModelClient
 from saksi.sandbox import LocalExecutor
-from saksi.workflow import ledger
+from saksi.workflow import WorkflowError, ledger
 from tests.test_sandbox import GOOD
 
 AUC_BROKEN = '''
@@ -506,3 +508,93 @@ def test_diagnostics_still_missing_after_repair_are_flagged_not_hidden(setup):
     s = agents.run_planned("bhc")
     prim = s.analyses["primary"]
     assert prim["status"] == "ok" and prim["execution"]["diagnostics_missing"] is True
+
+
+def _standard_run(p, agents, model, extra_code=()):
+    """Curate, plan (multivariable primary + Table 1), confirm, run the standard sequence."""
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    agents.curate("bhc")
+    model.script["plan"] = [{"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable")],
+                             "table1": {"stratify_by": "gdm", "variables": ["age", "parity", "ethnicity"]}}]
+    model.script["code"] = [fence(GOOD_WITH_DIAGNOSTICS)] + [fence(c) for c in extra_code]
+    s = agents.propose_plan("bhc")
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    return agents.run_planned("bhc")
+
+
+def test_publication_tables_built_by_code_and_exported_to_word(setup):
+    import io
+    from docx import Document
+    from saksi import tables
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    ts = tables.build(s, p.blobs)
+    assert [t["analysis_id"] for t in ts] == ["s_table1", "primary"] and [t["number"] for t in ts] == [1, 2]
+    t1, t2 = ts
+    assert t1["columns"][0] == "Characteristic" and t1["columns"][-1] == "P value" and "(n = 20)" in t1["columns"][3]
+    assert any(r.get("indent") for r in t1["rows"])                       # categories under their variable
+    assert t2["columns"] == ["Variable", "Adjusted OR (95% CI)", "P value"]
+    bmi = next(r for r in t2["rows"] if r["cells"][0] in ("booking_bmi", "BMI at booking"))
+    assert re.fullmatch(r"\d\.\d\d \(\d\.\d\d to \d\.\d\d\)", bmi["cells"][1])
+    notes = " ".join(t2["footnotes"])
+    assert "events per predictor parameter" in notes and "Primary (confirmatory) analysis" in notes
+    assert "Below the protocol's planned sample" in notes and "OR, odds ratio" in notes
+    assert "Table 2 [A:primary]" in tables.listing(s, p.blobs)
+    doc = Document(io.BytesIO(tables.to_docx(ts)))
+    text = "\n".join(par.text for par in doc.paragraphs)
+    assert "Table 1. Characteristics of the participants" in text and len(doc.tables) == 2
+    assert doc.tables[1].rows[0].cells[1].text == "Adjusted OR (95% CI)"
+
+
+def test_redo_replaces_the_run_keeps_the_label_and_the_record(setup):
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    old_figs = [f["number"] for f in s.figures if f["analysis_id"] == "primary"]
+    with pytest.raises(WorkflowError, match="say what is wrong"):
+        agents.redo("bhc", "primary", " ")
+    s = agents.redo("bhc", "primary", "Parity should be categorical, as the protocol says.")
+    new = s.analyses["primary.r1"]
+    assert s.analyses["primary"]["superseded_by"] == "primary.r1" and new["supersedes"] == "primary"
+    assert new["label"] == "confirmatory" and new["plan_analysis_id"] == "primary"
+    assert new["redo_reason"].startswith("Parity") and new["requested_by"] == "bhc"
+    assert "THE AUTHORS ASKED FOR THIS ANALYSIS TO BE REDONE" in model.bodies[-1]["messages"][1]["content"]
+    # The replaced run is out of the paper: not required, its figures unnumbered; the new one takes its place.
+    from saksi.workflow import current
+    assert "primary" not in current(s) and "primary.r1" in current(s)
+    assert all(f["number"] is None for f in s.figures if f["analysis_id"] == "primary")
+    assert sorted(f["number"] for f in s.figures if f["analysis_id"] == "primary.r1") == sorted(old_figs)
+    r = p.check_text("There were 4.5 outcome events per predictor parameter [A:primary.r1]. "
+                     "Table 1 describes the sample [A:s_table1]. Records were checked [A:s_data_quality].")
+    assert r["analyses_not_reported"] == []
+    with pytest.raises(WorkflowError, match="not a current analysis"):
+        agents.redo("bhc", "primary", "again")
+
+
+def test_variant_is_exploratory_and_the_original_stays(setup):
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    s = agents.run_request("bhc", "q1", "add waist circumference", based_on="primary")
+    v = s.analyses["x_q1"]
+    assert v["label"] == "exploratory" and v["basis"] == "post hoc" and v["kind"] == "multivariable"
+    assert v["spec"]["based_on"]["analysis_id"] == "primary" and "BMI and GDM: add waist" in v["spec"]["title"]
+    assert "THIS IS A VARIANT" in model.bodies[-1]["messages"][1]["content"]
+    assert not s.analyses["primary"].get("superseded_by")                 # the original is still reported
+    with pytest.raises(WorkflowError, match="not a current analysis"):
+        agents.run_request("bhc", "q2", "x", based_on="s_table1")
+
+
+def test_authors_change_table1_with_a_reason(setup):
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    with pytest.raises(WorkflowError, match="not columns in the dataset"):
+        agents.change_table1("bhc", {"stratify_by": "gdm", "variables": ["age", "nope"]}, "fewer rows")
+    with pytest.raises(WorkflowError, match="say why"):
+        agents.change_table1("bhc", {"stratify_by": "gdm", "variables": ["age"]}, "")
+    s = agents.change_table1("bhc", {"stratify_by": "gdm", "variables": ["age", "booking_bmi"]}, "Add BMI.")
+    new = s.analyses["s_table1.r1"]
+    assert new["supersedes"] == "s_table1" and new["by"] == "system" and new["spec"]["table1"]["variables"] == ["age", "booking_bmi"]
+    t1 = p.blobs.get_json(new["outputs_sha256"])
+    assert [r["variable"] for r in t1["rows"]] == ["age", "booking_bmi"]

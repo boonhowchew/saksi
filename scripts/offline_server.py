@@ -53,13 +53,15 @@ DRAFT = f"""[Authors: introduction]
 As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration.
 
 ## Results
-The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status [A:s_table1].
+The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status [A:s_table1.r1].
 
 Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events [A:primary]. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
 The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
 
-In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} [A:auc].
+In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} [A:x_q1].
+
+In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} [A:auc.r1].
 
 ## Discussion
 The intervals are wide and include no association, so the data are compatible with both no association and a modest one. [Authors: comparison with previous studies]
@@ -78,7 +80,8 @@ REVIEW2 = {"primary_claim": "Unchanged.", "summary": "R1 is dealt with in the Di
            "item_assessments": [{"item_id": "R1", "assessment": "addressed", "quote": LIMIT[:70], "note": "A limitation now states this."}]}
 model = ScriptedModel({"curate": [CURATOR_REPLY],
                        "plan": [{"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable"), AUC_PLAN], "table1": TABLE1}],
-                       "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
+                       # the planned analyses; then, from the walk-through's AI boxes, a variant and a redo
+                       "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED), fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
 root = tempfile.mkdtemp()
 app = create_app(root, agents_factory=lambda p: Agents(p, ModelClient(p.blobs, transport=model, mode="live"), LocalExecutor()))
 print(f"Offline Saksi on http://127.0.0.1:8765 (data in {root})")

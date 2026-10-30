@@ -81,6 +81,29 @@ fieldset.roles { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
 .copyrow { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; }
 .copyrow .secret { flex: 1 1 18rem; }
 .diag { border-top: 1px dashed var(--rule); margin-top: .9rem; padding-top: .6rem; }
+.pubtable { margin: .8rem 0 1rem; }
+.pubtable .ptitle { margin: 0 0 .35rem; font-size: .92rem; }
+table.pub { font-family: var(--serif); font-size: .9rem; font-variant-numeric: tabular-nums; }
+table.pub th, table.pub td { border: 0; padding: .28rem .6rem; color: var(--ink); }
+table.pub th { font-weight: 600; vertical-align: bottom; }
+table.pub thead tr { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); }
+table.pub tbody tr:last-child { border-bottom: 2px solid var(--ink); }
+table.pub .r { text-align: right; white-space: nowrap; }
+table.pub td.ind { padding-left: 1.7rem; }
+table.pub sup, .pnotes sup { line-height: 0; font-size: .72em; }
+.pubtable .pnotes p { font-size: .78rem; margin: .12rem 0; color: var(--muted); }
+.pubtable .ptools { margin: .35rem 0 0; }
+details.askai { border: 1px solid var(--indigo); border-radius: 6px; margin: .9rem 0 .2rem; background: #F4F6FB; }
+details.askai > summary { padding: .5rem .7rem; font-weight: 600; color: var(--indigo); cursor: pointer; }
+details.askai > form { padding: 0 .8rem .8rem; }
+.aibadge { display: inline-block; font: 700 .7rem var(--sans); letter-spacing: .04em; color: #fff; background: var(--indigo);
+  border-radius: 4px; padding: .08rem .35rem; margin-right: .35rem; vertical-align: .08rem; }
+fieldset.choice { border: 0; padding: 0; margin: 0 0 .4rem; display: grid; gap: .45rem; }
+fieldset.choice label.inline { align-items: flex-start; gap: .5rem; }
+fieldset.choice input { margin-top: .25rem; }
+details.replaced { margin: .8rem 0 0; border-top: 1px dashed var(--rule); padding-top: .4rem; }
+details.replaced > summary { color: var(--muted); font-size: .85rem; cursor: pointer; }
+details.replaced .item { opacity: .8; }
 .diag h4 { margin: 0 0 .4rem; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
@@ -746,12 +769,62 @@ async function figureHtml(f) {
   const c = f.caption_check || {};
   const problems = (c.untraced ? `${c.untraced} number${c.untraced > 1 ? "s" : ""} not in the results` : "")
     + (c.exploratory_not_labelled ? `${c.untraced ? "; " : ""}does not say exploratory` : "");
-  return `<figure class="fig"><img src="${uri}" alt="Figure ${f.number}: ${esc(f.caption)}" loading="lazy">
-    <figcaption><strong>Figure ${f.number}.</strong> ${esc(f.caption)}
+  return `<figure class="fig"><img src="${uri}" alt="Figure ${f.number || "(replaced)"}: ${esc(f.caption)}" loading="lazy">
+    <figcaption><strong>${f.number ? `Figure ${f.number}.` : "Replaced figure."}</strong> ${esc(f.caption)}
     <br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
     ${problems ? `<span class="tag attn">caption: ${esc(problems)}</span>` : `<span class="tag good">caption checked</span>`}
     ${f.warning ? `<span class="tag bad">${esc(f.warning)}</span>` : ""}
-    <a class="small" href="${uri}" download="saksi-figure-${f.number}.svg">Download SVG</a></figcaption></figure>`;
+    <a class="small" href="${uri}" download="saksi-figure-${f.number || "replaced"}.svg">Download SVG</a></figcaption></figure>`;
+}
+
+/* Publication-ready tables: built on the server from the recorded results, no model */
+async function tablesNow() {
+  const seq = S.state.head_seq;
+  if (S.tables?.pid !== S.pid || S.tables?.seq !== seq) {
+    let list = [];
+    try { list = (await api(`/projects/${S.pid}/tables`)).tables || []; } catch { /* shown as no tables */ }
+    S.tables = { pid: S.pid, seq, list };
+  }
+  return S.tables.list;
+}
+const noteHtml = (n) => { const m = /^([a-j]) (.*)$/.exec(n); return m ? `<sup>${esc(m[1])}</sup> ${esc(m[2])}` : esc(n); };
+function pubTableHtml(t, tools = true) {
+  const head = t.columns.map((c, j) => `<th class="${j ? "r" : ""}">${esc(c).replace(/\n/g, "<br>")}</th>`).join("");
+  const body = t.rows.map((r) => `<tr>${r.cells.map((c, j) => { const mk = (r.marks || {})[j]; return `<td class="${j ? "r" : ""}${r.indent && !j ? " ind" : ""}">${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}</td>`; }).join("")}</tr>`).join("");
+  return `<div class="pubtable" id="pt-${t.number}"><p class="ptitle"><strong>Table ${t.number}.</strong> ${esc(t.title)}</p>
+    <div class="tablewrap"><table class="pub"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+    <div class="pnotes">${t.footnotes.map((n) => `<p>${noteHtml(n)}</p>`).join("")}</div>
+    ${tools ? `<p class="small ptools"><span class="muted">Built by Saksi from the recorded results, without a model; journal layout.</span>
+      <button class="linkish" data-action="copytable" data-n="${t.number}">Copy for Word</button> ·
+      <button class="linkish" data-action="tabledocx" data-n="${t.number}">Download .docx</button></p>` : ""}</div>`;
+}
+function wordHtml(t) {
+  const cell = (txt, j, extra = "") => `<td style="padding:2pt 6pt;${j ? "text-align:right;white-space:nowrap;" : ""}${extra}">${txt}</td>`;
+  const top = "border-top:1.5pt solid black;", mid = "border-bottom:.75pt solid black;", bot = "border-bottom:1.5pt solid black;";
+  const head = t.columns.map((c, j) => cell(`<b>${esc(c).replace(/\n/g, " ")}</b>`, j, top + mid)).join("");
+  const body = t.rows.map((r, i) => `<tr>${r.cells.map((c, j) => { const mk = (r.marks || {})[j];
+    return cell(`${r.indent && !j ? "&nbsp;&nbsp;&nbsp;&nbsp;" : ""}${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}`, j, i === t.rows.length - 1 ? bot : ""); }).join("")}</tr>`).join("");
+  return `<p style="font-family:Calibri,Arial;font-size:10pt"><b>Table ${t.number}.</b> ${esc(t.title)}</p>
+    <table style="border-collapse:collapse;font-family:Calibri,Arial;font-size:10pt"><tr>${head}</tr>${body}</table>
+    ${t.footnotes.map((n) => `<p style="font-family:Calibri,Arial;font-size:8.5pt;margin:0">${noteHtml(n)}</p>`).join("")}`;
+}
+async function copyTable(n) {
+  const t = (S.tables?.list || []).find((x) => x.number === +n);
+  if (!t) throw new Error("That table is not available any more; reload the page.");
+  const tsv = [t.columns.map((c) => c.replace(/\n/g, " ")), ...t.rows.map((r) => r.cells)].map((r) => r.join("\t")).join("\n");
+  if (window.ClipboardItem && navigator.clipboard?.write) {
+    await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([wordHtml(t)], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })]);
+  } else {
+    const range = document.createRange(); range.selectNode(document.getElementById("pt-" + n));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); document.execCommand("copy"); sel.removeAllRanges();
+  }
+}
+async function downloadTables(n) {
+  const r = await fetch(`/projects/${S.pid}/tables.docx${n ? "?number=" + n : ""}`, { headers: { "X-Saksi-Token": S.token } });
+  if (!r.ok) throw new Error(`The tables could not be prepared (the server answered ${r.status}).`);
+  const url = URL.createObjectURL(await r.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: `saksi-${S.pid}-${n ? "table-" + n : "tables"}.docx` });
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /* Analyses: the standard sequence */
@@ -833,14 +906,19 @@ function diagnosticsHtml(d) {
     </dl></div>`;
 }
 
-async function analysisBlock(id, a) {
+async function analysisBlock(id, a, tables = [], canAsk = false) {
   const s = S.state, ex = a.execution || {}, pv = ex.provenance || {};
   const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
   const est = out?.estimates || [];
+  const pub = tables.find((t) => t.analysis_id === id);
   let body;
   if (!out) body = `<p class="msg err small">${esc(a.error || "")}</p>`;
   else if (a.standard === "data_quality") body = qualityHtml(out);
-  else if (a.standard === "table1") body = table1Html(out);
+  else if (a.standard === "table1") body = pub ? pubTableHtml(pub) : table1Html(out);
+  else if (pub) body = `${pubTableHtml(pub)}
+      ${(out.notes || []).length ? `<details class="small"><summary>The Analysis Agent's notes</summary><ul>${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}
+      ${diagnosticsHtml(out.diagnostics)}
+      ${a.kind === "multivariable" && !out.diagnostics ? `<p class="msg warn small">The standard diagnostics are missing for this multivariable model${ex.diagnostics_missing ? ", even after the Analysis Agent was asked to add them" : ""}. Its results should not be relied on until they are checked.</p>` : ""}`;
   else body = `<p class="small">${out.n_analysed != null ? `Analysed ${esc(out.n_analysed)}${out.n_events != null ? `, with ${esc(out.n_events)} outcome events` : ""}${out.n_excluded != null ? `; excluded ${esc(out.n_excluded)}${out.exclusion_reason ? ` (${esc(out.exclusion_reason)})` : ""}` : "; exclusions not reported"}. ` : ""}${esc(out.model?.formula_or_description || "")}</p>
       ${est.length ? `<div class="tablewrap"><table><thead><tr><th>Term</th><th>Measure</th><th>Estimate</th><th>95% CI</th><th>p</th></tr></thead><tbody>
       ${est.map((e) => `<tr><td>${esc(e.name)}</td><td>${esc(e.measure)}</td><td class="num">${num(e.estimate)}</td><td class="num">${e.ci_lower != null ? num(e.ci_lower) + " to " + num(e.ci_upper) : ""}</td><td class="num">${pval(e.p_value)}</td></tr>`).join("")}</tbody></table></div>` : ""}
@@ -849,7 +927,11 @@ async function analysisBlock(id, a) {
       ${a.kind === "multivariable" && !out.diagnostics ? `<p class="msg warn small">The standard diagnostics are missing for this multivariable model${ex.diagnostics_missing ? ", even after the Analysis Agent was asked to add them" : ""}. Its results should not be relied on until they are checked.</p>` : ""}`;
   return `<div class="item ${a.status === "ok" ? "good" : "attn"}">
     <h3>${esc(a.spec?.title || id)} ${a.standard ? `<span class="tag">descriptive</span>` : labelTag(a)}
+      ${canAsk && !a.superseded_by && a.status === "ok" && !a.standard ? `<button class="linkish small" data-action="openask" data-id="${esc(id)}" title="Ask the Analysis Agent to run a variant or redo this analysis"><span class="aibadge">AI</span>change</button>` : ""}
       <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
+    ${a.superseded_by ? `<p class="msg warn small">Replaced by ${esc(a.superseded_by)}; kept in the record. It is not part of the paper.</p>` : ""}
+    ${a.supersedes ? `<p class="msg small">${a.standard ? "Rebuilt" : "Redone"} at the request of ${esc(name(a.requested_by))}: “${esc(a.redo_reason)}”. It replaces ${esc(a.supersedes)}, which is kept below.${a.standard ? "" : " The label was fixed before any result and does not change."}</p>` : ""}
+    ${a.spec?.based_on ? `<p class="small">A variant of <strong>${esc(a.spec.based_on.title)}</strong> (${esc(a.spec.based_on.analysis_id)}), asked for after its results were seen, so exploratory. The original is reported too.</p>` : ""}
     ${sampleBlock(a.sample_check)}
     ${departureHtml(a.protocol_deviation)}
     ${a.requested_by ? `<p class="small muted">${a.standard ? "Run" : "Requested"} by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
@@ -866,15 +948,39 @@ async function analysisBlock(id, a) {
       <dt>Packages</dt><dd class="small">${esc(Object.entries(pv.packages || {}).map(([k, v]) => k + " " + v).join(", "))}</dd>
       <dt>Code</dt><dd><span class="hash">${short(a.code_sha256)}</span> <button class="linkish" data-action="showcode" data-sha="${esc(a.code_sha256)}">Show code</button></dd>
       ${ex.figure_error ? `<dt>Figure error</dt><dd><pre>${esc(ex.figure_error)}</pre></dd>` : ""}</dl>
-      <div id="code-${esc(a.code_sha256)}"></div></details></div>`;
+      <div id="code-${esc(a.code_sha256)}"></div></details>
+    ${canAsk && !a.superseded_by && a.status === "ok" ? askBox(id, a) : ""}
+    ${a.supersedes && s.analyses[a.supersedes] ? `<details class="replaced"><summary>The earlier run, ${esc(a.supersedes)}, replaced</summary>${await analysisBlock(a.supersedes, s.analyses[a.supersedes], [], false)}</details>` : ""}</div>`;
+}
+
+function askBox(id, a) {
+  if (a.standard === "data_quality") return "";
+  if (a.standard === "table1") {
+    const t1 = a.spec?.table1 || S.state.plan_locked?.table1 || {};
+    return `<details class="askai"><summary>Change Table 1 <span class="small muted">(Saksi's own code rebuilds it; no AI)</span></summary>
+      <form class="stack" data-form="t1change">
+        <label><span>Stratify by (a column, usually the outcome; empty for none)</span><input type="text" name="by" value="${esc(t1.stratify_by || "")}"></label>
+        <label><span>Characteristics, in order (column names, separated by commas)</span><textarea name="vars" required>${esc((t1.variables || []).join(", "))}</textarea></label>
+        <label><span>Why (kept in the record)</span><input type="text" name="reason" required placeholder="For example: add booking BMI"></label>
+        <div><button class="btn" data-label="Rebuilding Table 1">Rebuild Table 1</button></div></form></details>`;
+  }
+  return `<details class="askai"><summary><span class="aibadge">AI</span>Ask the Analysis Agent to change this analysis</summary>
+    <form class="stack" data-form="askai" data-id="${esc(id)}">
+      <fieldset class="choice"><legend class="small muted">What should happen?</legend>
+        <label class="inline"><input type="radio" name="mode" value="variant" checked><span><strong>Run a variant</strong>: for example another covariate, model or subgroup. It is added as a new exploratory analysis; this one stays and is reported.</span></label>
+        <label class="inline"><input type="radio" name="mode" value="redo"><span><strong>Redo this analysis</strong>: when something in it is wrong, for example a mis-coded variable. The new run replaces this one and keeps its label (${esc(labelText(a))}); this run stays in the record, and the reviewer sees both.</span></label>
+      </fieldset>
+      <label><span>Your instruction to the Analysis Agent</span><textarea name="text" required placeholder="For example: treat parity as categorical (0, 1, 2 or more)"></textarea></label>
+      <div><button class="btn" data-label="The Analysis Agent is working">Send to the Analysis Agent</button></div></form></details>`;
 }
 
 async function analyses() {
   const s = S.state;
   const canRun = isAuthor() && s.stage === "ANALYSIS";
   const pending = s.plan_locked ? pendingSteps() : [];
+  const tables = await tablesNow();
   const byStep = {};
-  for (const [id, a] of Object.entries(s.analyses).sort((x, y) => x[1].seq - y[1].seq)) (byStep[stepOf(a)] ||= []).push([id, a]);
+  for (const [id, a] of Object.entries(s.analyses).sort((x, y) => x[1].seq - y[1].seq)) if (!a.superseded_by) (byStep[stepOf(a)] ||= []).push([id, a]);
   const sections = [];
   for (const [key, title, who] of SEQ) {
     const list = byStep[key] || [];
@@ -883,7 +989,7 @@ async function analyses() {
       || (q.args.plan_analysis_id && stepOf({ kind: s.plan_locked.analyses[q.args.plan_analysis_id].kind }) === key));
     if (!list.length && !waiting) continue;
     sections.push(`<section><h2 class="step">${esc(title)} ${who ? `<span class="who">${esc(who)}</span>` : ""}</h2>
-      ${(await Promise.all(list.map(([id, a]) => analysisBlock(id, a)))).join("")}
+      ${(await Promise.all(list.map(([id, a]) => analysisBlock(id, a, tables, canRun)))).join("")}
       ${waiting ? `<p class="small muted">Not run yet.</p>` : ""}</section>`);
   }
   const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
@@ -891,6 +997,8 @@ async function analyses() {
     <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, pre-specified or added later. <strong>Descriptive</strong>: the standard data-quality check and Table 1.</p>
     ${canRun && pending.length ? `<div class="bigaction"><p><strong>${pending.length} step${pending.length > 1 ? "s" : ""} to run</strong>, in order: ${esc(pending.map((q) => q.label).join("; "))}. Each runs in a locked-down sandbox on the uploaded file; the models never see a data row.</p>
       <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
+    ${tables.length ? `<p class="small"><strong>${tables.length} publication-ready table${tables.length > 1 ? "s" : ""}</strong>, numbered as in the paper. <button class="linkish" data-action="tabledocx">Download all as one Word file</button></p>` : ""}
+    ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the Analysis Agent to run a variant or to redo it.</p>` : ""}
     ${sections.join("")}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
       <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
@@ -975,12 +1083,12 @@ async function draft() {
       <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></section>` : ""}`;
 }
 async function draftTable1() {
-  const a = Object.values(S.state.analyses).filter((x) => x.standard === "table1" && x.status === "ok").at(-1);
-  if (!a) return "";
-  const t = await blobJSON(a.outputs_sha256);
-  return t ? `<section><h2>Table 1</h2><p class="small muted">Built by Saksi from the computed results; the draft refers to it as Table 1.</p>${table1Html(t)}</section>` : "";
+  const tables = await tablesNow();
+  if (!tables.length) return "";
+  return `<section><h2>Tables</h2><p class="small muted">Built by Saksi from the computed results, in journal layout; the draft refers to them by these numbers.
+    <button class="linkish" data-action="tabledocx">Download all as one Word file</button></p>${tables.map((t) => pubTableHtml(t)).join("")}</section>`;
 }
-const okFigures = () => S.state.figures.filter((f) => S.state.analyses[f.analysis_id]?.status === "ok");
+const okFigures = () => S.state.figures.filter((f) => f.number && S.state.analyses[f.analysis_id]?.status === "ok").sort((a, b) => a.number - b.number);
 async function maybeOpenDraft() {
   const s = S.state, v = s.draft_version;
   if (!v || S.version !== v || S.busy || !(isAuthor() || isReviewer())) return;
@@ -1167,6 +1275,9 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "openask": { const d = document.querySelector(`details.askai:has(form[data-id="${CSS.escape(t.dataset.id)}"])`); if (d) { d.open = true; d.scrollIntoView({ block: "center" }); d.querySelector("textarea")?.focus(); } return; }
+    case "copytable": try { await copyTable(t.dataset.n); t.textContent = "Copied: paste into Word"; } catch (e) { t.textContent = "Copy failed: use Download .docx"; } return;
+    case "tabledocx": try { await downloadTables(t.dataset.n); } catch (e) { S.notice = { kind: "err", text: e.message }; render(); } return;
     case "showcode": { const box = document.getElementById("code-" + t.dataset.sha); box.innerHTML = `<pre>${esc(await blob(t.dataset.sha))}</pre>`; return; }
     case "download": {
       const url = URL.createObjectURL(new Blob([JSON.stringify(S.events, null, 1)], { type: "application/json" }));
@@ -1273,6 +1384,21 @@ document.addEventListener("submit", async (ev) => {
       const table1 = t1vars.length ? { stratify_by: val("t1by") || null, variables: t1vars } : null;
       return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note"), table1 }); S.planEdit = false; return r; },
         "Saved as a revised plan. Code re-checked every quotation against the protocol; every author now confirms it.");
+    }
+    case "askai": {
+      const id = f.dataset.id, text = val("text");
+      if (fd.get("mode") === "redo") return act(btn, () => agent("redo", { analysis_id: id, reason: text }),
+        "Redone. The new run replaces the earlier one, which is kept in the record; check the results, then accept them.",
+        "The Analysis Agent is redoing the analysis in the sandbox. This can take a minute or two.");
+      const rid = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
+      return act(btn, () => agent("run_request", { request_id: rid, prompt: text, based_on: id }),
+        "The variant ran. It is labelled exploratory, and the original analysis stays in the paper.",
+        "The Analysis Agent is writing and running the variant in the sandbox. This can take a minute or two.");
+    }
+    case "t1change": {
+      const vars = val("vars").split(",").map((x) => x.trim()).filter(Boolean);
+      return act(btn, () => agent("change_table1", { table1: { stratify_by: val("by") || null, variables: vars }, reason: val("reason") }),
+        "Table 1 was rebuilt. The earlier version is kept in the record.");
     }
     case "explore": return act(btn, () => agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }), "The exploratory analysis ran. It is labelled exploratory.",
       "The Analysis Agent is writing and running the code. This can take a minute or two.");

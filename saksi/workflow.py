@@ -41,7 +41,7 @@ from .blobs import BlobStore
 from .canonical import sha256_bytes, sha256_obj
 from .design import assess, sample_check
 from .figures import saksi_figures
-from .standard import KIND_ORDER, STEPS, clean_table1
+from .standard import KIND_ORDER, STEPS, clean_table1, position
 from .documents import extract_text
 from .events import Event, EventLog
 from .tracing import SENTENCE, trace
@@ -191,7 +191,12 @@ def apply(s: State, ev: Event) -> State:
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
         s.analyses[p["analysis_id"]] = p | {"by": ev.actor_id, "seq": ev.seq}
+        if p.get("supersedes"):
+            old = s.analyses[p["supersedes"]]
+            old["superseded_by"] = p["analysis_id"]
+            s.analyses[p["analysis_id"]]["order_seq"] = old.get("order_seq", old["seq"])
         s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
+        _number_figures(s)
     elif t == "analyses.accepted":
         s.analyses_accepted_by.setdefault(p["analysis_set_sha256"], set()).add(ev.actor_id)
     elif t in ("draft.created", "draft.edited"):
@@ -489,8 +494,18 @@ class Project:
                           execution: dict[str, Any], status: str, error: str | None = None,
                           request_id: str | None = None, call: dict[str, Any] | None = None,
                           requested_by: str | None = None, call_seqs: list[int] | None = None,
-                          figures: list[dict[str, Any]] | None = None, standard: str | None = None) -> State:
+                          figures: list[dict[str, Any]] | None = None, standard: str | None = None,
+                          supersedes: str | None = None, redo_reason: str | None = None) -> State:
         s = self.state()
+        if supersedes is not None:
+            # A redo: the new run replaces an earlier one, which stays in the record, marked as replaced.
+            old = s.analyses.get(supersedes)
+            if old is None or old.get("superseded_by"):
+                raise WorkflowError(f"{supersedes!r} is not a current analysis")
+            if old.get("plan_analysis_id") != plan_analysis_id or old.get("standard") != standard:
+                raise WorkflowError("a redo must be of the same analysis")
+            if not (redo_reason or "").strip() or requested_by is None:
+                raise WorkflowError("a redo needs the author who asked for it and the reason")
         if standard is not None:
             # A step of the standard sequence, run with Saksi's own code (see standard.py).
             if standard not in STEPS or plan_analysis_id is not None:
@@ -517,13 +532,14 @@ class Project:
             and self.blobs.has(outputs_sha256) else None
         check = sample_check(planned.get("design") if planned else None, outputs)
         basis = "standard approach" if standard else "pre-specified" if planned else "post hoc"
-        figs = self._figures(s, analysis_id, spec, outputs, label, basis, figures or []) \
+        figs = self._figures(s, analysis_id, spec, outputs, label, basis, figures or [], replacing=supersedes) \
             if outputs is not None and not standard else []
         call_seq = self._log_call(by, call)
         self._emit(by, "analysis.completed", {
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
-            "basis": basis, "standard": standard, "kind": standard or (planned or {}).get("kind") or "other",
+            "basis": basis, "standard": standard, "kind": standard or (planned or {}).get("kind") or (spec.get("kind") if spec.get("kind") in KIND_ORDER else "other"),
             "primary_basis": ((planned or {}).get("design") or {}).get("primary_basis"),
+            "supersedes": supersedes, "redo_reason": redo_reason,
             "protocol_deviation": ((planned or {}).get("design") or {}).get("deviation"),
             "sample_check": check, "figures": figs,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
@@ -534,7 +550,7 @@ class Project:
         return self.state()
 
     def _figures(self, s: State, analysis_id: str, spec: dict[str, Any], outputs: dict[str, Any], label: str,
-                 basis: str, from_code: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                 basis: str, from_code: list[dict[str, Any]], replacing: str | None = None) -> list[dict[str, Any]]:
         """Saksi's own figures plus those drawn by the analysis code. Numbered in order of creation;
         every caption is number-checked against this analysis's results."""
         rows = None
@@ -543,8 +559,10 @@ class Project:
         made = [{**f, "svg_sha256": self.blobs.put_text(f.pop("svg")), "drawn_by": "saksi"}
                 for f in saksi_figures(spec, outputs, rows, label, basis)]
         # One flow diagram per distinct set of counts, however each analysis worded its exclusions.
-        seen_svg = {f["svg_sha256"] for f in s.figures}
-        seen_flow = {tuple(f["flow_counts"]) for f in s.figures if f.get("flow_counts")}
+        live = [f for f in s.figures if f["analysis_id"] != replacing
+                and not s.analyses.get(f["analysis_id"], {}).get("superseded_by")]
+        seen_svg = {f["svg_sha256"] for f in live}
+        seen_flow = {tuple(f["flow_counts"]) for f in live if f.get("flow_counts")}
         made = [f for f in made if f["svg_sha256"] not in seen_svg
                 and not (f.get("flow_counts") and tuple(f["flow_counts"]) in seen_flow)]
         # The label is Saksi's fact, so Saksi states it on captions written by analysis code.
@@ -591,8 +609,7 @@ class Project:
     def check_text(self, text: str, s: State | None = None) -> dict[str, Any]:
         """Full number/reporting check of a text against this project's results. Writes nothing."""
         s = s or self.state()
-        ok = {k: v for k, v in s.analyses.items()
-              if v["status"] == "ok" and v.get("outputs_sha256") and self.blobs.has(v["outputs_sha256"])}
+        ok = {k: v for k, v in current(s).items() if self.blobs.has(v["outputs_sha256"])}
         # A sample-size shortfall's numbers are facts about the analysis, so they can be cited.
         outputs = {k: {**self.blobs.get_json(v["outputs_sha256"]), **({"sample_check": v["sample_check"]}
                                                                       if v.get("sample_check") else {})}
@@ -855,6 +872,22 @@ def _diff_stats(old: str, new: str) -> dict[str, int]:
             added += j2 - j1
     return {"words_added": added, "words_removed": removed, "words_before": len(old.split()),
             "words_after": len(new.split())}
+
+
+def current(s: State) -> dict[str, dict[str, Any]]:
+    """The analyses that count: those that ran, minus any an author had redone (kept in the record)."""
+    return {k: v for k, v in s.analyses.items()
+            if v["status"] == "ok" and v.get("outputs_sha256") and not v.get("superseded_by")}
+
+
+def _number_figures(s: State) -> None:
+    """Figures are numbered in reporting order; a replaced analysis's figures lose their number."""
+    live = [f for f in s.figures if not s.analyses.get(f["analysis_id"], {}).get("superseded_by")]
+    live.sort(key=lambda f: (position(s.analyses[f["analysis_id"]]), f["seq"]))
+    for f in s.figures:
+        f["number"] = None
+    for i, f in enumerate(live, start=1):
+        f["number"] = i
 
 
 def included_order(plan: dict[str, Any] | None) -> list[str]:

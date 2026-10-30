@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from .canonical import sha256_bytes, sha256_text
@@ -40,7 +40,9 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "propose_plan": ("propose_plan", {"instructions"}, "author"),
     "prepare_plan": ("prepare_plan", {"instructions"}, "author"),
     "run_planned": ("run_planned", {"plan_analysis_id", "standard_step"}, "author"),
-    "run_request": ("run_request", {"request_id", "prompt"}, "author"),
+    "run_request": ("run_request", {"request_id", "prompt", "based_on"}, "author"),
+    "redo": ("redo", {"analysis_id", "reason"}, "author"),
+    "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
     "brief_reviewer": ("brief_reviewer", set(), "reviewer"),
 }
@@ -241,6 +243,26 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
     @app.get("/projects/{pid}/ledger")
     def get_ledger(pid: str, who: str = Depends(actor)):
         return ledger(existing(pid).log.events())
+
+    @app.get("/projects/{pid}/tables")
+    def get_tables(pid: str, who: str = Depends(actor)):
+        """Publication-ready tables, built by code from the recorded results."""
+        from .tables import build
+        p = existing(pid)
+        return {"tables": build(p.state(), p.blobs)}
+
+    @app.get("/projects/{pid}/tables.docx")
+    def get_tables_docx(pid: str, number: int | None = None, who: str = Depends(actor)):
+        from .tables import build, to_docx
+        p = existing(pid)
+        s = p.state()
+        ts = [t for t in build(s, p.blobs) if number is None or t["number"] == number]
+        if not ts:
+            raise HTTPException(404, "no such table")
+        name = f"saksi-{pid}-table-{number}.docx" if number else f"saksi-{pid}-tables.docx"
+        return Response(to_docx(ts, None if number else f"{s.title}: tables"),
+                        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     @app.get("/projects/{pid}/blobs/{digest}")
     def get_blob(pid: str, digest: str, who: str = Depends(actor)):
