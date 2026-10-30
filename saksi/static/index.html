@@ -1050,6 +1050,9 @@ async function analyses() {
       <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
     ${tables.length ? `<p class="small"><strong>${tables.length} table${tables.length > 1 ? "s" : ""} and ${s.figures.filter((f) => f.number).length} figure${s.figures.filter((f) => f.number).length === 1 ? "" : "s"}</strong>, numbered as in the paper. They go into the draft's Results section, each beside the text that explains it.</p>` : ""}
     ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the AI to run a variant, redo it, or rewrite its text.</p>` : ""}
+    ${(() => { const n = Object.values(s.analyses).filter((a) => a.status === "ok" && !a.superseded_by && !a.withdrawn && !a.description).length;
+      return canRun && n && !pending.length ? `<div class="bigaction"><p><strong>${n} result${n > 1 ? "s have" : " has"} no text yet.</strong> The Writing Agent writes the passage that reports each one (Methods for the data checks), and code checks its numbers.</p>
+        <button class="btn" data-action="describeall" data-label="Writing the texts">Write the text for ${n === 1 ? "it" : "all " + n}</button></div>` : ""; })()}
     ${sections.join("")}
     ${leftOut.length ? `<section><h2 class="step">Left out of the paper <span class="who">Exploratory analyses the authors asked for and then left out. Kept in the record; the reviewer is told.</span></h2>
       ${(await Promise.all(leftOut.map(async ([id, a]) => `<details class="replaced"><summary>${esc(a.spec?.title || id)} (${esc(id)}): left out by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”</summary>${await analysisBlock(id, a, [], false)}</details>`))).join("")}</section>` : ""}
@@ -1448,6 +1451,7 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "describeall": return act(t, () => describeMissing(S.state), "Each result now has its text, with its numbers checked.");
     case "canvas": S.canvas = S.version || S.state.draft_version; S.notice = null; await render(); document.querySelector("#ms [contenteditable=true]")?.focus(); return;
     case "canvasoff": S.canvas = null; return render();
     case "openask": { const d = document.querySelector(`details.askai:has(form[data-id="${CSS.escape(t.dataset.id)}"])`); if (d) { d.open = true; d.scrollIntoView({ block: "center" }); d.querySelector("textarea")?.focus(); } return; }
