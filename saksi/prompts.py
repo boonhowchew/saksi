@@ -131,6 +131,13 @@ Contract (mandatory):
       "diagnostics": logistic_checks(model)    # binary outcome; linear_checks(model) for a continuous outcome
   Fit the model with statsmodels. Pass clustered_by="<column>" if observations are clustered (for example by
   clinic). Do not compute your own diagnostics instead.
+- If the author asks for a particular table layout (for example groups as columns), or the result is naturally a
+  table (for example a description by group), also return "table" (shape below). The first column holds labels;
+  every other cell is text that your code formats from values it computed (for example f"{m:.1f} ({sd:.1f})" or
+  "1.07 (0.96 to 1.19)"). Never type a number by hand. Saksi typesets it as a journal table. Still return
+  "estimates" for the main comparisons.
+- A table describing the participants' characteristics by the outcome is Saksi's Table 1, built by Saksi's own
+  code; if asked for one, still do it as asked, but add a note that Table 1 can be built on the Analyses page.
 - Return this shape:
   {"n_analysed": int, "n_excluded": int, "exclusion_reason": str,
    "n_events": int or null (outcome events among those analysed, for binary or time-to-event outcomes),
@@ -138,6 +145,8 @@ Contract (mandatory):
                   "ci_upper": float or null, "p_value": float or null}],
    "diagnostics": {...} (multivariable models only, from saksi_checks),
    "model": {"formula_or_description": str, "converged": bool or null},
+   "table": {"title": str, "columns": [str], "rows": [{"cells": [str], "indent": bool}], "footnotes": [str]}
+            (optional, see above),
    "notes": [str]}
 
 If the specification has "required_figure", also define a top-level function figures(data_path, seed) that returns
@@ -188,10 +197,13 @@ Rules:
 - Say each figure once. Give the number analysed and excluded once per analysis (once in total if the analyses
   share the same sample). The Discussion interprets; it does not restate the Results figure by figure.
 
-- Follow the standard sequence. Methods (statistical analysis): the data checks (missing values, duplicates,
-  outliers); how Table 1 was summarised and compared (its notes give the rules); the univariable analyses, then the
-  multivariable models; name the model diagnostics that were checked.
-- Results, in this order: the records and their completeness [A:s_data_quality]; the sample's characteristics,
+- Follow the standard sequence. Methods (statistical analysis): the data checks and what they found (missing
+  values, duplicates, outliers), citing [A:s_data_quality]: this belongs in Methods, not Results; how Table 1 was
+  summarised and compared (its notes give the rules); the univariable analyses, then the multivariable models; name
+  the model diagnostics that were checked.
+- TEXT ALREADY WRITTEN gives number-checked text for each analysis, with its section. Use it as the basis of that
+  analysis's passage: keep its numbers and citations, and edit only for flow.
+- Results, in this order: the sample's characteristics,
   referring to Table 1 and describing patterns across groups rather than repeating its numbers [A:s_table1] (only
   if present); other descriptive results; univariable results; multivariable results with crude and adjusted
   estimates; then, right after the last multivariable result, at least one paragraph on that model's diagnostics,
@@ -282,7 +294,33 @@ an empty quotation is better than one the protocol does not contain.
 
 Return ONLY a JSON object: {"fixes": [{"id": str, "field": str, "quote": str}]}"""
 
-TEMPLATES = {"curator": CURATOR, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+RESULT_TEXT = """You are the Writing Agent in Saksi. Write the text that reports ONE analysis in a manuscript, from
+its computed results. A program checks every number you write against those results.
+
+If ANALYSIS.standard is "data_quality", write 2 to 4 sentences for the statistical-analysis part of Methods: how the
+data were checked before analysis (missing values, duplicate records, and outliers by the interquartile-range rule,
+counted and not removed) and what was found for the variables that matter. No interpretation.
+
+Otherwise write the Results text for this analysis: one short paragraph, two at most.
+- Report; do not discuss. No causes, no implications, no comparison with other studies.
+- Point to the analysis's table as [[Table]] and to each figure by its token in FIGURES (for example
+  [[Figure:forest_plot]]); Saksi replaces the tokens with the table and figure numbers. Refer to every one of them.
+- Say in words what the table or figure shows that matters: the main finding, its direction and size, and its
+  uncertainty, with only the key estimates and their 95% CIs. Do not repeat the table cell by cell.
+- For Table 1, describe the sample and the notable differences between the groups in words, citing a few figures
+  at most.
+- Use ONLY numbers in RESULTS or TABLE, as shown or rounded from them. Do not calculate new numbers.
+- End every sentence that contains a number with [A:<id>], using the id in ANALYSIS.
+- If ANALYSIS.label is "exploratory", say "exploratory". If sample_check shows a shortfall, give the planned and
+  achieved numbers. If there is a protocol_departure, say so in a sentence that mentions the protocol and the
+  primary analysis.
+- Whether each 95% CI includes its null value is in INTERVAL FACTS, computed by code. Rely on it. If the interval
+  includes the null, do not call the result an association or a difference.
+- If AUTHOR'S INSTRUCTION is given, follow it within these rules.
+
+Reply with the text only: no heading and no list."""
+
+TEMPLATES = {"curator": CURATOR, "result_text": RESULT_TEXT, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

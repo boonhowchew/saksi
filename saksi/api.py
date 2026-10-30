@@ -42,6 +42,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "run_planned": ("run_planned", {"plan_analysis_id", "standard_step"}, "author"),
     "run_request": ("run_request", {"request_id", "prompt", "based_on"}, "author"),
     "redo": ("redo", {"analysis_id", "reason"}, "author"),
+    "describe": ("describe", {"analysis_id", "instruction"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
     "brief_reviewer": ("brief_reviewer", set(), "reviewer"),
@@ -56,6 +57,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "register_human": ("register_human", {"actor", "role"}),
     "withdraw_material": ("withdraw_material", {"sha256", "reason"}),
+    "withdraw_analysis": ("withdraw_analysis", {"analysis_id", "reason"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
     "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note", "table1"}),
     "request_analysis": ("request_analysis", {"request_id", "prompt"}),

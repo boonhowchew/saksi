@@ -41,7 +41,7 @@ from .blobs import BlobStore
 from .canonical import sha256_bytes, sha256_obj
 from .design import assess, sample_check
 from .figures import saksi_figures
-from .standard import KIND_ORDER, STEPS, clean_table1, position
+from .standard import KIND_ORDER, STEPS, clean_table1, infer_kind, kind_of, position
 from .documents import extract_text
 from .events import Event, EventLog
 from .tracing import CITE, SENTENCE, trace
@@ -128,6 +128,7 @@ class State:
 
     def analysis_set_sha(self) -> str:
         return sha256_obj({k: {"outputs_sha256": v.get("outputs_sha256"), "label": v["label"], "status": v["status"]}
+                           | ({"withdrawn": True} if v.get("withdrawn") else {})
                            for k, v in sorted(self.analyses.items())})
 
     def open_items(self) -> list[str]:
@@ -178,7 +179,13 @@ def apply(s: State, ev: Event) -> State:
     elif t == "curator.reported":
         s.curator_reports.append(p | {"seq": ev.seq})
     elif t == "plan.proposed":
-        s.plan = {"sha": p["plan_sha256"], "analyses": p["analyses"], "protocol_ref": p.get("protocol_ref"),
+        analyses = {}
+        for k, a in p["analyses"].items():
+            a = dict(a)
+            if a.get("kind") not in KIND_ORDER:      # a plan from before the standard sequence: kind by rule
+                a["kind"], a["kind_inferred"] = infer_kind(a), True
+            analyses[k] = a
+        s.plan = {"sha": p["plan_sha256"], "analyses": analyses, "protocol_ref": p.get("protocol_ref"),
                   "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq,
                   "note": p.get("note"), "changes": p.get("changes"), "requested_by": p.get("requested_by"),
                   "table1": p.get("table1")}
@@ -192,12 +199,21 @@ def apply(s: State, ev: Event) -> State:
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
         s.analyses[p["analysis_id"]] = p | {"by": ev.actor_id, "seq": ev.seq}
+        planned = (s.plan_locked or {}).get("analyses", {}).get(p.get("plan_analysis_id") or "")
+        if planned and planned.get("kind_inferred"):
+            s.analyses[p["analysis_id"]]["kind"] = planned["kind"]
         if p.get("supersedes"):
             old = s.analyses[p["supersedes"]]
             old["superseded_by"] = p["analysis_id"]
             s.analyses[p["analysis_id"]]["order_seq"] = old.get("order_seq", old["seq"])
         s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
         _number_figures(s)
+    elif t == "analysis.withdrawn":
+        s.analyses[p["analysis_id"]]["withdrawn"] = {"reason": p["reason"], "by": ev.actor_id, "seq": ev.seq}
+        _number_figures(s)
+    elif t == "analysis.described":
+        if p["analysis_id"] in s.analyses:
+            s.analyses[p["analysis_id"]]["description"] = p | {"by": ev.actor_id, "seq": ev.seq}
     elif t == "analyses.accepted":
         s.analyses_accepted_by.setdefault(p["analysis_set_sha256"], set()).add(ev.actor_id)
     elif t in ("draft.created", "draft.edited"):
@@ -431,7 +447,7 @@ class Project:
                 raise WorkflowError(f"the protocol names {x['id']!r} as primary; say why it is now a {d['role']} "
                                     "analysis (the draft will disclose it)")
             plan[x["id"]] = {**x, "design": d, "label": d["label"],
-                             "kind": x.get("kind") if x.get("kind") in KIND_ORDER else "other",
+                             "kind": kind_of(x),
                              "protocol_quote_verified": d["checks"]["protocol_quote_verified"]}
         order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
         changes = _plan_changes(s.plan, plan) if s.plan else None
@@ -584,6 +600,41 @@ class Project:
             out.append({**f, "number": i, "label": label, "caption_check": summarise_checks(r),
                         "warning": f.get("warning")})
         return out
+
+    def withdraw_analysis(self, by: str, analysis_id: str, reason: str) -> State:
+        """Leave an exploratory analysis that was asked for after the plan out of the paper. It stays in the record,
+        with the reason, and the reviewer is told. Pre-specified analyses cannot be left out this way."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "ANALYSIS")
+        a = s.analyses.get(analysis_id)
+        if a is None or a.get("superseded_by") or a.get("withdrawn"):
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis")
+        if a.get("basis") != "post hoc":
+            raise WorkflowError("only an exploratory analysis added after the plan can be left out; a planned analysis "
+                                "is reported, or left out by revising the plan before any result")
+        if not (reason or "").strip():
+            raise WorkflowError("say why it is left out (kept in the record and shown to the reviewer)")
+        self._emit(by, "analysis.withdrawn", {"analysis_id": analysis_id, "reason": reason})
+        return self.state()
+
+    def describe_analysis(self, by: str, analysis_id: str, text: str, section: str, checks: dict[str, Any],
+                          requested_by: str, call: dict[str, Any] | None = None,
+                          instruction: str | None = None, attempts: list[dict[str, Any]] | None = None) -> State:
+        """The Writing Agent's text for one analysis (Results, or Methods for the data checks), number-checked."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        if analysis_id not in current(s):
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis")
+        if section not in ("methods", "results") or not text.strip():
+            raise WorkflowError("a description needs text and a section")
+        call_seq = self._log_call(by, call)
+        self._emit(by, "analysis.described", {"analysis_id": analysis_id, "section": section,
+                                               "text_sha256": self.blobs.put_text(text), "checks": checks,
+                                               "instruction": instruction, "attempts": attempts or [],
+                                               "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
 
     def accept_analyses(self, by: str, analysis_set_sha256: str) -> State:
         s = self.state()
@@ -902,12 +953,13 @@ def _diff_stats(old: str, new: str) -> dict[str, int]:
 def current(s: State) -> dict[str, dict[str, Any]]:
     """The analyses that count: those that ran, minus any an author had redone (kept in the record)."""
     return {k: v for k, v in s.analyses.items()
-            if v["status"] == "ok" and v.get("outputs_sha256") and not v.get("superseded_by")}
+            if v["status"] == "ok" and v.get("outputs_sha256") and not v.get("superseded_by") and not v.get("withdrawn")}
 
 
 def _number_figures(s: State) -> None:
     """Figures are numbered in reporting order; a replaced analysis's figures lose their number."""
-    live = [f for f in s.figures if not s.analyses.get(f["analysis_id"], {}).get("superseded_by")]
+    live = [f for f in s.figures if not s.analyses.get(f["analysis_id"], {}).get("superseded_by")
+            and not s.analyses.get(f["analysis_id"], {}).get("withdrawn")]
     live.sort(key=lambda f: (position(s.analyses[f["analysis_id"]]), f["seq"]))
     for f in s.figures:
         f["number"] = None
@@ -949,7 +1001,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",
     "review.item_added": "review_comments", "review.item_verdict": "review_verdicts",

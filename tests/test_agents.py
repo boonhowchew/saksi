@@ -77,6 +77,7 @@ PLAN_REPLY = {"analyses": [
                     {"name": "previous GDM", "column": "previous_gdm"}],
      "method": "multivariable logistic regression", "effect_measure": "adjusted odds ratio",
      "missing_data": "complete case",
+     "kind": "other",     # these older tests do not ask for diagnostics; the standard-sequence tests set "multivariable"
      "protocol_quote": "Multivariable logistic regression with GDM as the outcome and booking BMI as the exposure",
      "role": "primary",
      "primary_quote": "Primary objective: To estimate the association between booking body mass index (BMI) and "
@@ -110,12 +111,44 @@ class ScriptedModel:
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
         purpose = ("review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
+                   else "describe" if "reports ONE analysis" in system
                    else "write" if "Writing Agent" in system else "code")
-        reply = self.script[purpose].pop(0)
+        if purpose == "describe" and not self.script.get("describe"):
+            reply = describe_reply                                   # a plain, number-free default
+        else:
+            reply = self.script[purpose].pop(0)
+        if callable(reply):
+            reply = reply(json["messages"][1]["content"])
         reply, finish = reply if isinstance(reply, tuple) else (reply, "stop")     # (text, "length") = cut off
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
         return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+
+
+def describe_reply(user):
+    """A Results (or Methods) text for any analysis, from what the describe request gives the model."""
+    import json as _j, re as _re
+    info = _j.loads(user.split("ANALYSIS:\n", 1)[1].split("\n\nRESULTS:", 1)[0])
+    out = _j.loads(user.split("RESULTS:\n", 1)[1].split("\n\nTABLE:", 1)[0])
+    figs = _j.loads(user.split("FIGURES:\n", 1)[1].split("\n\nINTERVAL FACTS", 1)[0])
+    aid, refs = info["id"], " and ".join(["[[Table]]"] + [f["token"] for f in figs])
+    if info.get("standard") == "data_quality":
+        miss = [c for c in out.get("columns", []) if c.get("missing")]
+        return (f"Before analysis, the {out['n_rows']} records were checked for missing values, duplicate records and "
+                f"outliers beyond 1.5 times the interquartile range, which were counted and not removed [A:{aid}]. "
+                f"There were {out['duplicate_rows']} duplicated records"
+                + (f", and {miss[0]['column']} was missing for {miss[0]['missing']}" if miss else "") + f" [A:{aid}].")
+    if info.get("standard") == "table1":
+        return (f"[[Table]] shows the characteristics of the {out['n_analysed']} participants by "
+                f"{out.get('stratify_by') or 'group'} [A:{aid}].")
+    est = (out.get("estimates") or [None])[0]
+    lead = "In this exploratory analysis, " if info["label"] == "exploratory" else ""
+    if not est:
+        return f"{lead}{refs} report this analysis [A:{aid}]."
+    ci = (f" (95% CI {est['ci_lower']:.2f} to {est['ci_upper']:.2f})" if est.get("ci_lower") is not None else "")
+    what = est["measure"] if est["name"] == est["measure"] else f"{est['measure']} for {est['name']}"
+    sentence = f"{lead}the {what} was {est['estimate']:.2f}{ci} [A:{aid}]."
+    return f"{refs} give the results. {sentence[0].upper()}{sentence[1:]}"
 
 
 def fence(code):
@@ -643,3 +676,59 @@ def test_authors_reword_tables_on_the_draft_but_numbers_are_locked(setup):
     assert tables.check_edits([t], {"a": {"columns": {"1": "No GDM\n(n = 380)"}, "rows": {"0": "Nulliparous"}}})
     with pytest.raises(ValueError, match="must keep its numbers"):
         tables.check_edits([t], {"a": {"columns": {"1": "No GDM"}}})
+
+
+def test_each_analysis_gets_text_that_reports_it_and_is_number_checked(setup):
+    from saksi import tables
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    s = agents.describe("bhc", "s_data_quality")
+    d = s.analyses["s_data_quality"]["description"]
+    assert d["section"] == "methods" and d["checks"]["ok"] and d["requested_by"] == "bhc" and d["by"] == "agent:writer"
+    s = agents.describe("bhc", "primary")
+    d = s.analyses["primary"]["description"]
+    text = p.blobs.get_text(d["text_sha256"])
+    assert d["section"] == "results" and d["checks"]["ok"] and "[[Table]]" in text and "[[Figure:" in text
+    shown = tables.resolve(text, "primary", tables.build(s, p.blobs), s.figures)
+    assert "Table 2" in shown and "Figure 1" in shown and "[[" not in shown
+    # A number that is not in the results is sent back once; still wrong, it is kept with its findings.
+    model.script["describe"] = ["The adjusted odds ratio was 9.99 [A:primary].",
+                                "The adjusted odds ratio was 9.98 [A:primary]."]
+    s = agents.describe("bhc", "primary", instruction="Shorter, please")
+    d = s.analyses["primary"]["description"]
+    assert [x["passed_check"] for x in d["attempts"]] == [False, False] and not d["checks"]["ok"]
+    assert d["instruction"] == "Shorter, please" and "CHECK FINDINGS" in model.bodies[-1]["messages"][1]["content"]
+    # The full draft gets the texts, tokens resolved.
+    from saksi.agents import _texts
+    from saksi.workflow import current
+    assert "[METHODS] s_data_quality" in _texts(s, current(s), p.blobs)
+
+
+def test_older_plans_get_a_place_in_the_sequence_by_rule_and_can_build_table1(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    legacy = {k: v for k, v in PLAN_REPLY["analyses"][0].items() if k != "kind"}
+    model.script["plan"] = [{"analyses": [legacy]}]
+    s = agents.propose_plan("bhc")
+    assert s.plan["analyses"]["primary"]["kind"] == "multivariable"       # inferred from the method
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    assert not s.plan_locked.get("table1")
+    s = agents.change_table1("bhc", {"stratify_by": "gdm", "variables": ["age", "parity"]})
+    assert s.analyses["s_table1"]["status"] == "ok" and not s.analyses["s_table1"].get("supersedes")
+
+
+def test_an_exploratory_analysis_can_be_left_out_with_a_reason_but_not_a_planned_one(setup):
+    from saksi.workflow import current
+    p, agents, model, _ = setup
+    _standard_run(p, agents, model, extra_code=[GOOD])
+    s = agents.run_request("bhc", "q1", "A characteristics table by GDM")
+    with pytest.raises(WorkflowError, match="only an exploratory analysis added after the plan"):
+        p.withdraw_analysis("bhc", "primary", "not wanted")
+    with pytest.raises(WorkflowError, match="say why"):
+        p.withdraw_analysis("bhc", "x_q1", "")
+    before = s.analysis_set_sha()
+    s = p.withdraw_analysis("bhc", "x_q1", "Superseded by Table 1")
+    assert "x_q1" not in current(s) and s.analyses["x_q1"]["withdrawn"]["reason"] == "Superseded by Table 1"
+    assert s.analysis_set_sha() != before                                  # acceptance must be given again
+    assert all(f["number"] is None for f in s.figures if f["analysis_id"] == "x_q1")

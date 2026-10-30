@@ -24,14 +24,15 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, REWRITE, WRITER,
-                      prompt_ref)
+from .prompts import (CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+                      REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .figures import required_figure
-from .tracing import interval_facts
+from .tracing import interval_facts, trace
 from . import standard
 from .workflow import SYSTEM, Project, State, WorkflowError, current, included_order
+from .workflow import summarise_checks as summarise
 from . import tables as tables_mod
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
@@ -45,6 +46,7 @@ TASKS = {
     "repair": {"reasoning_effort": "medium", "max_tokens": 12000},
     "quotes": {"reasoning_effort": "low", "max_tokens": 8000},
     "write": {"reasoning_effort": "medium", "max_tokens": 16000},
+    "describe": {"reasoning_effort": "low", "max_tokens": 3000},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -353,13 +355,13 @@ class Agents:
             execution=execution, status="ok" if ok else "error", error=error, requested_by=requested_by,
             standard=step, supersedes=supersedes if ok else None, redo_reason=reason if ok else None)
 
-    def change_table1(self, requested_by: str, table1: dict[str, Any], reason: str) -> State:
+    def change_table1(self, requested_by: str, table1: dict[str, Any], reason: str = "") -> State:
         """Authors change Table 1's variables or grouping. Saksi's own code builds it again; no model.
         The earlier table stays in the record, marked as replaced, with the reason."""
         s = self.project.state()
         old = next((k for k, v in current(s).items() if v.get("standard") == "table1"), None)
-        if old is None:
-            raise WorkflowError("Table 1 has not been built yet")
+        if s.plan_locked is None:
+            raise WorkflowError("the analysis plan has not been confirmed by every author")
         cols = list((self._dictionary(s).get("profile") or {}).get("columns") or [])
         t1 = standard.clean_table1(table1)
         if t1 is None:
@@ -369,9 +371,11 @@ class Agents:
             unknown = [v for v in t1["variables"] + [t1["stratify_by"] or ""] if v and v not in names]
             if unknown:
                 raise WorkflowError(f"not columns in the dataset: {', '.join(unknown)}")
-        if not (reason or "").strip():
+        if old is not None and not (reason or "").strip():
             raise WorkflowError("say why Table 1 is changed (kept in the record)")
-        return self._run_standard(requested_by, "table1", table1=t1, supersedes=old, reason=reason)
+        # Building it for the first time (a plan made before Table 1 was part of the standard sequence) needs no
+        # reason; the specification is recorded with the table, by the author who asked.
+        return self._run_standard(requested_by, "table1", table1=t1, supersedes=old, reason=reason if old else None)
 
     def redo(self, requested_by: str, analysis_id: str, reason: str) -> State:
         """An author asks the Analysis Agent to redo an analysis, for example because its code mis-coded a
@@ -461,7 +465,7 @@ class Agents:
                 if result.status == "ok" and not ok:
                     # Ran without crashing but did not deliver: say so, don't call it "ok".
                     outcome = "returned_error" if isinstance(result.results, dict) else "bad_result"
-                if ok and spec.get("kind") == "multivariable" and not isinstance(result.results.get("diagnostics"), dict):
+                if ok and standard.kind_of(spec) == "multivariable" and not isinstance(result.results.get("diagnostics"), dict):
                     ok, outcome = False, "missing_diagnostics"   # the standard sequence requires them
                 attempts.append({"attempt": attempt, "code_sha256": code_sha, "outcome": outcome,
                                  "execution": result.to_payload()})
@@ -504,6 +508,55 @@ class Agents:
             call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs, figures=figs,
             supersedes=supersedes if ok else None, redo_reason=redo_reason if ok else None)
 
+    # -- Text for each analysis -------------------------------------------------
+    def describe(self, requested_by: str, analysis_id: str, instruction: str | None = None) -> State:
+        """The Writing Agent writes the text that reports one analysis: Results text that points to its table
+        and figures and says what matters without repeating them, or, for the data checks, a Methods passage.
+        Every number is checked against that analysis; one rewrite if the check fails."""
+        s = self.project.state()
+        a = current(s).get(analysis_id)
+        if a is None:
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis")
+        out = self.project.blobs.get_json(a["outputs_sha256"])
+        if a.get("sample_check"):
+            out = {**out, "sample_check": a["sample_check"]}
+        section = "methods" if a.get("standard") == "data_quality" else "results"
+        tbl = next((t for t in tables_mod.build(s, self.project.blobs) if t["analysis_id"] == analysis_id), None)
+        figs = [{"token": f"[[Figure:{f['name']}]]", "caption": f["caption"]}
+                for f in s.figures if f["analysis_id"] == analysis_id and f.get("number")]
+        shown = _for_writer(a, out, current(s)) if a.get("standard") == "data_quality" else out
+        info = {"id": analysis_id, "title": a["spec"].get("title"), "label": a["label"], "basis": a.get("basis"),
+                "kind": a.get("kind"), "standard": a.get("standard"), "sample_check": a.get("sample_check"),
+                "protocol_departure": a.get("protocol_deviation")}
+        user = (f"ANALYSIS:\n{json.dumps(info, indent=1)}\n\nRESULTS:\n{json.dumps(shown, indent=1)[:30000]}\n\n"
+                f"TABLE:\n{json.dumps({k: tbl[k] for k in ('title', 'columns', 'rows', 'footnotes')} if tbl else None)[:20000]}\n\n"
+                f"FIGURES:\n{json.dumps(figs, indent=1)}\n\n"
+                f"INTERVAL FACTS (computed by code):\n{json.dumps(interval_facts({analysis_id: out}), indent=1)}"
+                + (f"\n\nAUTHOR'S INSTRUCTION: {instruction}" if instruction else ""))
+        counts = []
+        if s.curator_reports:
+            rows = self.project.blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("profile", {}).get("rows")
+            counts = [rows] if rows else []
+        attempts, messages, text, call = [], user, "", None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            r = self._chat("describe", RESULT_TEXT, messages, json_mode=False, purpose=f"describe:{analysis_id}")
+            call, text = r.record.to_payload(), r.text.strip()
+            text = re.sub(r"^#+\s.*\n", "", text).strip()
+            check = trace(text, {analysis_id: {"label": a["label"]}}, {analysis_id: out}, counts,
+                          required_refs=[analysis_id])
+            attempts.append({"attempt": attempt, "passed_check": check["ok"],
+                             "findings_sha256": self.project.blobs.put_json(check)})
+            if check["ok"] or attempt == MAX_ATTEMPTS:
+                break
+            attempts[-1]["llm_call_seq"] = self.project.record_model_call(WRITER_ID, call)
+            messages = f"{user}\n\nYOUR PREVIOUS TEXT:\n{text}\n\nCHECK FINDINGS:\n{_brief(check)}"
+        if not text:
+            self.project.record_model_call(WRITER_ID, call)
+            raise AgentError("the Writing Agent returned no text")
+        return self.project.describe_analysis(WRITER_ID, analysis_id, text, section, summarise(check),
+                                              requested_by=requested_by, call=call, instruction=instruction,
+                                              attempts=attempts)
+
     # -- Writing -------------------------------------------------------------
     def write_draft(self, requested_by: str) -> State:
         """First draft (or an author-requested redraft) from computed results only."""
@@ -535,6 +588,8 @@ class Agents:
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}\n\n"
                 f"PROTOCOL ANALYSES NOT PERFORMED IN THIS PAPER (authors' decision, with reasons):\n"
                 f"{json.dumps(not_performed(s), indent=1)}\n\n"
+                f"TEXT ALREADY WRITTEN FOR EACH ANALYSIS (number-checked; keep its numbers and citations):\n"
+                f"{_texts(s, ok, self.project.blobs)}\n\n"
                 f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}\n\n"
                 f"TABLES (built by Saksi from RESULTS; refer to them only by these numbers):\n"
                 f"{tables_mod.listing(s, self.project.blobs)}")
@@ -645,6 +700,17 @@ def _figure_list(s: State, ok: dict[str, Any]) -> str:
     rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}"
             for f in sorted(s.figures, key=lambda f: f["number"] or 0) if f["analysis_id"] in ok and f["number"]]
     return "\n".join(rows) or "(none)"
+
+
+def _texts(s: State, ok: dict[str, Any], blobs) -> str:
+    tables = tables_mod.build(s, blobs)
+    rows = []
+    for k, v in sorted(ok.items(), key=lambda kv: _position(kv[1])):
+        d = v.get("description")
+        if d and blobs.has(d["text_sha256"]):
+            text = tables_mod.resolve(blobs.get_text(d["text_sha256"]), k, tables, s.figures)
+            rows.append(f"[{d['section'].upper()}] {k}: {text}")
+    return "\n\n".join(rows) or "(none)"
 
 
 def _brief(findings: dict[str, Any]) -> str:

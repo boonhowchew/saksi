@@ -101,6 +101,10 @@ details.askai > form { padding: 0 .8rem .8rem; }
 fieldset.choice { border: 0; padding: 0; margin: 0 0 .4rem; display: grid; gap: .45rem; }
 fieldset.choice label.inline { align-items: flex-start; gap: .5rem; }
 fieldset.choice input { margin-top: .25rem; }
+.restext { border-left: 3px solid var(--verdigris); background: var(--verdigris-wash); padding: .5rem .8rem; margin: .6rem 0 .8rem; border-radius: 0 4px 4px 0; }
+.restext .manuscript-view { max-width: none; font-size: 1rem; }
+.restext .manuscript-view p { margin: .3rem 0; }
+.restext > p.small { margin: .1rem 0; }
 details.replaced { margin: .8rem 0 0; border-top: 1px dashed var(--rule); padding-top: .4rem; }
 details.replaced > summary { color: var(--muted); font-size: .85rem; cursor: pointer; }
 details.replaced .item { opacity: .8; }
@@ -362,6 +366,8 @@ function describe(e) {
     case "plan.locked": return "The plan was locked: every author confirmed it";
     case "stage.advanced": return `Moved to ${esc(stageName(p.to))}: ${esc(p.reason)}`;
     case "analysis.requested": return `${who} asked for an exploratory analysis`;
+    case "analysis.withdrawn": return `${who} left the exploratory analysis ${esc(p.analysis_id)} out of the paper: ${esc(p.reason)}`;
+    case "analysis.described": return `${who} wrote the ${p.section === "methods" ? "Methods" : "Results"} text for ${esc(p.analysis_id)}${p.requested_by ? " for " + esc(name(p.requested_by)) : ""}: numbers ${p.checks?.ok ? "checked" : "with problems"}`;
     case "analysis.completed": if (p.standard) return `Saksi ran its standard ${p.standard === "table1" ? "Table 1" : "data-quality check"}${forWhom}: ${p.status === "ok" ? "done" : "failed"}`;
       return `${who} ran ${esc(p.analysis_id)} (${esc(labelText(p))}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
     case "analyses.accepted": return `${who} accepted the results`;
@@ -823,7 +829,7 @@ const TABLE_NOTE = "Built by Saksi from the recorded results, without a model. I
 
 /* Analyses: the standard sequence */
 const SEQ = [
-  ["quality", "1. Data quality", "Saksi's own code, not a model: missing values, duplicate records and outliers. Counts only."],
+  ["quality", "1. Data quality", "Saksi's own code, not a model: missing values, duplicate records and outliers. Counts only. Its text belongs in Methods (statistical analysis)."],
   ["table1", "2. Table 1: characteristics of the sample", "Saksi's own code, not a model. Summary and test chosen by rule from the data; the plan chose the variables and the grouping."],
   ["descriptive", "3. Other descriptive analyses", "From the plan, written by the Analysis Agent."],
   ["univariable", "4. Univariable analyses", "One independent variable at a time, before any adjustment."],
@@ -929,6 +935,7 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
     ${sampleBlock(a.sample_check)}
     ${departureHtml(a.protocol_deviation)}
     ${a.requested_by ? `<p class="small muted">${a.standard ? "Run" : "Requested"} by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
+    ${await descriptionHtml(id, a, tables, canAsk)}
     ${body}
     ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
     ${ex.required_figure && !ex.required_figure_drawn ? `<p class="msg warn small">The rule for this analysis requires a ${esc(ex.required_figure.replaceAll("_", " "))}, but the analysis code did not draw one.${ex.figure_error ? " The figure code failed; see How it ran." : ""}</p>` : ""}
@@ -944,7 +951,51 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
       ${ex.figure_error ? `<dt>Figure error</dt><dd><pre>${esc(ex.figure_error)}</pre></dd>` : ""}</dl>
       <div id="code-${esc(a.code_sha256)}"></div></details>
     ${canAsk && !a.superseded_by && a.status === "ok" ? askBox(id, a) : ""}
+    ${canAsk && !a.superseded_by && !a.withdrawn && a.basis === "post hoc" ? `<details class="small"><summary>Leave this exploratory analysis out of the paper</summary>
+      <form class="stack" data-form="withdrawanalysis" data-id="${esc(id)}"><label><span>Why (kept in the record and shown to the reviewer)</span><input type="text" name="reason" required placeholder="For example: superseded by Table 1"></label>
+      <div><button class="btn quiet" data-label="Leaving it out">Leave it out</button></div></form></details>` : ""}
     ${a.supersedes && s.analyses[a.supersedes] ? `<details class="replaced"><summary>The earlier run, ${esc(a.supersedes)}, replaced</summary>${await analysisBlock(a.supersedes, s.analyses[a.supersedes], [], false)}</details>` : ""}</div>`;
+}
+
+async function describeMissing(state) {
+  const todo = Object.entries(state.analyses).filter(([, a]) => a.status === "ok" && !a.superseded_by && !a.description);
+  for (const [i, [id, a]] of todo.entries()) {
+    S.notice = { kind: "warn", text: `The Writing Agent is writing the text for ${a.spec?.title || id} (${i + 1} of ${todo.length}).` };
+    const box = $("#status"); if (box) box.innerHTML = noticeHtml();
+    try { await agent("describe", { analysis_id: id }); } catch { /* shown on the page with a button to try again */ }
+  }
+}
+async function descriptionHtml(id, a, tables, canAsk) {
+  const d = a.description, methods = a.standard === "data_quality";
+  const head = methods ? "Text for Methods (statistical analysis)" : "Results text";
+  if (!d) return a.status === "ok" && canAsk && !a.superseded_by
+    ? `<div class="restext"><p class="small muted">${head}: not written yet. <button class="linkish" data-agent="describe" data-args='${esc(JSON.stringify({ analysis_id: id }))}' data-label="The Writing Agent is writing">Ask the Writing Agent to write it</button></p></div>` : "";
+  const raw = await blob(d.text_sha256) || "";
+  const text = resolveRefs(raw, id, tables);
+  const c = d.checks || {};
+  return `<div class="restext"><p class="small muted">${head} · by the Writing Agent${d.instruction ? `, as ${esc(name(d.requested_by))} asked: “${esc(d.instruction)}”` : ""} ·
+      ${c.ok ? `<span class="tag good">numbers checked</span>` : `<span class="tag attn">${esc(c.untraced || 0)} number${c.untraced === 1 ? "" : "s"} not in the results</span>`}</p>
+    <div class="manuscript-view">${text.split(/\n{2,}/).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}</div>
+    <p class="small muted">It goes into the draft's ${methods ? "Methods" : "Results"}; you can edit the words there.</p></div>`;
+}
+function resolveRefs(text, id, tables) {
+  const t = tables.find((x) => x.analysis_id === id);
+  let out = text.replaceAll("[[Table]]", t ? `Table ${t.number}` : "the table");
+  for (const f of S.state.figures) if (f.analysis_id === id) out = out.replaceAll(`[[Figure:${f.name}]]`, f.number ? `Figure ${f.number}` : "the figure");
+  return out.replace(/\[\[Figure:[^\]]*\]\]/g, "the figure");
+}
+
+function table1Builder(canRun) {
+  const p = S.state.plan_locked || {}, inc = (p.order || []).filter((i) => p.analyses[i].included !== false).map((i) => p.analyses[i]);
+  const outcome = inc.map((a) => a.outcome?.column).find(Boolean) || "";
+  const vars = [...new Set(inc.flatMap((a) => [...(a.exposures || []), ...(a.covariates || [])].map((x) => x?.column)).filter((c) => c && c !== outcome))];
+  return `<p class="small">Not built yet: the confirmed plan has no Table 1${p.table1 ? "" : " (it was made before Table 1 became part of the standard sequence)"}.
+    Table 1 describes the participants, usually split by the outcome, and is built by Saksi's own code: no AI.</p>
+    ${canRun ? `<form class="stack" data-form="t1change" style="max-width:40rem">
+      <label><span>Split the columns by (a column, usually the outcome; empty for one column only)</span><input type="text" name="by" value="${esc(outcome)}"></label>
+      <label><span>Characteristics, in order (column names, separated by commas)</span><textarea name="vars" required>${esc(vars.join(", "))}</textarea></label>
+      <p class="small muted">Suggested from the plan's outcome, exposures and covariates. Add the demographic columns you want, using the names in the data dictionary.</p>
+      <div><button class="btn" data-label="Building Table 1">Build Table 1</button></div></form>` : ""}`;
 }
 
 function askBox(id, a) {
@@ -963,6 +1014,7 @@ function askBox(id, a) {
       <fieldset class="choice"><legend class="small muted">What should happen?</legend>
         <label class="inline"><input type="radio" name="mode" value="variant" checked><span><strong>Run a variant</strong>: for example another covariate, model or subgroup. It is added as a new exploratory analysis; this one stays and is reported.</span></label>
         <label class="inline"><input type="radio" name="mode" value="redo"><span><strong>Redo this analysis</strong>: when something in it is wrong, for example a mis-coded variable. The new run replaces this one and keeps its label (${esc(labelText(a))}); this run stays in the record, and the reviewer sees both.</span></label>
+        <label class="inline"><input type="radio" name="mode" value="text"><span><strong>Rewrite its text</strong>: the Writing Agent writes the text that reports this analysis again, as you ask. Its numbers are checked again.</span></label>
       </fieldset>
       <label><span>Your instruction to the Analysis Agent</span><textarea name="text" required placeholder="For example: treat parity as categorical (0, 1, 2 or more)"></textarea></label>
       <div><button class="btn" data-label="The Analysis Agent is working">Send to the Analysis Agent</button></div></form></details>`;
@@ -974,17 +1026,22 @@ async function analyses() {
   const pending = s.plan_locked ? pendingSteps() : [];
   const tables = await tablesNow();
   const byStep = {};
-  for (const [id, a] of Object.entries(s.analyses).sort((x, y) => x[1].seq - y[1].seq)) if (!a.superseded_by) (byStep[stepOf(a)] ||= []).push([id, a]);
+  for (const [id, a] of Object.entries(s.analyses).sort((x, y) => x[1].seq - y[1].seq)) if (!a.superseded_by && !a.withdrawn) (byStep[stepOf(a)] ||= []).push([id, a]);
+  const leftOut = Object.entries(s.analyses).filter(([, a]) => a.withdrawn);
   const sections = [];
   for (const [key, title, who] of SEQ) {
     const list = byStep[key] || [];
     const waiting = s.plan_locked && pending.some((q) => (key === "quality" && q.args.standard_step === "data_quality")
       || (key === "table1" && q.args.standard_step === "table1")
       || (q.args.plan_analysis_id && stepOf({ kind: s.plan_locked.analyses[q.args.plan_analysis_id].kind }) === key));
-    if (!list.length && !waiting) continue;
+    const always = ["quality", "table1", "descriptive", "univariable", "multivariable"].includes(key) && (s.plan_locked || list.length);
+    if (!list.length && !waiting && !always) continue;
+    const empty = list.length || waiting ? "" : key === "table1" ? table1Builder(canRun)
+      : key === "quality" ? `<p class="small muted">Runs first, when the analyses are run.</p>`
+      : `<p class="small muted">None in the confirmed plan.${key === "univariable" ? " Crude (unadjusted) estimates are reported beside the adjusted ones in each multivariable model." : ""}</p>`;
     sections.push(`<section><h2 class="step">${esc(title)} ${who ? `<span class="who">${esc(who)}</span>` : ""}</h2>
       ${(await Promise.all(list.map(([id, a]) => analysisBlock(id, a, tables, canRun)))).join("")}
-      ${waiting ? `<p class="small muted">Not run yet.</p>` : ""}</section>`);
+      ${waiting ? `<p class="small muted">Not run yet.</p>` : ""}${empty}</section>`);
   }
   const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
   return `${s.stage === "INGEST" ? `<p>The analyses run once every author has confirmed the plan, in this order: data quality, Table 1, other descriptive analyses, univariable, then multivariable analyses with their diagnostics.</p>` : ""}
@@ -992,8 +1049,10 @@ async function analyses() {
     ${canRun && pending.length ? `<div class="bigaction"><p><strong>${pending.length} step${pending.length > 1 ? "s" : ""} to run</strong>, in order: ${esc(pending.map((q) => q.label).join("; "))}. Each runs in a locked-down sandbox on the uploaded file; the models never see a data row.</p>
       <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
     ${tables.length ? `<p class="small"><strong>${tables.length} table${tables.length > 1 ? "s" : ""} and ${s.figures.filter((f) => f.number).length} figure${s.figures.filter((f) => f.number).length === 1 ? "" : "s"}</strong>, numbered as in the paper. They go into the draft's Results section, each beside the text that explains it.</p>` : ""}
-    ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the Analysis Agent to run a variant or to redo it.</p>` : ""}
+    ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the AI to run a variant, redo it, or rewrite its text.</p>` : ""}
     ${sections.join("")}
+    ${leftOut.length ? `<section><h2 class="step">Left out of the paper <span class="who">Exploratory analyses the authors asked for and then left out. Kept in the record; the reviewer is told.</span></h2>
+      ${(await Promise.all(leftOut.map(async ([id, a]) => `<details class="replaced"><summary>${esc(a.spec?.title || id)} (${esc(id)}): left out by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”</summary>${await analysisBlock(id, a, [], false)}</details>`))).join("")}</section>` : ""}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
       <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
         <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
@@ -1349,7 +1408,7 @@ document.addEventListener("click", async (ev) => {
   if (t.dataset.tab) { S.tab = t.dataset.tab; S.notice = null; await render(); $("#panel")?.focus?.(); return; }
   if (t.dataset.agent) {
     const label = t.dataset.label;
-    return act(t, () => agent(t.dataset.agent), "Done. The result is below and in the record.",
+    return act(t, () => agent(t.dataset.agent, t.dataset.args ? JSON.parse(t.dataset.args) : {}), "Done. The result is below and in the record.",
       `${label}. This can take a minute or two; the page updates when it is done.`);
   }
   const a = t.dataset.action, s = S.state;
@@ -1368,7 +1427,8 @@ document.addEventListener("click", async (ev) => {
           try { await agent("run_planned", q.args); } catch (e) { failures.push(`${q.label}: ${e.message}`); }
         }
         if (failures.length) throw new Error(`${failures.length} step${failures.length > 1 ? "s" : ""} did not finish: ${failures.join(" | ")}`);
-      }, "All the analyses ran, in the standard order. Check the results, then accept them.");
+        await describeMissing((await api(`/projects/${S.pid}`)).state);
+      }, "All the analyses ran, in the standard order, each with its text. Check them, then accept the results.");
     }
     case "accept": return act(t, () => command("accept_analyses", { analysis_set_sha256: s.analysis_set_sha256 }), "You accepted the results.");
     case "start_review": return act(t, () => command("start_review"), "The review has started.");
@@ -1508,20 +1568,24 @@ document.addEventListener("submit", async (ev) => {
     }
     case "askai": {
       const id = f.dataset.id, text = val("text");
-      if (fd.get("mode") === "redo") return act(btn, () => agent("redo", { analysis_id: id, reason: text }),
+      if (fd.get("mode") === "text") return act(btn, () => agent("describe", { analysis_id: id, instruction: text }),
+        "The text was rewritten and its numbers checked.", "The Writing Agent is rewriting the text.");
+      if (fd.get("mode") === "redo") return act(btn, async () => { const r = await agent("redo", { analysis_id: id, reason: text }); await describeMissing(r.state); return r; },
         "Redone. The new run replaces the earlier one, which is kept in the record; check the results, then accept them.",
         "The Analysis Agent is redoing the analysis in the sandbox. This can take a minute or two.");
       const rid = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
-      return act(btn, () => agent("run_request", { request_id: rid, prompt: text, based_on: id }),
+      return act(btn, async () => { const r = await agent("run_request", { request_id: rid, prompt: text, based_on: id }); await describeMissing(r.state); return r; },
         "The variant ran. It is labelled exploratory, and the original analysis stays in the paper.",
         "The Analysis Agent is writing and running the variant in the sandbox. This can take a minute or two.");
     }
+    case "withdrawanalysis": return act(btn, () => command("withdraw_analysis", { analysis_id: f.dataset.id, reason: val("reason") }),
+      "Left out of the paper. It stays in the record, with your reason, and the reviewer is told.");
     case "t1change": {
       const vars = val("vars").split(",").map((x) => x.trim()).filter(Boolean);
-      return act(btn, () => agent("change_table1", { table1: { stratify_by: val("by") || null, variables: vars }, reason: val("reason") }),
-        "Table 1 was rebuilt. The earlier version is kept in the record.");
+      return act(btn, async () => { const r = await agent("change_table1", { table1: { stratify_by: val("by") || null, variables: vars }, reason: val("reason") }); await describeMissing(r.state); return r; },
+        "Table 1 was built by Saksi's own code. Any earlier version is kept in the record.");
     }
-    case "explore": return act(btn, () => agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }), "The exploratory analysis ran. It is labelled exploratory.",
+    case "explore": return act(btn, async () => { const r = await agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }); await describeMissing(r.state); return r; }, "The exploratory analysis ran. It is labelled exploratory.",
       "The Analysis Agent is writing and running the code. This can take a minute or two.");
     case "signoff": {
       const answers = {}; s.signoff_questions.forEach((q, i) => (answers[q] = val("q" + i)));

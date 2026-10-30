@@ -132,7 +132,49 @@ def _table1(aid: str, a: dict[str, Any], t: dict[str, Any], labels: dict[str, di
             "columns": cols, "rows": rows, "footnotes": notes}
 
 
+MAX_ROWS, MAX_COLS = 80, 12
+
+
+def _code_table(raw: Any) -> dict[str, Any] | None:
+    """A table laid out by the analysis code (when an author asks for a layout). Every cell is text the code
+    formatted from values it computed; Saksi only checks the shape."""
+    if not isinstance(raw, dict):
+        return None
+    cols = raw.get("columns")
+    if not isinstance(cols, list) or not 2 <= len(cols) <= MAX_COLS:
+        return None
+    rows = []
+    for r in (raw.get("rows") or [])[:MAX_ROWS]:
+        cells = r.get("cells") if isinstance(r, dict) else r
+        if not isinstance(cells, list) or len(cells) != len(cols):
+            return None
+        rows.append({"cells": ["" if c is None else str(c) for c in cells],
+                     "indent": bool(r.get("indent")) if isinstance(r, dict) else False})
+    if not rows:
+        return None
+    return {"title": str(raw.get("title") or ""), "columns": [str(c) for c in cols], "rows": rows,
+            "footnotes": [str(n) for n in (raw.get("footnotes") or [])[:10]]}
+
+
+def _common_notes(a: dict[str, Any], out: dict[str, Any]) -> list[str]:
+    notes = []
+    n, ev, ex = out.get("n_analysed"), out.get("n_events"), out.get("n_excluded")
+    if n is not None:
+        notes.append(f"n = {n} analysed" + (f", {ev} with the outcome" if ev is not None else "")
+                     + (f"; {ex} excluded" + (f" ({out['exclusion_reason']})" if out.get("exclusion_reason") else "")
+                        if ex else "") + ".")
+    model = (out.get("model") or {}).get("formula_or_description")
+    if model:
+        notes.append(f"Model: {model}.")
+    return notes
+
+
 def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    laid = _code_table(out.get("table"))
+    if laid:
+        return {"analysis_id": aid, "kind": "results", "title": laid["title"] or str(a["spec"].get("title") or aid),
+                "columns": laid["columns"], "rows": laid["rows"],
+                "footnotes": laid["footnotes"] + _common_notes(a, out) + [_label_note(a)], "laid_out_by": "analysis code"}
     est = [e for e in out.get("estimates") or [] if isinstance(e, dict) and e.get("name") is not None]
     if not est:
         return None
@@ -379,6 +421,16 @@ def apply_edits(tables: list[dict[str, Any]], edits: dict[str, Any] | None) -> l
                 t["footnotes"][int(k)] = v
         out.append(t)
     return out
+
+
+def resolve(text: str, aid: str, tables: list[dict[str, Any]], figures: list[dict[str, Any]]) -> str:
+    """Replace a description's [[Table]] and [[Figure:name]] tokens with the current numbers."""
+    t = next((x for x in tables if x["analysis_id"] == aid), None)
+    out = (text or "").replace("[[Table]]", f"Table {t['number']}" if t else "the table")
+    for f in figures:
+        if f["analysis_id"] == aid:
+            out = out.replace(f"[[Figure:{f['name']}]]", f"Figure {f['number']}" if f.get("number") else "the figure")
+    return re.sub(r"\[\[Figure:[^\]]*\]\]", "the figure", out)
 
 
 _REF = re.compile(r"\b(Tables?|Fig(?:ure)?s?\.?)\s+(\d+(?:\s*(?:,|and|to|-|–)\s*\d+)*)", re.I)

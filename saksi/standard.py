@@ -23,6 +23,7 @@ that with the plan. Outputs hold counts and summaries only, never a row.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 KIND_ORDER = {"descriptive": 0, "univariable": 1, "multivariable": 2, "other": 3}
@@ -159,6 +160,33 @@ def analyse(data_path, seed):
              "Mann-Whitney / ANOVA or Kruskal-Wallis. Categorical: n (%), chi-square, or Fisher's exact test when a "
              "2 x 2 table has an expected count below 5."]}
 '''
+
+
+_MULTI = re.compile(r"multivariab|multivariat|adjusted|multiple (?:logistic|linear|regression)|cox|mixed[- ]effects|"
+                    r"generali[sz]ed estimating|propensity", re.I)
+_UNI = re.compile(r"univariab|univariat|bivariat|crude|unadjusted|simple (?:logistic|linear)|chi[- ]?squ|t[- ]test|"
+                  r"mann[- ]whitney|fisher|kruskal|anova|correlation|log[- ]rank|wilcoxon", re.I)
+_DESC = re.compile(r"descriptive|prevalence|incidence|proportion|frequenc|percentage|distribution|summary statistic|"
+                   r"mean \(|median", re.I)
+
+
+def infer_kind(spec: dict[str, Any]) -> str:
+    """Where an analysis sits in the standard sequence, from its method, for plans made without a kind
+    (before the standard sequence existed) or when the agent gave none. A rule, so it is the same every time."""
+    text = " ".join(str(spec.get(k) or "") for k in ("method", "effect_measure", "title", "objective"))
+    covariates = [c for c in spec.get("covariates") or [] if c]
+    if _MULTI.search(text) or (covariates and re.search(r"regression|model", text, re.I)):
+        return "multivariable"
+    if _UNI.search(text):
+        return "univariable"
+    if _DESC.search(text):
+        return "descriptive"
+    return "other"
+
+
+def kind_of(spec: dict[str, Any]) -> str:
+    k = spec.get("kind")
+    return k if k in KIND_ORDER else infer_kind(spec)
 
 
 def position(a: dict[str, Any]) -> tuple[int, int]:

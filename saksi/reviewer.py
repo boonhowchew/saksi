@@ -103,6 +103,8 @@ class ReviewerAssistant:
                        "results": blobs.get_json(v["outputs_sha256"])}
                    for k, v in ok.items()}
         facts = interval_facts({k: v["results"] for k, v in results.items()})
+        left_out = {k: {"title": v["spec"].get("title"), "authors_reason": v["withdrawn"]["reason"]}
+                    for k, v in s.analyses.items() if v.get("withdrawn")}
         code = {k: blobs.get_text(v["code_sha256"])[:CODE_CHARS] for k, v in ok.items() if blobs.has(v["code_sha256"])}
         failed = {k: {"title": v["spec"].get("title"), "error": (v.get("error") or "")[:300]}
                   for k, v in s.analyses.items() if v["status"] != "ok" and v["plan_analysis_id"]
@@ -123,9 +125,11 @@ class ReviewerAssistant:
                  f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed, indent=1)}",
                  f"PROTOCOL ANALYSES THE AUTHORS LEFT OUT OF THIS PAPER, WITH REASONS:\n"
                  f"{json.dumps(not_performed(s), indent=1)}",
+                 f"EXPLORATORY ANALYSES RUN AFTER THE PLAN BUT LEFT OUT OF THE PAPER BY THE AUTHORS, WITH REASONS:\n"
+                 f"{json.dumps(left_out, indent=1)}",
                  "FIGURES (captions only; drawn by code, never by a model):\n" + ("\n".join(
                      f"Figure {f['number']} [A:{f['analysis_id']}], drawn by {f['drawn_by']}: {f['caption']}"
-                     for f in s.figures if f["analysis_id"] in ok) or "(none)"),
+                     for f in s.figures if f["analysis_id"] in ok and f.get("number")) or "(none)"),
                  f"DATA DICTIONARY (aggregate):\n{json.dumps(dictionary, indent=1)}",
                  f"AUTOMATIC NUMBER CHECK OF THIS VERSION:\n{json.dumps(_check_brief(checks), indent=1)}"]
 

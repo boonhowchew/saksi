@@ -50,10 +50,10 @@ AUC_PLAN = {"id": "auc", "title": "Discrimination of the primary model", "object
 DRAFT = f"""[Authors: introduction]
 
 ## Methods
-As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration.
+As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration. The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality].
 
 ## Results
-The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status; those with GDM were slightly older and more often had previous GDM [A:s_table1.r1].
+Table 1 describes the {t1['n_analysed']} women by GDM status; those with GDM were slightly older and more often had previous GDM [A:s_table1.r1].
 
 Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3) [A:primary]. Table 2 and Figure 1 give the adjusted estimates. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
