@@ -112,9 +112,12 @@ class ScriptedModel:
         purpose = ("review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
                    else "describe" if "reports ONE analysis" in system
+                   else "assist" if "Saksi's analysis assistant" in system
                    else "write" if "Writing Agent" in system else "code")
         if purpose == "describe" and not self.script.get("describe"):
             reply = describe_reply                                   # a plain, number-free default
+        elif purpose == "assist" and not self.script.get("assist"):
+            reply = assist_reply
         else:
             reply = self.script[purpose].pop(0)
         if callable(reply):
@@ -123,6 +126,18 @@ class ScriptedModel:
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
         return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+
+
+def assist_reply(user):
+    """The assistant, scripted: 'redo' -> redo, 'text' -> rewrite_text, otherwise a variant."""
+    import json as _j
+    msg = user.split("AUTHOR'S MESSAGE: ", 1)[1].split("\n\nABOUT: ", 1)[0]
+    about = user.split("ABOUT: ", 1)[1].split("\n", 1)[0]
+    aid = None if about.startswith("the Results") else about
+    low = msg.lower()
+    kind = "redo" if "redo" in low else "rewrite_text" if "text" in low else "variant"
+    return _j.dumps({"reply": f"I will {'redo' if kind == 'redo' else 'rewrite the text of' if kind == 'rewrite_text' else 'run a variant of'} it.",
+                     "action": {"type": kind, "analysis_id": aid, "instruction": msg}})
 
 
 def describe_reply(user):
@@ -651,7 +666,7 @@ def test_authors_reword_tables_on_the_draft_but_numbers_are_locked(setup):
     # Every table and figure must be referred to in the text.
     bare = text.replace(REFS, "")
     r = p.check_text(bare)
-    assert r["tables_not_referred"] == [1, 2] and r["figures_not_referred"] and not r["ok"]
+    assert r["tables_not_referred"] == [1] and r["figures_not_referred"] and not r["ok"]   # x_q1 repeats Table 1
     assert p.check_text(text + "\n\nSee Table 9.")["references_unknown"] == ["Table 9"]
     # Words can change; numbers cannot.
     with pytest.raises(WorkflowError, match="must keep its numbers"):
@@ -732,3 +747,47 @@ def test_an_exploratory_analysis_can_be_left_out_with_a_reason_but_not_a_planned
     assert "x_q1" not in current(s) and s.analyses["x_q1"]["withdrawn"]["reason"] == "Superseded by Table 1"
     assert s.analysis_set_sha() != before                                  # acceptance must be given again
     assert all(f["number"] is None for f in s.figures if f["analysis_id"] == "x_q1")
+
+
+def test_identical_tables_are_numbered_once_and_suggested_for_leaving_out(setup):
+    from saksi import advisor, tables
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    s = agents.run_request("bhc", "q1", "the same model again", based_on="primary")
+    ts = tables.build(s, p.blobs, with_duplicates=True)
+    dup = next(t for t in ts if t["analysis_id"] == "x_q1")
+    assert dup["number"] is None and dup["duplicate_of"] == {"analysis_id": "primary", "number": 2}
+    assert [t["number"] for t in tables.build(s, p.blobs)] == [1, 2]
+    sug = {x["id"]: x for x in advisor.suggestions(s, p.blobs)}
+    assert sug["dup:x_q1"]["action"] == {"type": "leave_out", "analysis_id": "x_q1", "instruction": "Same results as primary"}
+
+
+def test_proactive_suggestions_follow_epidemiological_rules(setup):
+    from saksi import advisor
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    sug = {x["id"]: x for x in advisor.suggestions(s, p.blobs)}
+    assert sug["epv:primary"]["action"]["type"] == "variant" and "Firth" in sug["epv:primary"]["action"]["instruction"]
+    assert sug["crude:primary"]["action"]["type"] == "redo"               # the fixture reports adjusted only
+    assert sug["text:primary"]["action"]["type"] == "rewrite_text"        # no text yet
+    assert sug["c:primary"]["kind"] == "note"                             # C 0.65, not a prediction study
+    assert "table1" not in sug
+    # Once the sensitivity analysis exists, it is not suggested again.
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    model.script["code"] = [fence(GOOD_WITH_DIAGNOSTICS)]
+    s = agents.run_request("bhc", "q1", sug["epv:primary"]["action"]["instruction"], based_on="primary")
+    assert "epv:primary" not in {x["id"] for x in advisor.suggestions(s, p.blobs)}
+
+
+def test_the_assistant_answers_and_proposes_one_checked_action(setup):
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    s, prop = agents.assist("bhc", "Add waist circumference as a covariate", "primary")
+    assert prop["action"] == {"type": "variant", "analysis_id": "primary", "instruction": "Add waist circumference as a covariate"}
+    assert prop["reply"] and s.events_count if hasattr(s, "events_count") else True
+    assert any(e.type == "llm.called" and e.payload.get("purpose") == "assist" for e in p.log.events())
+    # It cannot leave out a planned analysis, whatever it proposes.
+    model.script["assist"] = [{"reply": "Leaving it out.", "action": {"type": "leave_out", "analysis_id": "primary"}}]
+    _, prop = agents.assist("bhc", "drop the primary analysis", "primary")
+    assert prop["action"]["type"] == "none" and "planned analysis is reported" in prop["reply"]

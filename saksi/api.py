@@ -43,6 +43,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "run_request": ("run_request", {"request_id", "prompt", "based_on"}, "author"),
     "redo": ("redo", {"analysis_id", "reason"}, "author"),
     "describe": ("describe", {"analysis_id", "instruction"}, "author"),
+    "assist": ("assist", {"message", "analysis_id"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
     "brief_reviewer": ("brief_reviewer", set(), "reviewer"),
@@ -253,11 +254,18 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         from .tables import apply_edits, build
         p = existing(pid)
         s = p.state()
-        ts = build(s, p.blobs)
+        ts = build(s, p.blobs, with_duplicates=True)
         d = s.drafts.get(version) if version else None
         if d and d.get("table_edits_sha256"):
             ts = apply_edits(ts, p.blobs.get_json(d["table_edits_sha256"]))
         return {"tables": ts}
+
+    @app.get("/projects/{pid}/suggestions")
+    def get_suggestions(pid: str, who: str = Depends(actor)):
+        """Saksi's proactive suggestions on the Results: fixed rules, applied by code."""
+        from .advisor import suggestions
+        p = existing(pid)
+        return {"suggestions": suggestions(p.state(), p.blobs)}
 
     @app.get("/projects/{pid}/tables.docx")
     def get_tables_docx(pid: str, number: int | None = None, who: str = Depends(actor)):
@@ -327,6 +335,9 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
                                 else "only a reviewer can ask the Reviewer Assistant")
         try:
             s = getattr(agents_factory(p), method)(who, **body.args)
+            extra_out = {}
+            if isinstance(s, tuple):                       # the assistant also returns its proposal
+                s, extra_out = s[0], {"assist": s[1]}
         except WorkflowError as e:
             raise refused(e)
         except AgentError as e:
@@ -341,7 +352,7 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
             raise HTTPException(500, f"Saksi hit an unexpected error during '{action}' ({type(e).__name__}). "
                                      "Anything already done is in the record; the details are in the server log.")
         persist()
-        return {"state": s.to_dict()}
+        return {"state": s.to_dict(), **extra_out}
 
     @app.post("/projects/{pid}/materials")
     async def upload(pid: str, kind: str = Form(...), note: str | None = Form(None),

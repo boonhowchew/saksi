@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -47,6 +47,7 @@ TASKS = {
     "quotes": {"reasoning_effort": "low", "max_tokens": 8000},
     "write": {"reasoning_effort": "medium", "max_tokens": 16000},
     "describe": {"reasoning_effort": "low", "max_tokens": 3000},
+    "assist": {"reasoning_effort": "low", "max_tokens": 2500},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -507,6 +508,52 @@ class Agents:
             execution=execution, status="ok" if ok else "error", error=error, request_id=request_id,
             call=last_call, requested_by=requested_by, call_seqs=failed_call_seqs, figures=figs,
             supersedes=supersedes if ok else None, redo_reason=redo_reason if ok else None)
+
+    # -- The assistant on the Analyses page ----------------------------------
+    ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "leave_out", "none"}
+
+    def assist(self, requested_by: str, message: str, analysis_id: str | None = None):
+        """An author writes to the assistant about one result or the whole Results. The assistant answers and
+        proposes at most one action; the page carries it out through the usual, recorded routes."""
+        s = self.project.state()
+        if not (message or "").strip():
+            raise WorkflowError("write a message")
+        if s.plan_locked is None:
+            raise WorkflowError("the analysis plan has not been confirmed by every author")
+        tables = tables_mod.build(s, self.project.blobs)
+        cur = current(s)
+        brief = {}
+        for k, v in sorted(cur.items(), key=lambda kv: _position(kv[1])):
+            out = self.project.blobs.get_json(v["outputs_sha256"])
+            t = next((x for x in tables if x["analysis_id"] == k), None)
+            d = out.get("diagnostics") if isinstance(out.get("diagnostics"), dict) else {}
+            text = ""
+            if v.get("description") and self.project.blobs.has(v["description"]["text_sha256"]):
+                text = tables_mod.resolve(self.project.blobs.get_text(v["description"]["text_sha256"]), k, tables, s.figures)
+            brief[k] = {"title": v["spec"].get("title"), "label": v["label"], "basis": v.get("basis"),
+                        "kind": v.get("kind"), "standard": v.get("standard"), "table": t["number"] if t else None,
+                        "figures": [f["number"] for f in s.figures if f["analysis_id"] == k and f.get("number")],
+                        "n_analysed": out.get("n_analysed"), "estimates": (out.get("estimates") or [])[:8],
+                        "diagnostic_flags": d.get("flags"), "text": text[:1500]}
+        dic = [{"column": c.get("column"), "label": c.get("label")} for c in self._dictionary(s).get("dictionary") or []][:300]
+        user = (f"AUTHOR'S MESSAGE: {message}\n\nABOUT: {analysis_id or 'the Results as a whole'}\n\n"
+                f"RESULTS SO FAR:\n{json.dumps(brief, indent=1)[:40000]}\n\nDATA DICTIONARY:\n{json.dumps(dic)}")
+        obj, call, _ = self._json_call(ANALYST_ID, "assist", ASSIST, user, purpose="assist")
+        self.project.record_model_call(ANALYST_ID, call)
+        reply = str(obj.get("reply") or "").strip()[:1200]
+        act = obj.get("action") if isinstance(obj.get("action"), dict) else {}
+        kind = act.get("type") if act.get("type") in self.ACTIONS else "none"
+        target = act.get("analysis_id") or analysis_id
+        if kind in {"variant", "redo", "rewrite_text", "leave_out"}:
+            if target not in cur or cur[target].get("standard") and kind != "rewrite_text":
+                kind, reply = "none", reply + " (I could not find a result I can change that way.)"
+            elif kind == "leave_out" and cur[target].get("basis") != "post hoc":
+                kind, reply = "none", reply + " (A planned analysis is reported; only an exploratory one added after the plan can be left out.)"
+        proposal = {"reply": reply or "Done.", "action": {"type": kind, "analysis_id": target if kind != "none" else None,
+                                                          "instruction": str(act.get("instruction") or message)[:2000]}}
+        if kind == "table1":
+            proposal["action"].update({"stratify_by": act.get("stratify_by"), "variables": act.get("variables") or []})
+        return self.project.state(), proposal
 
     # -- Text for each analysis -------------------------------------------------
     def describe(self, requested_by: str, analysis_id: str, instruction: str | None = None) -> State:

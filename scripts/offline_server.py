@@ -59,7 +59,7 @@ Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM event
 
 The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope (Figure 2) {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
 
-In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (Table 4) [A:x_q1].
+In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (the same as in Table 2) [A:x_q1].
 
 In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} (Table 3; Figures 4 and 5) [A:auc.r1].
 

@@ -101,6 +101,26 @@ details.askai > form { padding: 0 .8rem .8rem; }
 fieldset.choice { border: 0; padding: 0; margin: 0 0 .4rem; display: grid; gap: .45rem; }
 fieldset.choice label.inline { align-items: flex-start; gap: .5rem; }
 fieldset.choice input { margin-top: .25rem; }
+.manuscript-view.results { max-width: 52rem; }
+.results h2 { font: 600 1.35rem var(--serif); border-bottom: 1px solid var(--rule); padding-bottom: .3rem; }
+.results h3.rgroup { font: 600 1.05rem var(--serif); margin: 1.6rem 0 .2rem; color: var(--muted); }
+.rsec { margin: 1rem 0 1.6rem; }
+.rsec h4 { font: 600 1.02rem var(--serif); margin: 0 0 .3rem; display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.rsec .rtext p { margin: .35rem 0; }
+.methodsnote { background: #F6F7FA; border: 1px solid var(--rule); border-radius: 6px; padding: .6rem .9rem; }
+.methodsnote h3 { margin: 0 0 .3rem; font: 600 1rem var(--serif); }
+.chat { margin: .5rem 0 0; font-family: var(--sans); font-size: .88rem; }
+.chat .cm { margin: .25rem 0; padding: .35rem .6rem; border-radius: 6px; max-width: 46rem; }
+.chat .cm.you { background: #EEF1F7; }
+.chat .cm.ai { background: var(--verdigris-wash); }
+form.chatform { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; max-width: 46rem; }
+form.chatform input { flex: 1; padding: .45rem .6rem; font-size: .9rem; }
+form.chatform .btn { padding: .4rem .8rem; }
+section.advisor ul.sugg { list-style: none; padding: 0; margin: .4rem 0; }
+section.advisor ul.sugg li { border-left: 3px solid var(--ochre); background: var(--ochre-wash); padding: .45rem .7rem; margin: .35rem 0; border-radius: 0 4px 4px 0; font-size: .9rem; }
+section.advisor ul.sugg li.note { border-left-color: var(--rule); background: #F6F7FA; }
+section.advisor ul.sugg li .btn { margin-left: .4rem; padding: .2rem .6rem; font-size: .82rem; }
+details.alldetails > summary { font: 600 1.05rem var(--sans); cursor: pointer; padding: .4rem 0; }
 .restext { border-left: 3px solid var(--verdigris); background: var(--verdigris-wash); padding: .5rem .8rem; margin: .6rem 0 .8rem; border-radius: 0 4px 4px 0; }
 .restext .manuscript-view { max-width: none; font-size: 1rem; }
 .restext .manuscript-view p { margin: .3rem 0; }
@@ -261,7 +281,7 @@ const INTROS = {
   people: "Who is working on this study. Authors check and sign everything; the reviewer reviews once every author has signed off. The AI agents act only when a person asks, and the record names who asked.",
   materials: "The study's files. Saksi stores them privately, checks that it can read them, and never sends a data row to an AI model. This version handles quantitative studies: a dataset and its protocol. A qualitative path (transcripts, coding and themes, with the same record, approvals and quotation checks) is designed but not yet built.",
   plan: "Which of the protocol's analyses this paper reports. The Analysis Agent drafts the plan and code checks it against the protocol. The authors choose and confirm it before any analysis runs.",
-  analyses: "The confirmed analyses, run as code in a locked-down sandbox on the uploaded file: results, figures, and exactly how each was produced.",
+  analyses: "The Results section, generated from your data and the confirmed plan: data checks for Methods, Table 1, then each objective in the standard order, each with its text, table and figures. Ask Saksi AI beside any result to change it. How each result was produced is folded away below.",
   draft: "The manuscript. Code checks every number against the results, every edit is recorded, and each author signs off.",
   review: "Peer review: the reviewer's comments, the authors' responses, and the Reviewer Assistant's briefing.",
   record: "Everything that happened, sealed in order: who contributed what, and every AI model call.",
@@ -270,7 +290,7 @@ const TABS = [["people", "People"], ["materials", "Data"], ["plan", "Plan"], ["a
   ["draft", "Draft"], ["review", "Review"], ["record", "Record"]];
 
 const S = { pid: null, token: null, you: null, state: null, events: [], verify: null, tab: "people",
-  version: null, busy: null, notice: null, secret: null, prefill: null, blobs: new Map(), seenSeq: 0, stale: false };
+  version: null, busy: null, notice: null, secret: null, prefill: null, blobs: new Map(), seenSeq: 0, stale: false, chat: {} };
 
 /* ---------- small helpers ---------- */
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -910,7 +930,7 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
   const s = S.state, ex = a.execution || {}, pv = ex.provenance || {};
   const out = a.status === "ok" ? await blobJSON(a.outputs_sha256) : null;
   const est = out?.estimates || [];
-  const pub = tables.find((t) => t.analysis_id === id);
+  const pub0 = tables.find((t) => t.analysis_id === id), pub = pub0?.number ? pub0 : null;
   let body;
   if (!out) body = `<p class="msg err small">${esc(a.error || "")}</p>`;
   else if (a.standard === "data_quality") body = qualityHtml(out);
@@ -955,6 +975,91 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
       <form class="stack" data-form="withdrawanalysis" data-id="${esc(id)}"><label><span>Why (kept in the record and shown to the reviewer)</span><input type="text" name="reason" required placeholder="For example: superseded by Table 1"></label>
       <div><button class="btn quiet" data-label="Leaving it out">Leave it out</button></div></form></details>` : ""}
     ${a.supersedes && s.analyses[a.supersedes] ? `<details class="replaced"><summary>The earlier run, ${esc(a.supersedes)}, replaced</summary>${await analysisBlock(a.supersedes, s.analyses[a.supersedes], [], false)}</details>` : ""}</div>`;
+}
+
+/* The generated Results section, with the AI beside every result */
+const posOf = (a) => a.standard ? [0, a.standard === "data_quality" ? 0 : 1]
+  : a.basis === "post hoc" ? [6, a.order_seq ?? a.seq] : [2 + (KIND_RANK[a.kind] ?? 3), a.order_seq ?? a.seq];
+const byPos = (x, y) => { const a = posOf(x[1]), b = posOf(y[1]); return a[0] - b[0] || a[1] - b[1]; };
+const currentList = () => Object.entries(S.state.analyses).filter(([, a]) => a.status === "ok" && !a.superseded_by && !a.withdrawn).sort(byPos);
+async function rtext(id, a, tables, canRun) {
+  const d = a.description;
+  if (!d) return canRun ? `<p class="small muted">Text not written yet. <button class="linkish" data-agent="describe" data-args='${esc(JSON.stringify({ analysis_id: id }))}' data-label="The Writing Agent is writing">Write it</button></p>` : "";
+  const text = resolveRefs(await blob(d.text_sha256) || "", id, tables);
+  return `<div class="rtext">${text.split(/\n{2,}/).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}</div>
+    ${d.checks?.ok ? "" : `<p class="small"><span class="tag attn">${esc(d.checks?.untraced || 0)} number(s) in this text are not in the results</span></p>`}`;
+}
+function chatBox(id, canRun) {
+  if (!canRun) return "";
+  const key = id || "_", log = S.chat[key] || [];
+  return `<div class="chat">${log.map((m, i) => `<p class="cm ${m.who}"><strong>${m.who === "you" ? "You" : "Saksi AI"}:</strong> ${esc(m.text)}
+      ${m.pending ? `<button class="linkish" data-action="confirmai" data-key="${esc(key)}" data-i="${i}" data-label="Working">Yes, ${esc(m.pending.label)}</button>` : ""}</p>`).join("")}
+    <form class="chatform" data-form="assist" data-id="${esc(id || "")}"><span class="aibadge">AI</span>
+      <input type="text" name="message" required autocomplete="off" aria-label="Message to Saksi AI" placeholder="${id ? "Ask about this result, or say what to change" : "Ask Saksi AI to change anything in the Results, or ask a question"}">
+      <button class="btn" data-label="Saksi AI is working">Send</button></form></div>`;
+}
+async function resultsView(tables, canRun) {
+  const cur = currentList();
+  if (!cur.length) return "";
+  const head = (id, a) => a.standard === "table1" ? "Characteristics of the participants" : (a.spec?.title || id);
+  let h = "", posthoc = false;
+  const dq = cur.find(([, a]) => a.standard === "data_quality");
+  if (dq) h += `<div class="rsec methodsnote" id="r-${esc(dq[0])}"><h3>Data checks <span class="small muted">· for the statistical analysis part of Methods</span></h3>
+    ${await rtext(dq[0], dq[1], tables, canRun)}${chatBox(dq[0], canRun)}</div>`;
+  h += `<h2>Results</h2>`;
+  if (!cur.some(([, a]) => a.standard === "table1")) h += `<div class="rsec"><h4>Characteristics of the participants</h4>${table1Builder(canRun)}</div>`;
+  for (const [id, a] of cur) {
+    if (a.standard === "data_quality") continue;
+    if (a.basis === "post hoc" && !posthoc) { h += `<h3 class="rgroup">Exploratory analyses added after the plan</h3>`; posthoc = true; }
+    const t = tables.find((x) => x.analysis_id === id);
+    const figs = S.state.figures.filter((f) => f.analysis_id === id && f.number).sort((x, y) => x.number - y.number);
+    h += `<div class="rsec" id="r-${esc(id)}"><h4>${esc(head(id, a))} ${a.standard ? "" : labelTag(a)}</h4>
+      ${await rtext(id, a, tables, canRun)}
+      ${t ? (t.number ? pubTableHtml(t) : `<p class="notref">Same results as Table ${esc(t.duplicate_of.number)} (${esc(t.duplicate_of.analysis_id)}), so the table is not shown again.</p>`) : ""}
+      ${(await Promise.all(figs.map(figureHtml))).join("")}
+      ${chatBox(id, canRun)}</div>`;
+  }
+  return `<article class="manuscript-view results" id="results-view">${h}</article>`;
+}
+async function suggestionsNow() {
+  const seq = S.state.head_seq;
+  if (S.sugg?.pid !== S.pid || S.sugg?.seq !== seq) {
+    let list = [];
+    try { list = (await api(`/projects/${S.pid}/suggestions`)).suggestions || []; } catch { /* none */ }
+    S.sugg = { pid: S.pid, seq, list };
+  }
+  return S.sugg.list;
+}
+const ACTION_LABEL = { variant: "Run it as a sensitivity analysis", redo: "Redo the analysis", rewrite_text: "Write the text",
+  table1: "Build Table 1", leave_out: "Leave it out", new_analysis: "Run it" };
+function suggestionsHtml(list, canRun) {
+  if (!list.length) return "";
+  return `<section class="advisor"><h2 class="step"><span class="aibadge">AI</span>Saksi's suggestions <span class="who">The rules of epidemiology and biostatistics, applied by code to these results. Nothing runs until you choose.</span></h2>
+    <ul class="sugg">${list.map((x, i) => `<li class="${x.kind}"><strong>${esc(x.title)}.</strong> ${esc(x.why)}
+      ${canRun && x.action ? `<button class="btn quiet" data-action="suggest" data-i="${i}" data-label="Working">${esc(ACTION_LABEL[x.action.type] || "Do it")}</button>` : ""}</li>`).join("")}</ul></section>`;
+}
+async function runProposal(action, message) {
+  const id = action.analysis_id, nextQ = () => "q" + (Object.values(S.state.analyses).filter((a) => a.request_id).length + 1);
+  let r;
+  switch (action.type) {
+    case "variant": r = await agent("run_request", { request_id: nextQ(), prompt: action.instruction, based_on: id }); break;
+    case "new_analysis": r = await agent("run_request", { request_id: nextQ(), prompt: action.instruction }); break;
+    case "redo": r = await agent("redo", { analysis_id: id, reason: action.instruction }); break;
+    case "rewrite_text": return agent("describe", action.instruction ? { analysis_id: id, instruction: action.instruction } : { analysis_id: id });
+    case "table1": r = await agent("change_table1", { table1: { stratify_by: action.stratify_by || null, variables: action.variables || [] }, reason: action.instruction || message }); break;
+    case "leave_out": return command("withdraw_analysis", { analysis_id: id, reason: action.instruction || message });
+    default: return null;
+  }
+  await describeMissing(r.state);
+  return r;
+}
+
+async function startGenerating() {
+  // The last author to confirm the plan starts the Results: Saksi goes straight on to generate them.
+  if (S.state?.stage !== "ANALYSIS" || !isAuthor() || !pendingSteps().length) return;
+  S.tab = "analyses"; S.notice = { kind: "ok", text: "Every author confirmed the plan. Saksi is now generating the Results section." };
+  await render();
+  document.querySelector("[data-action=runall]")?.click();
 }
 
 async function describeMissing(state) {
@@ -1036,7 +1141,7 @@ async function analyses() {
       || (q.args.plan_analysis_id && stepOf({ kind: s.plan_locked.analyses[q.args.plan_analysis_id].kind }) === key));
     const always = ["quality", "table1", "descriptive", "univariable", "multivariable"].includes(key) && (s.plan_locked || list.length);
     if (!list.length && !waiting && !always) continue;
-    const empty = list.length || waiting ? "" : key === "table1" ? table1Builder(canRun)
+    const empty = list.length || waiting ? "" : key === "table1" ? `<p class="small muted">Not built yet; build it at the top of the Results.</p>`
       : key === "quality" ? `<p class="small muted">Runs first, when the analyses are run.</p>`
       : `<p class="small muted">None in the confirmed plan.${key === "univariable" ? " Crude (unadjusted) estimates are reported beside the adjusted ones in each multivariable model." : ""}</p>`;
     sections.push(`<section><h2 class="step">${esc(title)} ${who ? `<span class="who">${esc(who)}</span>` : ""}</h2>
@@ -1044,16 +1149,18 @@ async function analyses() {
       ${waiting ? `<p class="small muted">Not run yet.</p>` : ""}${empty}</section>`);
   }
   const nextQ = "q" + (Object.values(s.analyses).filter((a) => a.request_id).length + 1);
+  const results = await resultsView(tables, canRun);
+  const sugg = s.plan_locked && !pending.length ? await suggestionsNow() : [];
   return `${s.stage === "INGEST" ? `<p>The analyses run once every author has confirmed the plan, in this order: data quality, Table 1, other descriptive analyses, univariable, then multivariable analyses with their diagnostics.</p>` : ""}
     <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, pre-specified or added later. <strong>Descriptive</strong>: the standard data-quality check and Table 1.</p>
-    ${canRun && pending.length ? `<div class="bigaction"><p><strong>${pending.length} step${pending.length > 1 ? "s" : ""} to run</strong>, in order: ${esc(pending.map((q) => q.label).join("; "))}. Each runs in a locked-down sandbox on the uploaded file; the models never see a data row.</p>
-      <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
-    ${tables.length ? `<p class="small"><strong>${tables.length} table${tables.length > 1 ? "s" : ""} and ${s.figures.filter((f) => f.number).length} figure${s.figures.filter((f) => f.number).length === 1 ? "" : "s"}</strong>, numbered as in the paper. They go into the draft's Results section, each beside the text that explains it.</p>` : ""}
-    ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the AI to run a variant, redo it, or rewrite its text.</p>` : ""}
+    ${canRun && pending.length ? `<div class="bigaction"><p><strong>Generate the Results section.</strong> Saksi checks the data, builds Table 1, runs the ${pending.filter((q) => q.args.plan_analysis_id).length} planned analys${pending.filter((q) => q.args.plan_analysis_id).length === 1 ? "is" : "es"} in the standard order, draws the figures and writes the text for each result. Every analysis runs in a locked-down sandbox on the uploaded file; the models never see a data row. Steps: ${esc(pending.map((q) => q.label).join("; "))}.</p>
+      <button class="btn" data-action="runall" data-label="Generating the Results">Generate the Results section</button></div>` : ""}
+    ${tables.filter((t) => t.number).length ? `<p class="small"><strong>${tables.filter((t) => t.number).length} table${tables.filter((t) => t.number).length > 1 ? "s" : ""} and ${s.figures.filter((f) => f.number).length} figure${s.figures.filter((f) => f.number).length === 1 ? "" : "s"}</strong>, numbered as in the paper. They go into the draft's Results section, each beside the text that explains it.</p>` : ""}
+    ${results ? `${canRun ? `<div class="rsec">${chatBox(null, canRun)}</div>` : ""}${suggestionsHtml(sugg, canRun)}${results}` : ""}
     ${(() => { const n = Object.values(s.analyses).filter((a) => a.status === "ok" && !a.superseded_by && !a.withdrawn && !a.description).length;
-      return canRun && n && !pending.length ? `<div class="bigaction"><p><strong>${n} result${n > 1 ? "s have" : " has"} no text yet.</strong> The Writing Agent writes the passage that reports each one (Methods for the data checks), and code checks its numbers.</p>
+      return canRun && n && !pending.length && S.busy == null ? `<div class="bigaction"><p><strong>${n} result${n > 1 ? "s have" : " has"} no text yet.</strong> The Writing Agent writes the passage that reports each one (Methods for the data checks), and code checks its numbers.</p>
         <button class="btn" data-action="describeall" data-label="Writing the texts">Write the text for ${n === 1 ? "it" : "all " + n}</button></div>` : ""; })()}
-    ${sections.join("")}
+    ${results ? `<details class="alldetails" id="details-all" ${S.detailsOpen ? "open" : ""}><summary>How each result was produced: data checks, code, provenance, diagnostics, earlier runs</summary>${sections.join("")}</details>` : sections.join("")}
     ${leftOut.length ? `<section><h2 class="step">Left out of the paper <span class="who">Exploratory analyses the authors asked for and then left out. Kept in the record; the reviewer is told.</span></h2>
       ${(await Promise.all(leftOut.map(async ([id, a]) => `<details class="replaced"><summary>${esc(a.spec?.title || id)} (${esc(id)}): left out by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”</summary>${await analysisBlock(id, a, [], false)}</details>`))).join("")}</section>` : ""}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
@@ -1202,7 +1309,7 @@ async function draftTables(v) {
   if (S.dtables?.key !== key || S.dtables?.pid !== S.pid) {
     let list = [];
     try { list = (await api(`/projects/${S.pid}/tables?version=${v}`)).tables || []; } catch { /* none */ }
-    S.dtables = { key, pid: S.pid, list };
+    S.dtables = { key, pid: S.pid, list: list.filter((t) => t.number) };     // a table identical to an earlier one is not repeated
   }
   return S.dtables.list;
 }
@@ -1451,6 +1558,17 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "confirmai": {
+      const m = S.chat[t.dataset.key][+t.dataset.i], p = m.pending;
+      m.pending = null;
+      return act(t, async () => { const r = await runProposal(p.action, p.message); m.text += " Done."; return r; }, "Done. The earlier version is kept in the record.",
+        "Saksi AI is working on it. This can take a minute or two.");
+    }
+    case "suggest": {
+      const x = S.sugg.list[+t.dataset.i];
+      if (x.action.type === "table1") { const f = document.querySelector("form[data-form=t1change]"); f?.scrollIntoView({ block: "center" }); f?.querySelector("textarea")?.focus(); return; }
+      return act(t, () => runProposal(x.action, x.title), "Done. The result is below, with its text.", "Saksi is working on it. An analysis can take a minute or two.");
+    }
     case "describeall": return act(t, () => describeMissing(S.state), "Each result now has its text, with its numbers checked.");
     case "canvas": S.canvas = S.version || S.state.draft_version; S.notice = null; await render(); document.querySelector("#ms [contenteditable=true]")?.focus(); return;
     case "canvasoff": S.canvas = null; return render();
@@ -1465,6 +1583,7 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+document.addEventListener("toggle", (ev) => { if (ev.target.id === "details-all") S.detailsOpen = ev.target.open; }, true);
 document.addEventListener("paste", (ev) => {
   const el = ev.target.closest?.(".canvas [contenteditable=true]");
   if (!el) return;
@@ -1547,12 +1666,14 @@ document.addEventListener("submit", async (ev) => {
       if (missing) { S.notice = { kind: "err", text: `Say why “${missing}” is left out: the draft will report it.` }; $("#status").innerHTML = noticeHtml(); return; }
       if (!changed.length) {
         if (s.plan_confirmed_by.includes(S.you)) { S.notice = { kind: "ok", text: "Nothing changed." }; $("#status").innerHTML = noticeHtml(); return; }
-        return act(btn, () => command("confirm_plan", { plan_sha256: p.sha }), "You confirmed the plan.");
+        await act(btn, () => command("confirm_plan", { plan_sha256: p.sha }), "You confirmed the plan.");
+        return startGenerating();
       }
-      return act(btn, async () => {
+      await act(btn, async () => {
         const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
         return command("confirm_plan", { plan_sha256: r.state.plan.sha });
       }, `Your choice was saved as a revised plan, and you confirmed it.${s.authors.length > 1 ? " Your co-authors now confirm the new version." : ""}`);
+      return startGenerating();
     }
     case "redraft": return act(btn, () => agent("propose_plan", val("instructions") ? { instructions: val("instructions") } : {}),
       "The Analysis Agent drafted a new plan. Check it, then confirm it.", "The Analysis Agent is reading the protocol. This can take a minute or two.");
@@ -1581,6 +1702,21 @@ document.addEventListener("submit", async (ev) => {
       return act(btn, async () => { const r = await agent("run_request", { request_id: rid, prompt: text, based_on: id }); await describeMissing(r.state); return r; },
         "The variant ran. It is labelled exploratory, and the original analysis stays in the paper.",
         "The Analysis Agent is writing and running the variant in the sandbox. This can take a minute or two.");
+    }
+    case "assist": {
+      const key = f.dataset.id || "_", msg = val("message");
+      (S.chat[key] ||= []).push({ who: "you", text: msg });
+      return act(btn, async () => {
+        const r = await agent("assist", f.dataset.id ? { message: msg, analysis_id: f.dataset.id } : { message: msg });
+        const p = r.assist || {}, a = p.action || {}, entry = { who: "ai", text: p.reply || "" };
+        S.chat[key].push(entry);
+        if (["redo", "leave_out"].includes(a.type)) {
+          entry.pending = { action: a, message: msg, label: a.type === "redo" ? `redo ${a.analysis_id}` : `leave ${a.analysis_id} out of the paper` };
+          return r;
+        }
+        if (a.type && a.type !== "none") { const r2 = await runProposal(a, msg); entry.text += " Done."; return r2 || r; }
+        return r;
+      }, null, "Saksi AI is working on it. If it runs an analysis, this can take a minute or two.");
     }
     case "withdrawanalysis": return act(btn, () => command("withdraw_analysis", { analysis_id: f.dataset.id, reason: val("reason") }),
       "Left out of the paper. It stays in the record, with your reason, and the reviewer is told.");

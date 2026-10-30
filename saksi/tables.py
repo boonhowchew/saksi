@@ -16,6 +16,7 @@ The page shows the same table objects; `to_docx` gives a Word file the authors c
 from __future__ import annotations
 
 import io
+import json
 import re
 from typing import Any
 
@@ -234,8 +235,9 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
             "columns": cols, "rows": rows, "footnotes": notes}
 
 
-def build(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
-    """Every table, numbered in reporting order, from the current (not replaced) analyses."""
+def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[str, Any]]:
+    """Every table, numbered in reporting order, from the current (not replaced) analyses. A table identical to an
+    earlier one (same headings and cells) is not numbered again; with_duplicates=True returns it, marked."""
     from .workflow import current
     labels = {}
     if s.curator_reports:
@@ -248,9 +250,17 @@ def build(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
         t = _table1(aid, a, out, labels) if a.get("standard") == "table1" else _results(aid, a, out, labels)
         if t:
             tables.append(t | {"label": a.get("label")})
-    for i, t in enumerate(tables, start=1):
-        t["number"] = i
-    return tables
+    seen: dict[str, dict[str, Any]] = {}
+    n = 0
+    for t in tables:
+        key = json.dumps([t["columns"], [r["cells"] for r in t["rows"]]])
+        if key in seen:
+            t["number"], t["duplicate_of"] = None, {"analysis_id": seen[key]["analysis_id"], "number": seen[key]["number"]}
+        else:
+            n += 1
+            t["number"] = n
+            seen[key] = t
+    return tables if with_duplicates else [t for t in tables if t["number"]]
 
 
 def listing(s: Any, blobs: BlobStore) -> str:

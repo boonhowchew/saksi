@@ -25,7 +25,7 @@ def note(page):  # last status message
     return el.inner_text() if el.count() else ""
 def click(page, text, exact=False):
     page.get_by_role("button", name=text, exact=exact).first.click()
-    page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000)
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000)
     page.wait_for_timeout(250)
 def signin(page, token):
     page.goto(U)
@@ -89,26 +89,33 @@ with sync_playwright() as p:
     # co-author confirms
     signout(page); signin(page, toks["siti"])
     page.get_by_role("tab", name="Plan").click(); click(page, "Confirm this plan")
+    # The last confirmation starts the Results: Saksi generates them without being asked.
+    page.wait_for_selector("#results-view h2", timeout=180000)
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=180000); page.wait_for_timeout(300)
     print("stage after both confirm:", page.locator(".progress .where strong").inner_text())
-    page.get_by_role("tab", name="Analyses").click(); click(page, "Run the analyses")
-    # The AI box under each analysis: a variant of the primary model, a redo of the AUC; and Table 1 rebuilt.
-    def ask(aid, text, redo=False):
-        page.locator(f"details.askai:has(form[data-id='{aid}']) > summary").click()
-        form = page.locator(f"form[data-form=askai][data-id='{aid}']")
-        if redo:
-            form.locator("input[value=redo]").check()
-        form.locator("textarea[name=text]").fill(text)
-        form.get_by_role("button", name="Send to the Analysis Agent").click()
-        page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000); page.wait_for_timeout(250)
-        print(f"ask {aid} ({'redo' if redo else 'variant'}):", note(page)[:90])
-    ask("primary", "Add waist circumference as a covariate")
-    ask("auc", "Use DeLong's method for the confidence interval", redo=True)
+    print("generated:", page.locator("#results-view .rsec").count(), "result sections,",
+          page.locator("#results-view .rtext").count(), "with text;", page.locator("section.advisor li").count(), "suggestions")
+    shot(page, "05a-results-generated")
+    # The AI beside each result: a chat message gives a variant; another asks for a redo, confirmed with one click.
+    def chat(aid, text):
+        form = page.locator(f"form[data-form=assist][data-id='{aid}']")
+        form.locator("input[name=message]").fill(text)
+        form.get_by_role("button", name="Send").click()
+        page.wait_for_function("() => !document.querySelector('.busy')", timeout=120000); page.wait_for_timeout(300)
+        print(f"chat {aid}:", page.locator(f"#r-{aid} .chat .cm.ai").last.inner_text()[:90] if page.locator(f"#r-{aid} .chat .cm.ai").count() else note(page)[:90])
+    chat("primary", "Add waist circumference as a covariate")
+    chat("auc", "Please redo it with DeLong's method for the confidence interval")
+    page.get_by_role("button", name="Yes, redo auc").click()
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=120000); page.wait_for_timeout(300)
+    print("redo:", note(page)[:80])
+    # Table 1 rebuilt with other characteristics (Saksi's own code), from the details below the Results.
+    page.locator("#details-all > summary").click()
     page.locator("details.askai:has(form[data-form=t1change]) > summary").click()
     t1 = page.locator("form[data-form=t1change]")
     t1.locator("textarea[name=vars]").fill("age, booking_bmi, parity, previous_gdm, ethnicity")
     t1.locator("input[name=reason]").fill("Clinic is described in Methods instead")
     t1.get_by_role("button", name="Rebuild Table 1").click()
-    page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000); page.wait_for_timeout(250)
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(250)
     print("table 1:", note(page)[:80])
     assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
     shot(page, "05b-analyses-ai")

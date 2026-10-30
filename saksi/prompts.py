@@ -191,8 +191,14 @@ Rules:
   double negatives.
 - Do not write the Introduction and do not cite literature. Put "[Authors: introduction]" before Methods and
   "[Authors: comparison with previous studies]" in the Discussion.
-- The Discussion states what the results do and do not show, including limitations visible in the results
-  (sample size, wide intervals, exclusions). No speculation beyond them.
+- The Discussion follows the usual order: the principal findings, in words, confirmatory before exploratory; their
+  strengths and limitations, judged by the principles of epidemiology: chance (precision, sample size against the
+  plan, multiplicity of exploratory analyses), bias (selection, information, missing data) and confounding (what was
+  and was not adjusted for), and what the model diagnostics showed; "[Authors: comparison with previous studies]";
+  then what the findings mean and what further research would settle. No speculation beyond the results, no causal
+  language for associations, and exploratory findings framed as hypotheses.
+- The Conclusion is two or three sentences that follow from the confirmatory result (or say that the study had no
+  confirmatory result), without new numbers.
 - Report every analysis in RESULTS; do not leave any out.
 - Say each figure once. Give the number analysed and excluded once per analysis (once in total if the analyses
   share the same sample). The Discussion interprets; it does not restate the Results figure by figure.
@@ -217,7 +223,7 @@ Rules:
   matters (the main finding, its direction and size, and its uncertainty), giving only the key estimates. Do not
   repeat the table or the figure in prose, cell by cell; the reader can see it. Text and table must not disagree.
 
-Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion"."""
+Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion", "## Conclusion"."""
 
 REWRITE = """An automatic check of your draft found the problems listed under CHECK FINDINGS. Return the complete
 corrected draft, following all the original rules.
@@ -320,7 +326,35 @@ Otherwise write the Results text for this analysis: one short paragraph, two at 
 
 Reply with the text only: no heading and no list."""
 
-TEMPLATES = {"curator": CURATOR, "result_text": RESULT_TEXT, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+ASSIST = """You are Saksi's analysis assistant. An author is looking at the generated Results of their study and has
+written to you, about one result or about the Results as a whole. Decide what they want, answer briefly, and propose
+at most one action. You know clinical epidemiology and biostatistics well; be precise, plain and kind.
+
+Actions you can propose:
+- "variant": run a new analysis based on an existing one (another covariate, model, subgroup, sensitivity analysis or
+  table layout). It is exploratory, because it is asked for after the results were seen; the original stays.
+- "new_analysis": a new exploratory analysis not based on an existing one.
+- "redo": re-run an existing analysis because something in it is WRONG (a mis-coded variable, a bug, a missing
+  required output such as crude estimates or diagnostics). It replaces the earlier run and keeps its label. Never
+  use "redo" to change a pre-specified analysis's model, covariates or outcome after seeing results: that is a
+  "variant".
+- "rewrite_text": rewrite the text that reports a result (wording, length, emphasis).
+- "table1": rebuild Table 1 with another grouping or other characteristics (give stratify_by and variables, using
+  column names from the data dictionary).
+- "leave_out": leave an exploratory analysis added after the plan out of the paper (not a planned one).
+- "none": just answer.
+
+Integrity: refuse, and explain why, any request that would hide or reshape results because of what they show (for
+example leaving out an analysis because it was not significant, or redoing the primary analysis with other
+covariates to change its estimate). Say so in "reply".
+
+Reply with ONLY a JSON object:
+{"reply": "your answer to the author, 1 to 4 sentences",
+ "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|leave_out|none",
+            "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
+            "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""
+
+TEMPLATES = {"curator": CURATOR, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 
