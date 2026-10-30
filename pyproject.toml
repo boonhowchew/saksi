@@ -24,9 +24,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # What analyses import inside the sandbox (pinned there; see saksi/sandbox.py).
-analysis = ["scipy", "statsmodels", "scikit-learn"]
+analysis = ["scipy", "statsmodels", "scikit-learn", "matplotlib"]
 deploy = ["modal==1.6.3"]
-dev = ["pytest", "modal==1.6.3", "scipy", "statsmodels", "scikit-learn", "uvicorn"]
+dev = ["pytest", "modal==1.6.3", "scipy", "statsmodels", "scikit-learn", "matplotlib", "uvicorn"]
 
 [tool.setuptools]
 packages = ["saksi"]
