@@ -47,14 +47,41 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--paper); p
 .who { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .who select { max-width: 24rem; }
 
-/* Stage line: the project's sequence */
-.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 0; margin: .25rem 1.25rem 1rem; padding: 0; counter-reset: st; }
-.stages li { counter-increment: st; padding: .3rem .7rem .3rem .2rem; color: var(--muted); font-size: .85rem; position: relative; }
-.stages li::before { content: counter(st); display: inline-grid; place-items: center; width: 1.3rem; height: 1.3rem; border-radius: 50%; border: 1px solid var(--rule); margin-right: .35rem; font-size: .75rem; background: var(--sheet); }
-.stages li.done { color: var(--ink); }
-.stages li.done::before { content: "✓"; background: var(--verdigris-wash); border-color: var(--verdigris); color: var(--verdigris); }
-.stages li.now { color: var(--indigo); font-weight: 600; }
-.stages li.now::before { background: var(--indigo); color: #fff; border-color: var(--indigo); }
+/* Progress: where the project stands. Not buttons. */
+.progress { margin: .25rem 1.25rem 1rem; }
+.progress .where { margin: 0 0 .45rem; }
+.progress .where strong { color: var(--indigo); }
+.progress .where .what { color: var(--muted); font-size: .9rem; }
+.progress .bar { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.progress .bar span { height: 6px; border-radius: 3px; background: var(--rule); }
+.progress .bar span.done { background: var(--verdigris); }
+.progress .bar span.now { background: var(--indigo); }
+.progress .names { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; font-size: .72rem; color: var(--muted); margin-top: .3rem; }
+.progress .names span.now { color: var(--indigo); font-weight: 600; }
+@media (max-width: 760px) { .progress .names { display: none; } }
+.intro { color: var(--muted); margin: 0 0 1.25rem; max-width: 48rem; }
+.inuse { display: grid; gap: .6rem; margin: .5rem 0 1rem; }
+.inuse .file { border: 1px solid var(--rule); border-left-width: 4px; border-radius: 6px; padding: .7rem .9rem; display: grid; gap: .35rem; }
+.inuse .file.ok { border-left-color: var(--verdigris); }
+.inuse .file.missing { border-left-color: #D9B36E; background: var(--ochre-wash); }
+.inuse .file .head { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.inuse .file .kind { font-weight: 600; min-width: 5.5rem; }
+.bigaction { border: 1px solid var(--indigo); border-radius: 6px; padding: 1rem 1.1rem; background: #F4F6FC; margin: 1rem 0; }
+.bigaction p { margin: 0 0 .6rem; }
+table.plantable td { vertical-align: top; }
+table.plantable td.inc { width: 2.2rem; text-align: center; padding-top: .55rem; }
+table.plantable input[type=checkbox] { width: 1.15rem; height: 1.15rem; }
+.ticks { white-space: nowrap; }
+.ticks span { display: inline-grid; place-items: center; width: 1.3rem; height: 1.3rem; border-radius: 50%; font-size: .75rem; font-weight: 700; margin-right: .15rem; }
+.ticks .y { background: var(--verdigris-wash); color: var(--verdigris); }
+.ticks .n { background: var(--ochre-wash); color: var(--ochre); }
+label.radio { display: flex; gap: .55rem; align-items: flex-start; }
+label.radio input { margin-top: .25rem; }
+fieldset.roles { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
+.copyrow { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; }
+.copyrow .secret { flex: 1 1 18rem; }
+ol.howto { padding-left: 1.2rem; margin: 0 0 1.5rem; max-width: 40rem; }
+ol.howto li { margin-bottom: .35rem; }
 
 /* Layout */
 .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1.25rem; padding: 0 1.25rem 2rem; align-items: start; }
@@ -175,9 +202,24 @@ mark[data-point] { cursor: pointer; }
    Every action goes through the same API as everything else; the server decides
    who may do what and writes it to the record. */
 
-const STAGES = [["INGEST", "Ingest"], ["ANALYSIS", "Analysis"], ["DRAFTING", "Drafting"],
-  ["AUTHOR_REVISION", "Author revision"], ["REVIEW", "Review"], ["RESPONSE", "Response"],
-  ["ATTESTATION", "Attestation"], ["FINAL", "Final"]];
+const STAGES = [
+  ["INGEST", "Data and plan", "Upload the dataset and protocol; the agents check the data and draft the analysis plan; the authors agree the plan."],
+  ["ANALYSIS", "Analysis", "The planned analyses run as code in a locked-down sandbox; every author checks and accepts the results."],
+  ["DRAFTING", "First draft", "The Writing Agent drafts Methods, Results and Discussion from the results; code checks every number."],
+  ["AUTHOR_REVISION", "Authors revise", "Authors edit the draft and each one signs it off."],
+  ["REVIEW", "Peer review", "The reviewer comments, helped by an independent AI assistant."],
+  ["RESPONSE", "Authors respond", "Authors answer each comment, revising the draft where needed."],
+  ["ATTESTATION", "Final sign-off", "Every author attests the version the reviewer accepted."],
+  ["FINAL", "Final", "The manuscript and its complete record are finished."]];
+const INTROS = {
+  people: "Who is working on this study. Authors check and sign everything; the reviewer reviews once every author has signed off. The AI agents act only when a person asks, and the record names who asked.",
+  materials: "The study's files. Saksi stores them privately, checks that it can read them, and never sends a data row to an AI model.",
+  plan: "Which of the protocol's analyses this paper reports. The Analysis Agent drafts the plan and code checks it against the protocol. The authors choose and confirm it before any analysis runs.",
+  analyses: "The confirmed analyses, run as code in a locked-down sandbox on the uploaded file: results, figures, and exactly how each was produced.",
+  draft: "The manuscript. Code checks every number against the results, every edit is recorded, and each author signs off.",
+  review: "Peer review: the reviewer's comments, the authors' responses, and the Reviewer Assistant's briefing.",
+  record: "Everything that happened, sealed in order: who contributed what, and every AI model call.",
+};
 const TABS = [["people", "People"], ["materials", "Data"], ["plan", "Plan"], ["analyses", "Analyses"],
   ["draft", "Draft"], ["review", "Review"], ["record", "Record"]];
 
@@ -249,7 +291,8 @@ async function act(button, fn, okText, workingText) {
   const before = S.state?.head_seq || 0;
   try {
     const r = await fn();
-    if (r?.token_for_new_actor) S.secret = { label: "Token for the person you added", token: r.token_for_new_actor };
+    if (r?.token_for_new_actor) S.secret = { label: `Personal token for ${S.pendingName || "the person you added"}`, token: r.token_for_new_actor,
+      hint: "Send it to them privately, for example by email. They paste it on the Saksi sign-in page. It is shown only once." };
     S.notice = okText ? { kind: "ok", text: okText } : null;
   } catch (e) {
     S.notice = { kind: "err", text: e.message };
@@ -270,6 +313,7 @@ function describe(e) {
     case "actor.registered": return p.kind === "agent" ? `${esc(p.name)} joined, running ${esc(p.model)}`
       : `${esc(p.name)} joined as ${esc((p.roles || []).filter((r) => r !== "corresponding_author").join(", ") || "author")}`;
     case "material.uploaded": return `${who} uploaded the ${esc(p.kind.replace("_", " "))}: ${esc(p.filename)}`;
+    case "material.withdrawn": return `${who} removed the ${esc(p.kind.replace("_", " "))} ${esc(p.filename)}: ${esc(p.reason)}`;
     case "curator.reported": return `${who} reported on the dataset${forWhom}`;
     case "plan.proposed": { const n = Object.keys(p.analyses || {}).length; return `${who} proposed a plan of ${n} ${n === 1 ? "analysis" : "analyses"}${forWhom}`; }
     case "plan.confirmed": return `${who} confirmed the plan`;
@@ -300,18 +344,18 @@ const stageName = (code) => (STAGES.find(([c]) => c === code) || [code, code])[1
 /* ---------- what should I do next ---------- */
 function nextStep() {
   const s = S.state, v = s.draft_version;
-  const datasets = s.materials.filter((m) => m.kind === "dataset");
   const signed = s.signoffs[v] || {};
   const waiting = (ids) => ids.map(name).join(", ");
   if (s.stage === "FINAL") return ["Final. Every author attested version " + v + ".", "draft"];
   if (isAuthor()) {
     switch (s.stage) {
-      case "INGEST":
-        if (!datasets.length || !s.materials.some((m) => m.kind === "protocol")) return ["Upload the dataset and the protocol.", "materials"];
-        if (!s.curator_reports.length) return ["Ask the Data Curator to check the dataset.", "materials"];
-        if (!s.plan) return ["Ask the Analysis Agent to draft the analysis plan from the protocol.", "plan"];
-        if (!s.plan_confirmed_by.includes(S.you)) return ["Check the analysis plan: include or leave out analyses, correct roles if needed, then confirm it.", "plan"];
+      case "INGEST": {
+        const live = s.materials.filter((m) => !m.withdrawn);
+        if (!live.some((m) => m.kind === "dataset") || !live.some((m) => m.kind === "protocol")) return ["Upload the study's dataset and its protocol.", "materials"];
+        if (!s.plan || planFromRemovedProtocol()) return ["Click “Check the data and draft the plan”. The agents do the rest; it takes a few minutes.", "plan"];
+        if (!s.plan_confirmed_by.includes(S.you)) return ["Tick the analyses this paper includes, then confirm the plan.", "plan"];
         return ["Waiting for co-authors to confirm the plan: " + waiting(s.authors.filter((a) => !s.plan_confirmed_by.includes(a))), "plan"];
+      }
       case "ANALYSIS": {
         const order = s.plan_locked?.order || [];
         const missing = order.filter((pid) => !Object.values(s.analyses).some((a) => a.plan_analysis_id === pid && a.status === "ok"));
@@ -362,7 +406,7 @@ async function render() {
   app.innerHTML = `
   <header class="top">
     <p class="mark">Saksi<small>witnessed research</small></p>
-    <p class="project">${esc(s.title)} <span class="muted small">(${esc(s.project_id)})</span></p>
+    <p class="project" title="Project id: ${esc(s.project_id)}">${esc(s.title)}</p>
     <div class="who">
       <label class="small"><span class="hidden">Acting as</span>
         <select data-change="switch" aria-label="Acting as">
@@ -372,16 +416,18 @@ async function render() {
       <button class="btn quiet" data-action="signout">Sign out</button>
     </div>
   </header>
-  <ol class="stages" aria-label="Stages">
-    ${STAGES.map(([c, n], i) => `<li class="${i < stageIdx ? "done" : i === stageIdx ? "now" : ""}" ${i === stageIdx ? 'aria-current="step"' : ""}>${esc(n)}${c === s.stage && ["REVIEW", "RESPONSE"].includes(c) ? `, round ${s.round}` : ""}</li>`).join("")}
-  </ol>
+  <div class="progress" role="group" aria-label="Where this project stands">
+    <p class="where"><strong>Stage ${stageIdx + 1} of 8: ${esc(STAGES[stageIdx][1])}${["REVIEW", "RESPONSE"].includes(s.stage) ? `, round ${s.round}` : ""}.</strong> <span class="what">${esc(STAGES[stageIdx][2])}</span></p>
+    <div class="bar" aria-hidden="true">${STAGES.map((_, i) => `<span class="${i < stageIdx ? "done" : i === stageIdx ? "now" : ""}"></span>`).join("")}</div>
+    <div class="names" aria-hidden="true">${STAGES.map(([, n], i) => `<span class="${i === stageIdx ? "now" : ""}">${esc(n)}</span>`).join("")}</div>
+  </div>
   <div class="wrap">
     <main class="sheet">
       <div class="next"><p><strong>${esc(me().name)}</strong>: ${esc(msg)}</p>
         ${S.tab !== tab ? `<button class="btn quiet" data-tab="${tab}">Open ${esc(TABS.find(([t]) => t === tab)[1])}</button>` : ""}</div>
       <div id="stale">${staleHtml()}</div>
       <div id="status" role="status">${noticeHtml()}</div>
-      ${S.secret ? `<div style="margin:1rem 1.25rem 0"><p class="small"><strong>${esc(S.secret.label)}.</strong> Send it privately; it is shown only once.</p><div class="secret">${esc(S.secret.token)}</div></div>` : ""}
+      ${S.secret ? secretHtml("margin:1rem 1.25rem 0") : ""}
       <nav class="tabs" role="tablist">${TABS.map(([t, n]) => `<button role="tab" aria-selected="${S.tab === t}" data-tab="${t}">${esc(n)}${tabCount(t)}</button>`).join("")}</nav>
       <div class="panel" id="panel">${await panel(S.tab)}</div>
     </main>
@@ -389,6 +435,8 @@ async function render() {
   </div>`;
   if (S.tab === "draft") maybeOpenDraft();
 }
+const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
+  <div class="copyrow"><div class="secret">${esc(S.secret.token)}</div><button class="btn quiet" data-action="copy" data-text="${esc(S.secret.token)}">Copy</button></div></div>`;
 const staleHtml = () => S.stale ? `<div class="msg warn" style="margin:1rem 1.25rem 0">Someone else has acted since this page was drawn. The record on the right is up to date. <button class="linkish" data-action="reload">Show the latest everywhere</button></div>` : "";
 const noticeHtml = () => S.notice ? `<div class="msg ${S.notice.kind}" style="margin:1rem 1.25rem 0">${esc(S.notice.text)}</div>` : "";
 const roleLabel = (roles = []) => roles.includes("corresponding_author") ? "corresponding author" : (roles[0] || "");
@@ -420,6 +468,11 @@ function rail() {
 
 async function panel(tab) {
   try {
+    return `<p class="intro">${esc(INTROS[tab] || "")}</p>` + await panelBody(tab);
+  } catch (e) { return `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function panelBody(tab) {
+  {
     switch (tab) {
       case "people": return people();
       case "materials": return await materials();
@@ -429,113 +482,181 @@ async function panel(tab) {
       case "review": return await review();
       case "record": S.ledger = await api(`/projects/${S.pid}/ledger`); return record();
     }
-  } catch (e) { return `<div class="msg err">${esc(e.message)}</div>`; }
+  }
   return "";
 }
 
 /* People */
+const AGENT_JOBS = {
+  curator: "Checks the dataset from an aggregate profile and drafts the data dictionary. Never sees a record.",
+  analyst: "Drafts the analysis plan from the protocol and writes the analysis code.",
+  writer: "Drafts Methods, Results and Discussion from the computed results.",
+  reviewer_assist: "Briefs the reviewer. A separate, open-weights model that never sees the authors' side.",
+};
 function people() {
-  const s = S.state;
-  const rows = Object.entries(s.actors).map(([id, a]) => `<tr><td>${esc(a.name)}${id === S.you ? " <span class='tag'>you</span>" : ""}</td>
-    <td>${esc(a.kind === "agent" ? "agent" : roleLabel(a.roles))}</td>
-    <td>${a.kind === "agent" ? `${esc(a.model)} <span class="muted small">via ${esc(a.provider)}</span>` : esc(a.affiliation || "")}</td>
-    <td>${a.orcid ? `<a href="https://orcid.org/${esc(a.orcid)}" rel="noreferrer" target="_blank">${esc(a.orcid)}</a>` : ""}</td></tr>`).join("");
+  const s = S.state, all = Object.entries(s.actors);
+  const humans = all.filter(([, a]) => a.kind !== "agent");
+  const authors = humans.filter(([, a]) => (a.roles || []).includes("author"));
+  const reviewers = humans.filter(([, a]) => (a.roles || []).includes("reviewer"));
+  const agentsList = all.filter(([, a]) => a.kind === "agent");
+  const orcid = (a) => a.orcid ? `<a href="https://orcid.org/${esc(a.orcid)}" rel="noreferrer" target="_blank">${esc(a.orcid)}</a>` : "";
+  const row = ([id, a], role) => `<tr><td>${esc(a.name)}${id === S.you ? ' <span class="tag">you</span>' : ""}</td><td>${role}</td><td>${esc(a.affiliation || "")}</td><td>${orcid(a)}</td></tr>`;
   const canAdd = has("corresponding_author") && s.stage !== "FINAL";
   const authorsOpen = ["INGEST", "ANALYSIS"].includes(s.stage);
-  return `<section><h2>People and agents</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation or model</th><th>ORCID iD</th></tr></thead><tbody>${rows}</tbody></table></div></section>
-  ${canAdd ? `<section><h2>Add a person</h2>
-    <p class="muted small">They get a personal token. Everything they do is recorded under their name.${authorsOpen ? "" : " Authors can only join before drafting starts, so every author can verify the analysis."}</p>
-    <form class="stack" data-form="addperson">
-      <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
-      <label><span>Short id (letters, digits, hyphens), used in the record</span><input type="text" name="actor_id" required pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,40}"></label>
-      <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
-      <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
-      <label><span>Role</span><select name="role">${authorsOpen ? "<option value='author'>Author</option>" : ""}<option value="reviewer">Reviewer</option></select></label>
-      <div><button class="btn" data-label="Adding">Add person</button></div></form></section>` : ""}
-  ${has("corresponding_author") && s.stage === "AUTHOR_REVISION" && s.reviewers.length && s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a])
-    ? `<section><h2>Start the review</h2><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></section>` : ""}`;
+  const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
+  return `<section><h2>Authors</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th></tr></thead><tbody>
+      ${authors.map((x) => row(x, (x[1].roles || []).includes("corresponding_author") ? "Corresponding author" : "Co-author")).join("")}</tbody></table></div></section>
+    <section><h2>Reviewer</h2>${reviewers.length
+      ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th></tr></thead><tbody>${reviewers.map((x) => row(x, "Reviewer")).join("")}</tbody></table></div>`
+      : `<p>No reviewer yet. A reviewer can be added at any stage; the review starts once every author has signed off the draft.</p>`}</section>
+    <section><h2>AI agents</h2><p class="small muted">They act only when a person asks. Every call, with the exact request and reply, is in the record.</p>
+      <div class="tablewrap"><table><thead><tr><th>Agent</th><th>What it does</th><th>Model</th></tr></thead><tbody>
+      ${agentsList.map(([, a]) => `<tr><td>${esc(a.name)}</td><td>${esc(AGENT_JOBS[(a.roles || [])[0]] || "")}</td><td>${esc(a.model)} <span class="muted small">via ${esc(a.provider)}</span></td></tr>`).join("")}</tbody></table></div></section>
+    ${canAdd ? `<section><h2>Invite a co-author or a reviewer</h2>
+      <form class="stack" data-form="addperson">
+        <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
+        <fieldset class="roles"><legend class="small muted">Role</legend>
+          ${authorsOpen ? `<label class="radio"><input type="radio" name="role" value="author" checked><span><strong>Co-author.</strong> Confirms the plan, accepts the results, edits and signs the manuscript.</span></label>`
+            : `<p class="small muted">Co-authors can only join before drafting starts, so that every author can check the analysis.</p>`}
+          <label class="radio"><input type="radio" name="role" value="reviewer" ${authorsOpen ? "" : "checked"}><span><strong>Reviewer.</strong> Reviews the manuscript once every author has signed it off. Independent of the authors.</span></label>
+        </fieldset>
+        <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
+        <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
+        <div><button class="btn" data-label="Adding">Add and show their token</button></div>
+        <p class="small muted">Saksi then shows a personal token for them, once. Send it to them privately, for example by email. They paste it on the Saksi sign-in page to join.</p>
+      </form></section>` : ""}
+    ${has("corresponding_author") && s.stage === "AUTHOR_REVISION" && s.reviewers.length && allSigned
+      ? `<section><h2>Start the review</h2><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></section>` : ""}`;
 }
 
 /* Data */
-async function materials() {
+function prepareBox(again) {
+  return `<div class="bigaction"><p><strong>${again ? "Draft the plan again" : "Next: let the agents prepare the analysis plan."}</strong>
+    The Data Curator checks the dataset (from summaries only, never rows), then the Analysis Agent reads the protocol and drafts the plan. Saksi checks every quotation against the protocol. This takes a few minutes.</p>
+    <form class="stack" data-form="prepare" style="max-width:none">
+      <details><summary class="small">Add instructions for the agent (optional)</summary>
+        <label style="margin-top:.5rem"><span>For example: “only the analyses for objective 1”</span><textarea name="instructions"></textarea></label></details>
+      <div><button class="btn" data-label="The agents are preparing the plan">Check the data and draft the plan</button></div></form></div>`;
+}
+function planFromRemovedProtocol() {
   const s = S.state;
-  const inUse = s.materials.filter((m) => m.kind === "dataset").at(-1);
-  const inUseProtocol = s.materials.filter((m) => m.kind === "protocol").at(-1);
-  const readBy = (m) => {
-    const i = m.inspection;
-    if (!i) return `<span class="muted small">not checked (uploaded before this check existed)</span>`;
-    if (i.error) return `<span class="tag bad">could not read: ${esc(i.error)}</span>`;
-    if (m.kind === "dataset") return `<span class="tag good">read</span> ${esc(i.rows)} rows × ${esc(i.columns)} columns`;
-    if (i.warning) return `<span class="tag attn">${esc(i.warning)}</span>`;
-    return i.characters != null ? `<span class="tag good">read</span> ${esc(i.characters.toLocaleString())} characters of text${i.pages ? `, ${esc(i.pages)} pages` : ""}` : "";
-  };
-  const list = s.materials.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${(m === inUse && s.materials.filter((x) => x.kind === "dataset").length > 1) || (m === inUseProtocol && s.materials.filter((x) => x.kind === "protocol").length > 1) ? ' <span class="tag good">in use</span>' : ""}</td><td class="num">${(m.bytes / 1024).toFixed(1)} KB</td>
-    <td>${readBy(m)}</td><td><span class="hash" title="${esc(m.sha256)}">${short(m.sha256)}</span></td><td>${esc(name(m.by))}</td></tr>`).join("");
-  const preview = inUseProtocol?.inspection?.preview;
-  const canUpload = isAuthor() && s.stage === "INGEST";
+  return !!(s.plan && s.materials.some((m) => m.sha256 === s.plan.protocol_ref && m.withdrawn)
+    && !s.materials.some((m) => m.sha256 === s.plan.protocol_ref && !m.withdrawn));
+}
+function readText(m) {
+  const i = m.inspection;
+  if (!i) return `<span class="muted">Not checked: uploaded before Saksi checked files on arrival. Upload it again to see what Saksi reads.</span>`;
+  if (i.error) return `<span class="tag bad">Saksi could not read it</span> ${esc(i.error)}`;
+  if (m.kind === "dataset") return `<span class="tag good">read</span> ${esc(i.rows)} rows and ${esc(i.columns)} columns`;
+  if (i.warning) return `<span class="tag attn">almost no text</span> ${esc(i.warning)}`;
+  return i.characters != null ? `<span class="tag good">read</span> ${esc(i.characters.toLocaleString())} characters of text${i.pages ? ` from ${esc(i.pages)} pages` : ""}` : "";
+}
+function removeControl(m) {
+  return `<details class="small"><summary>Remove this file</summary>
+    <form class="row" data-form="withdraw" style="margin-top:.4rem"><input type="hidden" name="sha" value="${esc(m.sha256)}">
+      <label style="flex:1 1 16rem"><span>Why? (kept in the record)</span><input type="text" name="reason" required placeholder="For example: uploaded the wrong file"></label>
+      <button class="btn quiet" data-label="Removing">Remove file</button></form>
+    <p class="muted">The stored copy is deleted. The record keeps the file's name and fingerprint, and your reason.</p></details>`;
+}
+async function materials() {
+  const s = S.state, live = s.materials.filter((m) => !m.withdrawn);
+  const cur = (kind) => live.filter((m) => m.kind === kind).at(-1);
+  const ds = cur("dataset"), pr = cur("protocol");
+  const canEdit = isAuthor() && s.stage === "INGEST";
+  const card = (label, m, missing) => m ? `<div class="file ${m.inspection && (m.inspection.error || m.inspection.warning) ? "missing" : "ok"}">
+      <div class="head"><span class="kind">${label}</span><span>${esc(m.filename)}</span><span class="tag good">in use</span>
+        <span class="small muted">uploaded by ${esc(name(m.by))}</span></div>
+      <div class="small">${readText(m)}</div>
+      ${m.kind === "protocol" && m.inspection?.preview ? `<details class="small"><summary>The start of the text Saksi reads</summary><blockquote>${esc(m.inspection.preview)}…</blockquote>
+        <p class="muted">Quotations in the plan are checked against this text. If it looks garbled, upload a Word or text version of the protocol.</p></details>` : ""}
+      ${canEdit ? removeControl(m) : ""}</div>`
+    : `<div class="file missing"><div class="head"><span class="kind">${label}</span><span>${missing}</span></div></div>`;
+  const others = s.materials.filter((m) => m !== ds && m !== pr);
+  const status = (m) => m.withdrawn ? `Removed by ${esc(name(m.withdrawn.by))}: ${esc(m.withdrawn.reason)}`
+    : ["dataset", "protocol"].includes(m.kind) ? "Not used: a later upload replaced it" : "Supporting document";
   let rep = "";
-  const r = s.curator_reports.at(-1);
+  const r = ds && s.curator_reports.filter((x) => x.material_sha256 === ds.sha256).at(-1);
   if (r) {
     const full = await blobJSON(r.report_sha256);
     if (full) {
       const sev = { high: "bad", medium: "attn", low: "" };
-      rep = `<section><h2>Data Curator's report</h2>
-        <p class="muted small">For ${esc(s.materials.find((m) => m.sha256 === r.material_sha256)?.filename || "the dataset")}: an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
+      rep = `<section><h2>Data Curator's report on ${esc(ds.filename)}</h2>
+        <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
         <p>${esc(full.summary)}</p>
-        ${full.flags?.length ? `<h3>Flags for the authors to check</h3><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
-          ${full.flags.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-        ${full.protocol_variables_missing_from_data?.length ? `<p class="msg warn">In the protocol but not in the data: ${esc(full.protocol_variables_missing_from_data.join(", "))}</p>` : ""}
+        ${full.flags?.length ? `<details ${full.flags.some((f) => f.severity === "high") ? "open" : ""}><summary>${full.flags.length} things for the authors to check${full.flags.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
+          ${full.flags.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+        ${full.protocol_variables_missing_from_data?.length ? `<p class="msg warn small">Named in the protocol but not found in the data: ${esc(full.protocol_variables_missing_from_data.join(", "))}</p>` : ""}
         <details><summary>Data dictionary (${(full.dictionary || []).length} columns)</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Label</th><th>Type</th><th>Units or coding</th><th>Role</th></tr></thead><tbody>
           ${(full.dictionary || []).map((d) => `<tr><td>${esc(d.column)}</td><td>${esc(d.label)}</td><td>${esc(d.type)}</td><td>${esc(d.units_or_coding)}</td><td>${esc(d.role)}</td></tr>`).join("")}</tbody></table></div></details>
       </section>`;
     }
   }
-  const canCurate = isAuthor() && s.stage === "INGEST" && s.materials.some((m) => m.kind === "dataset");
-  return `<section><h2>Study materials</h2>
-    <p class="muted small">Stored privately for this project, never in the code repository. Each file is identified by its SHA-256 hash; analyses check it before running. If you upload more than one dataset or protocol, Saksi uses the latest of each.</p>
-    ${list ? `<div class="tablewrap"><table><thead><tr><th>Kind</th><th>File</th><th>Size</th><th>Read by Saksi</th><th>Hash</th><th>Uploaded by</th></tr></thead><tbody>${list}</tbody></table></div>` : `<p>No files yet.</p>`}
-    ${preview ? `<details><summary>The start of the protocol text, as Saksi reads it</summary><p class="small muted">Quotations in the plan are checked against this text. If it looks garbled, upload a Word or text version of the protocol.</p><blockquote class="small">${esc(preview)}…</blockquote></details>` : ""}
-    ${!s.materials.some((m) => m.kind === "protocol") && s.materials.length ? `<p class="msg warn small">No protocol yet. Upload it with Kind set to Protocol; the plan is drawn from it and every quotation is checked against it.</p>` : ""}
-    ${canUpload ? `<form class="row" data-form="upload" style="margin-top:1rem">
-      <label><span>Kind</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Registration</option><option value="other">Other</option></select></label>
+  return `<section><h2>In use for this study</h2>
+    <div class="inuse">${card("Dataset", ds, "Not uploaded yet. Add a CSV or Excel file below.")}${card("Protocol", pr, "Not uploaded yet. Add the protocol (PDF, Word or text) below.")}</div>
+    ${ds && pr && canEdit && (!s.plan || planFromRemovedProtocol()) ? prepareBox(false) : ""}
+    ${ds && pr && canEdit && s.plan && !planFromRemovedProtocol() ? `<p class="small">The plan has been drafted: see the <button class="linkish" data-tab="plan">Plan</button> tab.</p>` : ""}
+  </section>
+  ${canEdit ? `<section><h2>Add a file</h2>
+    <p class="small muted">A new dataset or protocol replaces the one in use; the earlier file stays listed below, unused, until you remove it.</p>
+    <form class="row" data-form="upload">
+      <label><span>What it is</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Trial or study registration</option><option value="other">Other</option></select></label>
       <label><span>File</span><input type="file" name="file" required></label>
       <label><span>Note (optional)</span><input type="text" name="note"></label>
-      <button class="btn" data-label="Uploading">Upload</button></form>` : ""}
-  </section>
-  ${canCurate ? `<section><h2>Data Curator</h2><p class="muted small">Muse Spark 1.3 drafts a data dictionary and flags problems from an aggregate profile: column types, ranges, missingness, small cells pooled. No rows are sent.</p>
-    <button class="btn" data-agent="curate" data-label="The Data Curator is working">Ask the Data Curator to check ${esc(inUse?.filename || "the dataset")}</button></section>` : ""}
+      <button class="btn" data-label="Uploading">Upload</button></form></section>` : ""}
+  ${others.length ? `<section><h2>Other files</h2><div class="tablewrap"><table><thead><tr><th>What</th><th>File</th><th>Status</th><th>Read by Saksi</th></tr></thead><tbody>
+    ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="small">${status(m)}${canEdit && !m.withdrawn ? removeControl(m) : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
   ${rep}`;
 }
 
 /* Plan */
 function plan() {
   const s = S.state, p = s.plan;
-  const canPropose = isAuthor() && s.stage === "INGEST" && s.curator_reports.length;
-  const redraft = (label) => `<form class="stack" data-form="redraft" style="margin-top:1rem">
-      <label><span>Instructions for the Analysis Agent (optional), for example "only the analyses for the primary objective"</span><textarea name="instructions"></textarea></label>
-      <div><button class="btn ${p ? "quiet" : ""}" data-label="The Analysis Agent is reading the protocol">${label}</button></div></form>`;
-  if (!p) return `<section><h2>Analysis plan</h2><p>No plan yet. The Analysis Agent reads the protocol and lists the analyses it specifies, each with a quotation that code checks against the protocol.</p>
-    ${canPropose ? redraft("Ask the Analysis Agent to draft the plan") : `<p class="muted">An author can ask for it once the Data Curator has reported.</p>`}</section>`;
-  if (S.planEdit && isAuthor() && s.stage === "INGEST") return planEditor(p);
+  const live = s.materials.filter((m) => !m.withdrawn);
+  const ready = live.some((m) => m.kind === "dataset") && live.some((m) => m.kind === "protocol");
+  const canAct = isAuthor() && s.stage === "INGEST";
+  if (!p || planFromRemovedProtocol()) {
+    return `<section>${p ? `<p class="msg warn">This plan was drafted from a protocol that has since been removed.</p>` : ""}
+      ${!ready ? `<p>First upload the dataset and the protocol on the <button class="linkish" data-tab="materials">Data</button> tab.</p>`
+        : canAct ? prepareBox(!!p) : `<p class="muted">An author starts this step.</p>`}</section>`;
+  }
+  if (S.planEdit && canAct) return planEditor(p);
   const locked = s.plan_locked && s.plan_locked.sha === p.sha;
+  const editable = canAct && !locked;
   const items = p.order.map((id) => p.analyses[id]);
   const inc = items.filter((a) => a.included !== false);
   const nConf = inc.filter((a) => a.label === "confirmatory").length;
   const confirmedBy = s.authors.filter((a) => s.plan_confirmed_by.includes(a));
-  const ch = p.changes;
-  return `<section><h2>Analysis plan</h2>
-    <p>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol: <strong>${nConf} confirmatory</strong>, ${inc.length - nConf} exploratory${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.</p>
-    <p class="small">${p.by.startsWith("agent:") ? `Drafted by ${esc(name(p.by))}${p.requested_by ? " for " + esc(name(p.requested_by)) : ""}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: “${esc(p.note)}”` : ""}.
-      ${ch ? esc([ch.left_out?.length && `left out ${ch.left_out.join(", ")}`, ch.put_back?.length && `put back ${ch.put_back.join(", ")}`, ch.role_changed?.length && `role changed for ${ch.role_changed.join(", ")}`, ch.label_changed?.length && `label changed for ${ch.label_changed.join(", ")}`, ch.added?.length && `added ${ch.added.join(", ")}`, ch.removed?.length && `removed ${ch.removed.join(", ")}`].filter(Boolean).join("; ")) : ""}</p>
-    <p>${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed.`
-      : `Confirmed by ${confirmedBy.length} of ${s.authors.length} authors${confirmedBy.length ? ": " + esc(confirmedBy.map(name).join(", ")) : ""}. Confirming binds you to exactly this version (<span class="hash">${short(p.sha)}</span>); any change needs everyone to confirm again.`}</p>
-    ${isAuthor() && s.stage === "INGEST" ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0">
-      ${!s.plan_confirmed_by.includes(S.you) ? `<button class="btn" data-action="confirm_plan" data-label="Confirming">Confirm this plan</button>` : `<span class="tag good">You confirmed this version</span>`}
-      <button class="btn quiet" data-action="editplan">Edit the plan</button></div>` : ""}
-    <details class="small"><summary>How Saksi labels analyses</summary><p>An analysis is <strong>confirmatory</strong> only if all three checks below pass, and every author confirms the plan before any result exists. Code does the checking against the protocol's own text; authors can correct the plan, but a justification that isn't in the protocol won't pass. Everything else is <strong>exploratory</strong>, which is how it must be reported.</p></details>
-  </section>
-  <section>${items.map((a, i) => planItem(a, i)).join("")}</section>
-  ${canPropose && !locked ? `<section><h2>Ask for a new draft</h2><p class="small muted">The new draft replaces this one; the record keeps both.</p>${redraft("Ask the Analysis Agent for a new draft")}</section>` : ""}`;
+  const ticks = (a) => (a.design?.conditions || []).map((c) => `<span class="${c.met ? "y" : "n"}" title="${esc(c.label)}: ${c.met ? "yes" : "no"}">${c.met ? "✓" : "✗"}</span>`).join("");
+  return `<section>
+    <p><strong>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol</strong>: ${nConf} confirmatory, ${inc.length - nConf} exploratory${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.
+      ${p.by.startsWith("agent:") ? `Drafted by the ${esc(name(p.by))}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: ${esc(p.note)}` : "."}</p>
+    <p class="small">${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed.`
+      : `Confirmed by ${confirmedBy.length} of ${s.authors.length} authors${confirmedBy.length ? ` (${esc(confirmedBy.map(name).join(", "))})` : ""}. A change to the plan needs every author to confirm again.`}</p>
+    <form data-form="planconfirm">
+      <div class="tablewrap"><table class="plantable"><thead><tr><th title="Include in this paper">Include</th><th>Analysis</th><th>Label</th><th title="Described in the protocol; named primary; covered by the sample-size calculation">Checks</th></tr></thead><tbody>
+      ${items.map((a, i) => { const out = a.included === false; return `<tr>
+        <td class="inc"><input type="checkbox" name="inc:${esc(a.id)}" data-inc="${esc(a.id)}" ${out ? "" : "checked"} ${editable ? "" : "disabled"} aria-label="Include ${esc(a.title || a.id)}"></td>
+        <td><strong>${i + 1}. ${esc(a.title || a.id)}</strong>
+          <div id="why-${esc(a.id)}" style="${out ? "" : "display:none"};margin-top:.35rem"><input type="text" name="why:${esc(a.id)}" value="${esc(a.exclusion_reason || "")}" placeholder="Why is it left out? The draft will say." ${editable ? "" : "disabled"} style="width:100%"></div>
+          <details class="small"><summary>Why ${out ? "left out" : a.label === "confirmatory" ? "confirmatory" : "exploratory"}, and the details</summary>${planItemBody(a)}</details></td>
+        <td>${out ? `<span class="tag">left out</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""}</td>
+        <td class="ticks">${ticks(a)}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <p class="small muted">Checks, in order: described in the protocol; named as the primary analysis; covered by the sample-size calculation. An analysis is confirmatory only with all three; anything else is reported as exploratory.</p>
+      ${canAct && !locked ? (!s.plan_confirmed_by.includes(S.you)
+        ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center"><button class="btn" data-label="Confirming">Confirm this plan</button>
+            <span class="small muted">If you changed which analyses are included, your choice is saved as a revised plan and confirmed in one step.</span></div>`
+        : `<p><span class="tag good">You confirmed this version</span> <button class="btn quiet" data-label="Saving">Save changed choices</button></p>`) : ""}
+    </form>
+    ${canAct && !locked ? `<details style="margin-top:1rem"><summary>Something wrong in the plan?</summary>
+      <p class="small">Most problems are fixed by asking the agent again, with an instruction. You can also correct a quotation, a role or the planned numbers yourself; code checks your changes against the protocol in the same way.</p>
+      ${prepareBox(true)}
+      <button class="btn quiet" data-action="editplan">Correct the details myself</button></details>` : ""}
+  </section>`;
+}
+
+function planItemBody(a) {
+  return planItem(a, -1).replace(/^<div class="item[^"]*">\s*<h3>[\s\S]*?<\/h3>/, "<div>");
 }
 
 function planItem(a, i) {
@@ -836,25 +957,27 @@ function gate() {
   const ids = store.get();
   return `<div class="gate"><p class="mark">Saksi<small>witnessed research</small></p>
     <p class="lead">Research that is witnessed, not reconstructed.</p>
+    <ol class="howto small">
+      <li>Upload your study's data and protocol. AI agents check the data, run the planned analyses and draft the paper; code checks every number.</li>
+      <li>You and your co-authors check, edit and sign. An independent reviewer reviews, helped by a separate AI.</li>
+      <li>Every step, by a person or an agent, is sealed in a record that anyone can check.</li></ol>
     ${S.notice ? `<div class="msg ${S.notice.kind}">${esc(S.notice.text)}</div>` : ""}
-    ${S.secret ? `<div class="sheet"><p><strong>${esc(S.secret.label)}.</strong> Keep it; it is shown only once. It is saved in this browser if you chose to remember it.</p><div class="secret">${esc(S.secret.token)}</div></div>` : ""}
-    ${ids.length ? `<div class="sheet"><h2>Your projects on this device</h2><ul class="ids">${ids.map((x, i) => `<li><span><strong>${esc(x.name)}</strong> (${esc(roleLabel(x.roles))}) in ${esc(x.pid)}</span>
+    ${S.secret ? `<div class="sheet">${secretHtml()}</div>` : ""}
+    ${ids.length ? `<div class="sheet"><h2>Your projects on this device</h2><ul class="ids">${ids.map((x, i) => `<li><span><strong>${esc(x.title || x.pid)}</strong><br><span class="small muted">as ${esc(x.name)}, ${esc(roleLabel(x.roles))}</span></span>
       <button class="btn" data-action="resume" data-i="${i}">Open</button><button class="btn quiet" data-action="forget" data-i="${i}">Forget</button></li>`).join("")}</ul></div>` : ""}
-    <div class="sheet"><h2>Open a project</h2><form class="stack" data-form="signin">
-      <label><span>Project id</span><input type="text" name="pid" required autocomplete="off"></label>
-      <label><span>Your personal token</span><input type="password" name="token" required autocomplete="off"></label>
-      <label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="remember" checked> Remember on this device</label>
+    <div class="sheet"><h2>${ids.length ? "Open another project" : "Open your project"}</h2><form class="stack" data-form="signin">
+      <label><span>Your personal token</span><input type="password" name="token" required autocomplete="off" placeholder="sk_saksi_…"></label>
+      <p class="small muted">Saksi gives each person a token when they join a project. If you were invited, the corresponding author sent it to you.</p>
+      <label class="inline"><input type="checkbox" name="remember" checked> Remember me on this device</label>
       <div><button class="btn" data-label="Opening">Open</button></div></form></div>
     <details class="sheet"><summary>Start a new project</summary><form class="stack" data-form="create" style="margin-top:1rem">
-      <p class="small muted">You become the corresponding author. Starting projects on this server needs its creation token.</p>
+      <p class="small muted">You become the corresponding author and can then invite co-authors and a reviewer.</p>
+      <label><span>Study title</span><input type="text" name="title" required></label>
+      <label><span>Your full name</span><input type="text" name="name" required autocomplete="name"></label>
+      <label><span>Your ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
+      <label><span>Your affiliation (optional)</span><input type="text" name="affiliation" autocomplete="organization"></label>
       <label><span>Creation token</span><input type="password" name="create" autocomplete="off"></label>
-      <label><span>Project id (lowercase letters, digits, hyphens)</span><input type="text" name="pid" required pattern="[a-z0-9][a-z0-9\\-]{2,40}"></label>
-      <label><span>Title</span><input type="text" name="title" required></label>
-      <label><span>Study type</span><select name="study_type"><option value="primary">Primary study with a dataset</option><option value="evidence_synthesis">Evidence synthesis</option></select></label>
-      <label><span>Your full name</span><input type="text" name="name" required></label>
-      <label><span>Your short id, used in the record</span><input type="text" name="actor_id" required pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{1,40}"></label>
-      <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
-      <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
+      <p class="small muted">Only the people who run this Saksi server can start projects. They set this token; ask them for it.</p>
       <div><button class="btn" data-label="Starting">Start project</button></div></form></details>
     <p class="small muted">Saksi is open source under AGPL-3.0: <a href="https://github.com/boonhowchew/saksi" rel="noreferrer">source code</a>.</p></div>`;
 }
@@ -865,7 +988,7 @@ async function openProject(pid, token, remember) {
   const a = S.state.actors[S.you];
   if (remember) {
     const list = store.get().filter((x) => !(x.pid === pid && x.actor === S.you));
-    list.push({ pid, token, actor: S.you, name: a.name, roles: a.roles });
+    list.push({ pid, token, actor: S.you, name: a.name, roles: a.roles, title: S.state.title });
     store.set(list);
   }
   S.tab = nextStep()[1];
@@ -901,6 +1024,11 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "clearprefill": S.prefill = null; return render();
+    case "copy": {
+      try { await navigator.clipboard.writeText(t.dataset.text); t.textContent = "Copied"; }
+      catch { t.textContent = "Select and copy it"; }
+      return;
+    }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
     case "showcode": { const box = document.getElementById("code-" + t.dataset.sha); box.innerHTML = `<pre>${esc(await blob(t.dataset.sha))}</pre>`; return; }
@@ -915,6 +1043,11 @@ document.addEventListener("click", async (ev) => {
 document.addEventListener("change", async (ev) => {
   const t = ev.target;
   if (t.dataset.change === "version") { S.version = +t.value; return render(); }
+  if (t.dataset.inc !== undefined) {
+    const box = document.getElementById("why-" + t.dataset.inc);
+    if (box) { box.style.display = t.checked ? "none" : ""; if (!t.checked) box.querySelector("input")?.focus(); }
+    return;
+  }
   if (t.dataset.change === "calls") { S.showCalls = t.checked; $(".rail").innerHTML = rail(); return; }
   if (t.dataset.change === "switch") {
     const x = store.get().find((i) => i.pid === S.pid && i.actor === t.value);
@@ -929,25 +1062,31 @@ document.addEventListener("submit", async (ev) => {
   const s = S.state;
   switch (f.dataset.form) {
     case "signin":
-      try { await openProject(val("pid"), val("token"), !!fd.get("remember")); S.notice = null; }
-      catch (e) { S.pid = null; S.state = null; S.token = null; S.notice = { kind: "err", text: e.message }; }
+      try {
+        S.token = null;
+        const who = await api("/signin", { method: "POST", body: { token: val("token") } });
+        await openProject(who.project_id, val("token"), !!fd.get("remember")); S.notice = null;
+      } catch (e) { S.pid = null; S.state = null; S.token = null; S.notice = { kind: "err", text: e.message }; }
       return render();
     case "create": {
       try {
-        const creator = { actor_id: val("actor_id"), name: val("name") };
+        const creator = { name: val("name") };
         if (val("orcid")) creator.orcid = val("orcid");
         if (val("affiliation")) creator.affiliation = val("affiliation");
         S.token = null;
-        const r = await api("/projects", { method: "POST", body: { project_id: val("pid"), title: val("title"), study_type: val("study_type"), creator },
+        const r = await api("/projects", { method: "POST", body: { title: val("title"), creator },
           headers: val("create") ? { "X-Saksi-Create-Token": val("create") } : {} });
-        await openProject(val("pid"), r.token, true);
-        S.secret = { label: "Your personal token for this project", token: r.token };
-        S.notice = { kind: "ok", text: "Project started. Add your co-authors under People." };
+        await openProject(r.project_id, r.token, true);
+        S.secret = { label: "Your personal token for this project", token: r.token,
+          hint: "This browser remembers it. Keep a copy too: it opens this project from any other device. It is shown only once." };
+        S.notice = { kind: "ok", text: "Project started. Next: upload the dataset and protocol, and invite your co-authors under People." };
+        S.tab = "materials";
       } catch (e) { S.pid = null; S.state = null; S.notice = { kind: "err", text: e.message }; }
       return render();
     }
     case "addperson": {
-      const actor = { actor_id: val("actor_id"), name: val("name") };
+      const actor = { name: val("name") };
+      S.pendingName = actor.name;
       if (val("orcid")) actor.orcid = val("orcid");
       if (val("affiliation")) actor.affiliation = val("affiliation");
       return act(btn, () => command("register_human", { actor, role: val("role") }), `${actor.name} was added.`);
@@ -956,6 +1095,32 @@ document.addEventListener("submit", async (ev) => {
       const form = new FormData(); form.append("kind", val("kind")); form.append("file", fd.get("file"));
       if (val("note")) form.append("note", val("note"));
       return act(btn, () => api(`/projects/${S.pid}/materials`, { method: "POST", form }), "Uploaded.");
+    }
+    case "prepare": return act(btn, () => agent("prepare_plan", val("instructions") ? { instructions: val("instructions") } : {}),
+      "The plan is ready. Tick the analyses this paper includes, then confirm it.",
+      "The Data Curator is checking the data, then the Analysis Agent will draft the plan. This takes a few minutes; the page updates when it is done.")
+      .then(() => { if (S.state?.plan) { S.tab = "plan"; return render(); } });
+    case "withdraw": return act(btn, () => command("withdraw_material", { sha256: val("sha"), reason: val("reason") }), "The file was removed. Its name, fingerprint and your reason stay in the record.");
+    case "planconfirm": {
+      const p = s.plan, changed = [];
+      let missing = null;
+      const analyses = p.order.map((id) => {
+        const a = { ...p.analyses[id] };
+        delete a.design; delete a.label; delete a.protocol_quote_verified;
+        const inc = !!fd.get(`inc:${id}`), why = val(`why:${id}`), was = a.included !== false;
+        if (inc !== was) changed.push(inc ? `put back “${a.title || id}”` : `left out “${a.title || id}” (${why})`);
+        if (!inc && !why) missing = a.title || id;
+        return { ...a, included: inc, exclusion_reason: inc ? null : why };
+      });
+      if (missing) { S.notice = { kind: "err", text: `Say why “${missing}” is left out: the draft will report it.` }; $("#status").innerHTML = noticeHtml(); return; }
+      if (!changed.length) {
+        if (s.plan_confirmed_by.includes(S.you)) { S.notice = { kind: "ok", text: "Nothing changed." }; $("#status").innerHTML = noticeHtml(); return; }
+        return act(btn, () => command("confirm_plan", { plan_sha256: p.sha }), "You confirmed the plan.");
+      }
+      return act(btn, async () => {
+        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
+        return command("confirm_plan", { plan_sha256: r.state.plan.sha });
+      }, `Your choice was saved as a revised plan, and you confirmed it.${s.authors.length > 1 ? " Your co-authors now confirm the new version." : ""}`);
     }
     case "redraft": return act(btn, () => agent("propose_plan", val("instructions") ? { instructions: val("instructions") } : {}),
       "The Analysis Agent drafted a new plan. Check it, then confirm it.", "The Analysis Agent is reading the protocol. This can take a minute or two.");

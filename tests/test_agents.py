@@ -101,6 +101,11 @@ class ScriptedModel:
     def post(self, url, headers, json, timeout):
         self.bodies.append(json)
         system = json["messages"][0]["content"]
+        if "were not found in the protocol" in system:
+            r = (self.script.get("quotes") or ['{"fixes": []}']).pop(0)
+            r = r if isinstance(r, str) else __import__("json").dumps(r)
+            return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
         purpose = ("review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
                    else "write" if "Writing Agent" in system else "code")
@@ -203,7 +208,7 @@ def test_curate_plan_run_end_to_end(setup):
 
     led = ledger(p.log.events())
     assert led["agent:analyst"]["on_behalf_of"] == {"coauthor": 2, "bhc": 2}
-    assert led["agent:analyst"]["counts"]["model_calls"] == 5     # plan + primary + auc x2 + request
+    assert led["agent:analyst"]["counts"]["model_calls"] == 6     # plan + quote repair + primary + auc x2 + request
 
     # The models never received a data row.
     sent = json.dumps(model.bodies)
@@ -400,3 +405,52 @@ def test_plan_cut_off_gives_clear_advice_and_invalid_plan_is_retried(setup):
     s = agents.propose_plan("bhc", instructions="Only the primary objective")
     assert list(s.plan["analyses"]) == ["primary"] and s.plan["note"].endswith("Only the primary objective")
     assert "THE AUTHORS' INSTRUCTIONS" in model.bodies[-1]["messages"][1]["content"]
+
+
+def test_unfound_quotations_are_repaired_once_and_rechecked(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    bad = dict(PLAN_REPLY["analyses"][0], protocol_quote="Logistic regression of GDM on BMI with the usual adjusters")
+    invented = dict(PLAN_REPLY["analyses"][1], role="secondary")         # its quote is invented too
+    model.script["plan"] = [{"analyses": [bad, invented]}]
+    model.script["quotes"] = [{"fixes": [
+        {"id": "primary", "field": "protocol_quote",
+         "quote": "Multivariable logistic regression with GDM as the outcome and booking BMI as the exposure"},
+        {"id": "auc", "field": "protocol_quote", "quote": "The model was validated in three external cohorts"}]}]
+    s = agents.propose_plan("bhc")
+    assert s.plan["analyses"]["primary"]["protocol_quote_verified"] is True        # repaired, then re-checked
+    assert s.plan["analyses"]["primary"]["label"] == "confirmatory"
+    assert s.plan["analyses"]["auc"]["protocol_quote_verified"] is False           # an invented fix is not accepted
+    assert "corrected automatically and found: 1" in s.plan["note"]
+    assert any(e.payload.get("purpose") == "repair_quotes" for e in p.log.events() if e.type == "llm.called")
+
+
+def test_prepare_plan_checks_the_data_then_drafts(setup):
+    p, agents, model, _ = setup
+    model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.prepare_plan("bhc")
+    assert len(s.curator_reports) == 1 and s.plan and s.plan["requested_by"] == "bhc"
+    model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.prepare_plan("bhc")                       # already checked: does not curate again
+    assert len(s.curator_reports) == 1
+
+
+def test_wrong_upload_can_be_removed_before_the_plan_is_locked(setup):
+    from saksi.workflow import WorkflowError
+    p, agents, model, ds_sha = setup
+    wrong = upload(p, "dataset", "wrong.csv", b"a,b\n1,2\n")
+    assert agents._latest(p.state(), "dataset")["sha256"] == wrong
+    with pytest.raises(WorkflowError, match="say why"):
+        p.withdraw_material("bhc", wrong, "")
+    s = p.withdraw_material("coauthor", wrong, "Uploaded the wrong file")
+    assert not (p.root / "materials" / wrong).exists()                       # stored copy deleted
+    assert agents._latest(s, "dataset")["sha256"] == ds_sha                  # the right one is in use again
+    assert [m["withdrawn"]["reason"] for m in s.materials if m.get("withdrawn")] == ["Uploaded the wrong file"]
+    # A plan drafted from a protocol that is then removed cannot be confirmed.
+    model.script["plan"] = [{"analyses": [PLAN_REPLY["analyses"][0]]}]
+    s = agents.prepare_plan("bhc")
+    proto = agents._latest(s, "protocol")["sha256"]
+    p.withdraw_material("bhc", proto, "Wrong version of the protocol")
+    upload(p, "protocol", "protocol-v2.txt", (demo_data.PROTOCOL + "\nVersion 2.").encode())
+    with pytest.raises(WorkflowError, match="protocol that has since been removed"):
+        p.confirm_plan("bhc", s.plan["sha"])

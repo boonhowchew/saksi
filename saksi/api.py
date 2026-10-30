@@ -38,6 +38,7 @@ log = logging.getLogger("saksi")
 AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "curate": ("curate", {"material_sha256"}, "author"),
     "propose_plan": ("propose_plan", {"instructions"}, "author"),
+    "prepare_plan": ("prepare_plan", {"instructions"}, "author"),
     "run_planned": ("run_planned", {"plan_analysis_id"}, "author"),
     "run_request": ("run_request", {"request_id", "prompt"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
@@ -52,6 +53,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 # Human commands callable over HTTP: name -> (Project method, allowed argument names)
 HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "register_human": ("register_human", {"actor", "role"}),
+    "withdraw_material": ("withdraw_material", {"sha256", "reason"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
     "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note"}),
     "request_analysis": ("request_analysis", {"request_id", "prompt"}),
@@ -97,6 +99,15 @@ class TokenStore:
         p.chmod(0o600)
         return token
 
+    def find(self, token: str) -> tuple[str, str] | None:
+        """Which project and person a token belongs to, so signing in needs only the token."""
+        h = sha256_text(token.strip())
+        for f in sorted(self.root.glob("*/tokens.json")):
+            actor = json.loads(f.read_text()).get(h)
+            if actor:
+                return f.parent.name, actor
+        return None
+
     def resolve(self, pid: str, token: str | None) -> str:
         if not token:
             raise HTTPException(401, "missing X-Saksi-Token header")
@@ -107,11 +118,29 @@ class TokenStore:
 
 
 class CreateProject(BaseModel):
-    project_id: str
     title: str
-    study_type: str
     creator: dict[str, Any]
+    project_id: str | None = None         # made from the title when not given
+    study_type: str = "primary"
     max_rounds: int = 5
+
+
+class SignIn(BaseModel):
+    token: str
+
+
+def slug(text: str, n: int = 24) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:n].strip("-")
+    return s or "x"
+
+
+def new_actor_id(name: str, taken: set[str]) -> str:
+    base = slug(name, 20)
+    base = base if not base.startswith(("agent", "system")) else f"p-{base}"
+    aid, n = base, 2
+    while aid in taken:
+        aid, n = f"{base}-{n}", n + 1
+    return aid
 
 
 class Command(BaseModel):
@@ -176,14 +205,25 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         # On a public deployment, only someone holding the creation token may open projects.
         if create_token and not secrets.compare_digest(x_saksi_create_token or "", create_token):
             raise HTTPException(403, "project creation needs a valid X-Saksi-Create-Token")
-        p = project(body.project_id)
+        pid = body.project_id or f"{slug(body.title)}-{secrets.token_hex(2)}"
+        creator = {**body.creator, "actor_id": body.creator.get("actor_id") or new_actor_id(body.creator.get("name", ""), set())}
+        p = project(pid)
         try:
-            s = p.create(body.title, body.study_type, body.creator, max_rounds=body.max_rounds)
+            s = p.create(body.title, body.study_type, creator, max_rounds=body.max_rounds)
         except WorkflowError as e:
             raise refused(e)
-        token = tokens.issue(body.project_id, body.creator["actor_id"])
+        token = tokens.issue(pid, creator["actor_id"])
         persist()
-        return {"state": s.to_dict(), "token": token, "note": "Keep this token; it is shown only once."}
+        return {"state": s.to_dict(), "token": token, "project_id": pid,
+                "note": "Keep this token; it is shown only once."}
+
+    @app.post("/signin")
+    def signin(body: SignIn):
+        """Find the project a personal token belongs to."""
+        hit = tokens.find(body.token)
+        if not hit:
+            raise HTTPException(401, "That token is not recognised. Copy it in full: it starts with sk_saksi_.")
+        return {"project_id": hit[0], "actor_id": hit[1]}
 
     @app.get("/projects/{pid}")
     def get_state(pid: str, who: str = Depends(actor)):
@@ -218,6 +258,8 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         if extra:
             raise HTTPException(422, f"unexpected arguments: {', '.join(sorted(extra))}")
         p = existing(pid)
+        if name == "register_human" and isinstance(body.args.get("actor"), dict) and not body.args["actor"].get("actor_id"):
+            body.args["actor"]["actor_id"] = new_actor_id(body.args["actor"].get("name", ""), set(p.state().actors))
         try:
             s = getattr(p, method)(who, **body.args)
         except WorkflowError as e:

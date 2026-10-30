@@ -230,7 +230,16 @@ Add this key to the JSON object:
   "item_assessments": [{"item_id": str, "assessment": "addressed|partly_addressed|not_addressed|cannot_tell",
                         "quote": "exact excerpt from the current draft, or empty", "note": "one or two sentences"}]"""
 
-TEMPLATES = {"curator": CURATOR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+QUOTE_REPAIR = """You are the Analysis Agent in Saksi. Some quotations in your analysis plan were not found in the protocol
+by the automatic check. For each one you receive the quotation and the protocol passages most similar to it.
+
+For each, copy from those passages the sentence or clause that supports the same statement, exactly as written,
+character for character. Quote one unbroken stretch of text. If no passage supports it, return an empty string:
+an empty quotation is better than one the protocol does not contain.
+
+Return ONLY a JSON object: {"fixes": [{"id": str, "field": str, "quote": str}]}"""
+
+TEMPLATES = {"curator": CURATOR, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

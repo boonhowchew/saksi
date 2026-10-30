@@ -95,3 +95,23 @@ def locate(quote: str, source: str) -> dict[str, Any]:
 
 def quote_found(quote: str, source: str) -> bool:
     return locate(quote, source)["status"] != "not_found"
+
+
+_SENTENCE_END = re.compile(r"(?<=[.;:!?])\s+")
+
+
+def candidates(quote: str, source: str, k: int = 4) -> list[str]:
+    """The source sentences that share most words with a quotation, best first, in their original
+    wording (spacing tidied). Used to help an agent replace a quotation that was not found."""
+    flat = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", source or "")).strip()
+    sentences = [x for x in _SENTENCE_END.split(flat) if len(x) > 20]
+    want = set(_TOKEN.findall(normalise(quote or "")))
+    if not want:
+        return []
+    scored = sorted(((len(want & set(_TOKEN.findall(normalise(x)))) / len(want), i) for i, x in enumerate(sentences)),
+                    reverse=True)
+    out = []
+    for score, i in scored[:k]:
+        if score > 0.2:
+            out.append(sentences[i][:600])
+    return out

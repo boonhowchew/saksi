@@ -222,3 +222,16 @@ def test_upload_reports_what_saksi_could_read(tmp_path):
     r = c.post("/projects/gdm-demo/materials", data={"kind": "protocol"}, headers=h,
                files={"file": ("scan.txt", b"page 1")})
     assert "Almost no text" in r.json()["state"]["materials"][-1]["inspection"]["warning"]
+
+
+def test_sign_in_with_the_token_alone_and_ids_are_made_for_you(tmp_path):
+    c = TestClient(create_app(tmp_path))
+    r = c.post("/projects", json={"title": "BMI and GDM in Selangor", "creator": {"name": "Boon-How Chew"}})
+    assert r.status_code == 200, r.text
+    pid, tok = r.json()["project_id"], r.json()["token"]
+    assert pid.startswith("bmi-and-gdm-in-selangor-") and r.json()["state"]["actors"]["boon-how-chew"]
+    assert c.post("/signin", json={"token": tok}).json() == {"project_id": pid, "actor_id": "boon-how-chew"}
+    assert c.post("/signin", json={"token": "sk_saksi_nope"}).status_code == 401
+    r = c.post(f"/projects/{pid}/commands/register_human", headers={"X-Saksi-Token": tok},
+               json={"args": {"actor": {"name": "Boon How Chew"}, "role": "reviewer"}})
+    assert "boon-how-chew-2" in r.json()["state"]["actors"]                  # unique, made from the name

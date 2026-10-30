@@ -138,6 +138,7 @@ variants, which are discounted in exchange for training on prompts, are
 | Interval facts: whether each interval includes its null value, computed by code for the models and the reviewer | |
 | Confirmatory only for the pre-specified, powered primary analysis, checked against the protocol; shortfall against the planned sample flagged | |
 | Figures: forest plot and participant flow by Saksi; ROC, Kaplan-Meier or calibration curves by the analysis code when the plan calls for them; captions checked | |
+| Sign in with the personal token alone; project and person ids made automatically. Wrong uploads can be removed (stored copy deleted, name, hash and reason kept). One step from files to plan: the Data Curator, then the Analysis Agent, with unfound quotations sent back once to be corrected and re-checked; authors tick and confirm | |
 | Web page: every stage for authors and the reviewer, next step for each person, live record with integrity check, provenance and ledger. No third-party scripts or fonts | |
 | Live runs on Modal with both Meta models, from upload to the Reviewer Assistant's briefing (see PLAN.md) | |
 

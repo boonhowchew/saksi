@@ -169,6 +169,10 @@ def apply(s: State, ev: Event) -> State:
             s.round = p["round"]
     elif t == "material.uploaded":
         s.materials.append(p | {"by": ev.actor_id, "seq": ev.seq})
+    elif t == "material.withdrawn":
+        for m in s.materials:
+            if m["sha256"] == p["sha256"] and not m.get("withdrawn"):
+                m["withdrawn"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
     elif t == "curator.reported":
         s.curator_reports.append(p | {"seq": ev.seq})
     elif t == "plan.proposed":
@@ -344,6 +348,29 @@ class Project:
                                              "inspection": inspection})
         return self.state()
 
+    def withdraw_material(self, by: str, sha256: str, reason: str) -> State:
+        """Remove a wrongly uploaded file before the plan is locked. The stored copy is deleted;
+        the record keeps its name, hash and the reason."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "INGEST")
+        hits = [m for m in s.materials if m["sha256"] == sha256 and not m.get("withdrawn")]
+        if not hits:
+            raise WorkflowError("no file with that hash is in this project")
+        if not (reason or "").strip():
+            raise WorkflowError("say why you are removing it; the record keeps the reason")
+        deleted = False
+        for m in hits:
+            if m.get("storage_ref"):
+                path = self.root / m["storage_ref"]
+                if path.exists():
+                    path.unlink()
+                    deleted = True
+        self._emit(by, "material.withdrawn", {"sha256": sha256, "kind": hits[-1]["kind"],
+                                              "filename": hits[-1]["filename"], "reason": reason.strip(),
+                                              "stored_copy_deleted": deleted})
+        return self.state()
+
     def record_curator_report(self, by: str, report: dict[str, Any], call: dict[str, Any] | None,
                               requested_by: str | None = None, material_sha256: str | None = None) -> State:
         s = self.state()
@@ -396,7 +423,7 @@ class Project:
     def _protocol_text(self, s: State, ref: str | None) -> str | None:
         """The stored protocol's text, only if the file is present and still matches its hash."""
         m = next((m for m in reversed(s.materials) if m["kind"] == "protocol" and m["sha256"] == ref
-                  and m.get("storage_ref")), None)
+                  and m.get("storage_ref") and not m.get("withdrawn")), None)
         if m is None:
             return None
         path = self.root / m["storage_ref"]
@@ -415,8 +442,13 @@ class Project:
             raise WorkflowError("no plan has been proposed")
         if plan_sha256 != s.plan["sha"]:
             raise WorkflowError("this plan has changed since you read it; review the current version")
-        if not any(m["kind"] == "dataset" for m in s.materials) or not any(m["kind"] == "protocol" for m in s.materials):
+        live = [m for m in s.materials if not m.get("withdrawn")]
+        if not any(m["kind"] == "dataset" for m in live) or not any(m["kind"] == "protocol" for m in live):
             raise WorkflowError("a dataset and a protocol must be uploaded before the plan can be confirmed")
+        ref = s.plan.get("protocol_ref")
+        removed = {m["sha256"] for m in s.materials if m.get("withdrawn")} - {m["sha256"] for m in live}
+        if ref in removed:
+            raise WorkflowError("this plan was drafted from a protocol that has since been removed; ask for a new draft")
         self._emit(by, "plan.confirmed", {"plan_sha256": plan_sha256})
         s = self.state()
         if set(s.authors) <= s.plan_confirmed_by:
@@ -821,7 +853,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
-    "material.uploaded": "materials", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
+    "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
     "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",

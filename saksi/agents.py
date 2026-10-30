@@ -21,10 +21,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .documents import extract_text, quote_found
+from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, REPAIR, REWRITE, WRITER, prompt_ref
+from .prompts import (CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, REWRITE, WRITER,
+                      prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
 from .figures import required_figure
@@ -40,6 +41,7 @@ TASKS = {
     "plan": {"reasoning_effort": "high", "max_tokens": 32000},
     "code": {"reasoning_effort": "medium", "max_tokens": 12000},
     "repair": {"reasoning_effort": "medium", "max_tokens": 12000},
+    "quotes": {"reasoning_effort": "low", "max_tokens": 8000},
     "write": {"reasoning_effort": "medium", "max_tokens": 16000},
 }
 MAX_ATTEMPTS = 2
@@ -85,7 +87,7 @@ def analysis_seed(project_id: str, analysis_id: str) -> int:
 
 
 def latest_material(s: State, kind: str, sha: str | None = None) -> dict[str, Any]:
-    ms = [m for m in s.materials if m["kind"] == kind and (sha is None or m["sha256"] == sha)]
+    ms = [m for m in s.materials if m["kind"] == kind and not m.get("withdrawn") and (sha is None or m["sha256"] == sha)]
     if not ms:
         raise AgentError(f"no {kind} uploaded" + (f" with sha {sha[:12]}" if sha else ""))
     return ms[-1]
@@ -231,6 +233,9 @@ class Agents:
         if not analyses:
             self.project.record_model_call(ANALYST_ID, call)
             raise AgentError("the model proposed no analyses")
+        analyses, repaired = self._repair_quotes(analyses, protocol)
+        note = (f"Quotations not found at first: {repaired['failed']}; corrected automatically and found: "
+                f"{repaired['fixed']}.") if repaired else None
         cols = {c["name"] for c in d["profile"]["columns"]}
         for a in analyses:
             a["protocol_quote_verified"] = quote_found(a.get("protocol_quote", ""), protocol)
@@ -238,10 +243,54 @@ class Agents:
             a["columns_not_in_data"] = sorted({v["column"] for v in named
                                                if isinstance(v, dict) and v.get("column") and v["column"] not in cols})
             a["prompt"] = prompt_ref("plan")
-        note = f"Redrafted at the request of {requested_by}: {instructions.strip()}" if instructions and \
-            instructions.strip() else None
+        if instructions and instructions.strip():
+            asked = f"Redrafted at the request of {requested_by}: {instructions.strip()}"
+            note = f"{asked}. {note}" if note else asked
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
                                          call=call, requested_by=requested_by, note=note)
+
+    QUOTE_FIELDS = (("protocol_quote", "the sentence specifying the analysis"),
+                    ("primary_quote", "the sentence naming it the primary analysis"),
+                    ("sample_size_quote", "the sample-size justification covering it"))
+
+    def _repair_quotes(self, analyses: list[dict[str, Any]], protocol: str):
+        """Quotations the check cannot find go back to the agent once, with the protocol's most similar
+        passages. Every replacement is checked again by code; nothing unfound is accepted."""
+        failed = []
+        for a in analyses:
+            for field, what in self.QUOTE_FIELDS:
+                q = str(a.get(field) or "")
+                if q.strip() and locate(q, protocol)["status"] == "not_found":
+                    failed.append({"id": a.get("id"), "field": field, "what": what, "quote": q,
+                                   "passages": candidates(q, protocol)})
+        if not failed:
+            return analyses, None
+        user = "QUOTATIONS NOT FOUND, WITH THE MOST SIMILAR PROTOCOL PASSAGES:\n" + json.dumps(failed, indent=1)
+        try:
+            out, call, _ = self._json_call(ANALYST_ID, "quotes", QUOTE_REPAIR, user, "repair_quotes")
+        except AgentError:
+            return analyses, {"failed": len(failed), "fixed": 0}
+        self.project.record_model_call(ANALYST_ID, call)
+        fixes = {(f.get("id"), f.get("field")): str(f.get("quote") or "") for f in out.get("fixes") or []
+                 if isinstance(f, dict)}
+        by_id, fixed = {a.get("id"): a for a in analyses}, 0
+        for item in failed:
+            new = fixes.get((item["id"], item["field"]))
+            if new is None:
+                continue
+            if not new.strip() or locate(new, protocol)["status"] != "not_found":
+                by_id[item["id"]][item["field"]] = new
+                fixed += bool(new.strip())
+        return analyses, {"failed": len(failed), "fixed": fixed}
+
+    def prepare_plan(self, requested_by: str, instructions: str | None = None) -> State:
+        """One step for the authors: check the dataset in use (if not yet checked), then draft the plan."""
+        s = self.project.state()
+        ds = self._latest(s, "dataset")
+        self._latest(s, "protocol")
+        if not any(r.get("material_sha256") == ds["sha256"] for r in s.curator_reports):
+            self.curate(requested_by)
+        return self.propose_plan(requested_by, instructions)
 
     # -- Running analyses ------------------------------------------------------
     def run_planned(self, requested_by: str, plan_analysis_id: str | None = None) -> State:
