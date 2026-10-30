@@ -288,3 +288,110 @@ def to_docx(tables: list[dict[str, Any]], heading: str | None = None) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# -- Authors' wording on the tables -------------------------------------------------
+# Authors can reword a table on the draft page: its title, column headings, row labels and footnotes.
+# Numbers come from the results and cannot change. Codes in labels can (a "0" group can become "No GDM").
+_NUMS = re.compile(r"-?\d+(?:\.\d+)?")
+_N_IN_HEADER = re.compile(r"\(n\s*=\s*(\d+)\)")
+
+
+def _numbers(text: str) -> list[str]:
+    return sorted(_NUMS.findall(text or ""))
+
+
+def check_edits(tables: list[dict[str, Any]], edits: dict[str, Any]) -> dict[str, Any]:
+    """Validate the authors' wording changes against the computed tables; return them tidied.
+    Raises ValueError with a plain message when a change would alter a number."""
+    by_id = {t["analysis_id"]: t for t in tables}
+    clean: dict[str, Any] = {}
+    for aid, e in (edits or {}).items():
+        t = by_id.get(aid)
+        if t is None or not isinstance(e, dict):
+            raise ValueError(f"there is no table for {aid!r}")
+        out: dict[str, Any] = {}
+        label = f"Table {t['number']}"
+
+        def keep(old: str, new: str, where: str, required: list[str] | None = None) -> str:
+            new = str(new).strip()
+            if not new:
+                raise ValueError(f"{label}: {where} cannot be empty")
+            need = _numbers(old) if required is None else sorted(required)
+            have = _numbers(new)
+            missing = [n for n in need if n not in have or have.count(n) < need.count(n)]
+            if missing or (required is None and have != need):
+                raise ValueError(f"{label}: {where} must keep its numbers ({', '.join(need) or 'none'}); "
+                                 "numbers come from the results and are changed only by redoing the analysis")
+            return new
+        if "title" in e:
+            out["title"] = keep(t["title"], e["title"], "the title")
+        cols = {}
+        for j, v in (e.get("columns") or {}).items():
+            j = int(j)
+            if not 0 <= j < len(t["columns"]):
+                raise ValueError(f"{label}: no column {j}")
+            old = t["columns"][j]
+            cols[str(j)] = keep(old, v, f"heading {j + 1}", _N_IN_HEADER.findall(old)) if j else str(v).strip() or old
+        if cols:
+            out["columns"] = cols
+        rows = {}
+        for i, v in (e.get("rows") or {}).items():
+            i = int(i)
+            if not 0 <= i < len(t["rows"]):
+                raise ValueError(f"{label}: no row {i + 1}")
+            new = str(v).strip()
+            if not new:
+                raise ValueError(f"{label}: row label {i + 1} cannot be empty")
+            rows[str(i)] = new                                  # row labels are words (codes may change)
+        if rows:
+            out["rows"] = rows
+        notes = {}
+        for k, v in (e.get("footnotes") or {}).items():
+            k = int(k)
+            if not 0 <= k < len(t["footnotes"]):
+                raise ValueError(f"{label}: no footnote {k + 1}")
+            notes[str(k)] = keep(t["footnotes"][k], v, f"footnote {k + 1}")
+        if notes:
+            out["footnotes"] = notes
+        if out:
+            clean[aid] = out
+    return clean
+
+
+def apply_edits(tables: list[dict[str, Any]], edits: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The tables with the authors' wording, each changed piece marked so the page can show it."""
+    out = []
+    for t in tables:
+        e = (edits or {}).get(t["analysis_id"]) or {}
+        t = {**t, "columns": list(t["columns"]), "rows": [dict(r, cells=list(r["cells"])) for r in t["rows"]],
+             "footnotes": list(t["footnotes"]), "edited": sorted(k for k in e)}
+        if e.get("title"):
+            t["title"] = e["title"]
+        for j, v in (e.get("columns") or {}).items():
+            if int(j) < len(t["columns"]):
+                t["columns"][int(j)] = v
+        for i, v in (e.get("rows") or {}).items():
+            if int(i) < len(t["rows"]):
+                t["rows"][int(i)]["cells"][0] = v
+        for k, v in (e.get("footnotes") or {}).items():
+            if int(k) < len(t["footnotes"]):
+                t["footnotes"][int(k)] = v
+        out.append(t)
+    return out
+
+
+_REF = re.compile(r"\b(Tables?|Fig(?:ure)?s?\.?)\s+(\d+(?:\s*(?:,|and|to|-|–)\s*\d+)*)", re.I)
+
+
+def references(text: str) -> dict[str, set[int]]:
+    """Table and figure numbers the text refers to, ranges expanded ("Tables 2 to 4", "Figures 1 and 2")."""
+    found: dict[str, set[int]] = {"table": set(), "figure": set()}
+    for m in _REF.finditer(text or ""):
+        kind = "table" if m.group(1).lower().startswith("tab") else "figure"
+        nums = [int(x) for x in re.findall(r"\d+", m.group(2))]
+        ranges = re.findall(r"(\d+)\s*(?:to|-|–)\s*(\d+)", m.group(2))
+        found[kind].update(nums)
+        for a, b in ranges:
+            found[kind].update(range(int(a), int(b) + 1))
+    return found

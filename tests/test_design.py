@@ -127,8 +127,8 @@ def test_only_authors_name_a_primary_and_the_draft_must_disclose_it(proj):
     assert s.analyses["primary"]["protocol_deviation"]["kind"] == "primary_named_by_authors"
     assert proj.check_text("The odds ratio was 1.07 [A:primary].")["departure_not_disclosed"] == ["primary"]
     r = proj.check_text("The authors named this the primary analysis, which the protocol did not, because the "
-                        "steering committee chose it [A:primary]. The odds ratio was 1.07 [A:primary].")
-    assert r["departure_not_disclosed"] == [] and r["ok"], r
+                        "steering committee chose it [A:primary]. The odds ratio was 1.07 [A:primary] (Table 1, Figure 1).")
+    assert r["departure_not_disclosed"] == [] and r["ok"], {k: v for k, v in r.items() if v and k not in ("traced", "numbers_checked", "untraced")}
     return
 
 

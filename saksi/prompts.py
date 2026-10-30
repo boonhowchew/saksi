@@ -198,10 +198,12 @@ Rules:
   from its "diagnostics": events per predictor parameter, collinearity (VIF), linearity, influential observations,
   overall fit, discrimination and calibration, and independence. State every flag it lists plainly. Calibration on
   the data the model was fitted to is "apparent": say so, and do not present it as evidence for new patients.
-- Saksi builds the tables itself from the computed results (listed in TABLES). Refer to a table as "Table n" only
-  with its number from TABLES. Point to the table for the full estimates and give only the main ones in the text.
-- Refer to a figure as "Figure n" only if it is listed in FIGURES, using that number. Do not describe what a figure
-  shows beyond its caption.
+- Saksi builds the tables and figures itself from the computed results (listed in TABLES and FIGURES) and places
+  each one in the Results after the paragraph that first refers to it. Every table and every figure must be
+  referred to, by its number ("Table 2", "Figure 1"), and only those numbers may be used.
+- For each table or figure, write the text that goes with it: point to it, then say in words what it shows that
+  matters (the main finding, its direction and size, and its uncertainty), giving only the key estimates. Do not
+  repeat the table or the figure in prose, cell by cell; the reader can see it. Text and table must not disagree.
 
 Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion"."""
 
@@ -239,6 +241,9 @@ Rules:
 - Saksi applies a standard sequence: data quality, Table 1, descriptive, univariable, multivariable, then model
   diagnostics computed by fixed code (saksi_checks). Check that the draft reports the diagnostics and their flags
   honestly, and that its conclusions respect them.
+- Tables and figures are built by Saksi from the results and placed in the Results. Check that the text explains
+  each one (what matters, not a cell-by-cell repeat) and that text and tables agree. "redone" marks an analysis
+  that authors had redone, with their reason; "variant_of" marks a variant asked for after the results were seen.
 - Labels are set by code before any result: "confirmatory" is the pre-specified primary analysis covered by the
   protocol's sample-size justification; everything else is "exploratory" (pre-specified or post hoc). A shortfall
   against the planned sample is in sample_check. The authors may name a primary analysis that the protocol does not,

@@ -660,6 +660,13 @@ def _brief(findings: dict[str, Any]) -> str:
         lines.append(f"- UNKNOWN ANALYSIS TAG [A:{ref}]: use only keys from RESULTS")
     for ref in findings.get("analyses_not_reported", []):
         lines.append(f"- ANALYSIS NOT REPORTED: [A:{ref}] must be reported")
+    for n in findings.get("tables_not_referred", []):
+        lines.append(f"- TABLE {n} NOT REFERRED TO: give it a sentence or paragraph in Results that points to it and "
+                     "states its main finding in words, without repeating the table")
+    for n in findings.get("figures_not_referred", []):
+        lines.append(f"- FIGURE {n} NOT REFERRED TO: refer to it where its result is reported")
+    for x in findings.get("references_unknown", []):
+        lines.append(f"- {x.upper()} DOES NOT EXIST: use only the numbers in TABLES and FIGURES")
     for ref in findings.get("departure_not_disclosed", []):
         lines.append(f"- DEPARTURE FROM THE PROTOCOL NOT DISCLOSED for [A:{ref}]: in a sentence citing it, say that "
                      "its primary role differs from the protocol, and give the authors' reason from protocol_departure")

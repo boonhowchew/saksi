@@ -44,7 +44,8 @@ from .figures import saksi_figures
 from .standard import KIND_ORDER, STEPS, clean_table1, position
 from .documents import extract_text
 from .events import Event, EventLog
-from .tracing import SENTENCE, trace
+from .tracing import CITE, SENTENCE, trace
+from . import tables as tables_mod
 
 STAGES = ("INGEST", "ANALYSIS", "DRAFTING", "AUTHOR_REVISION", "REVIEW", "RESPONSE", "ATTESTATION", "FINAL")
 HUMAN_ROLES = {"author", "corresponding_author", "reviewer"}
@@ -621,8 +622,18 @@ class Project:
         if s.curator_reports:
             rep = self.blobs.get_json(s.curator_reports[-1]["report_sha256"])
             counts.append(rep.get("profile", {}).get("rows"))
-        return trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok),
-                     must_state=must_state, must_disclose=must_disclose)
+        r = trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok),
+                  must_state=must_state, must_disclose=must_disclose)
+        # Every table and figure must be referred to in the text, and only those that exist.
+        tables = [t["number"] for t in tables_mod.build(s, self.blobs)]
+        figures = [f["number"] for f in s.figures if f.get("number") and f["analysis_id"] in ok]
+        refs = tables_mod.references(CITE.sub("", text))
+        r["tables_not_referred"] = sorted(set(tables) - refs["table"])
+        r["figures_not_referred"] = sorted(set(figures) - refs["figure"])
+        r["references_unknown"] = [f"Table {n}" for n in sorted(refs["table"] - set(tables))] + \
+                                  [f"Figure {n}" for n in sorted(refs["figure"] - set(figures))]
+        r["ok"] = r["ok"] and not (r["tables_not_referred"] or r["figures_not_referred"] or r["references_unknown"])
+        return r
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
                      call: dict[str, Any] | None, requested_by: str | None = None,
@@ -649,7 +660,9 @@ class Project:
         return self.state()
 
     def edit_draft(self, by: str, base_version: int, text: str, summary: str,
-                   requested_by: str | None = None, call: dict[str, Any] | None = None) -> State:
+                   requested_by: str | None = None, call: dict[str, Any] | None = None,
+                   table_edits: dict[str, Any] | None = None) -> State:
+        """A new version of the draft: its text, and optionally the wording of its tables (never their numbers)."""
         s = self.state()
         a = self._require_role(s, by, "author", "writer")
         self._require_stage(s, "AUTHOR_REVISION", "RESPONSE")
@@ -659,11 +672,23 @@ class Project:
         if base_version != s.draft_version:
             raise WorkflowError(f"draft has moved on to version {s.draft_version}; reload before editing")
         old = self.blobs.get_text(s.drafts[base_version]["text_sha256"])
+        te_sha = s.drafts[base_version].get("table_edits_sha256")
+        if table_edits is not None:
+            try:
+                clean = tables_mod.check_edits(tables_mod.build(s, self.blobs), table_edits)
+            except ValueError as e:
+                raise WorkflowError(str(e))
+            te_sha = self.blobs.put_json(clean) if clean else None
+        if not (summary or "").strip():
+            raise WorkflowError("say what you changed and why")
+        if text == old and te_sha == s.drafts[base_version].get("table_edits_sha256"):
+            raise WorkflowError("nothing changed")
         call_seq = self._log_call(by, call)
         self._emit(by, "draft.edited", {
             "version": base_version + 1, "base_version": base_version,
             "text_sha256": self.blobs.put_text(text), "summary": summary,
             "diff": _diff_stats(old, text), "requested_by": requested_by, "llm_call_seq": call_seq,
+            "table_edits_sha256": te_sha,
             **self._trace(s, text),
         })
         return self.state()
@@ -915,6 +940,9 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
             "nothing_checked_but_numbers_present": r.get("nothing_checked_but_numbers_present", False),
             "shortfall_not_reported": r.get("shortfall_not_reported", []),
             "departure_not_disclosed": r.get("departure_not_disclosed", []),
+            "tables_not_referred": r.get("tables_not_referred", []),
+            "figures_not_referred": r.get("figures_not_referred", []),
+            "references_unknown": r.get("references_unknown", []),
             "ok": r["ok"]}
 
 

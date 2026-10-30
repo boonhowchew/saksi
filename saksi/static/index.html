@@ -191,6 +191,18 @@ details > summary { cursor: pointer; color: var(--indigo); margin: .3rem 0; }
 .cite { font: .72rem var(--sans); color: var(--indigo); background: #E6EBF6; border-radius: 3px; padding: 0 .3rem; white-space: nowrap; vertical-align: .1em; }
 .placeholder { font: italic .95rem var(--sans); color: var(--ochre); }
 mark { background: #FFE9A8; padding: 0 .1rem; }
+.manuscript-view .pubtable, .manuscript-view figure.fig { font-size: 1rem; max-width: none; margin: 1.2rem 0 1.4rem; }
+.manuscript-view .pubtable .pnotes p, .manuscript-view .pubtable .ptitle { font-family: var(--sans); }
+.canvas [contenteditable="true"] { outline: 1px dashed transparent; border-radius: 3px; transition: outline-color .15s; }
+.canvas [contenteditable="true"]:hover { outline-color: var(--rule); }
+.canvas [contenteditable="true"]:focus { outline: 2px solid var(--indigo); background: #FAFBFE; }
+.canvas table.pub td.locked { color: var(--ink); background: repeating-linear-gradient(135deg, transparent 0 6px, #F2F4F8 6px 7px); cursor: not-allowed; }
+.canvas .cite { user-select: none; }
+.notref { font: .8rem var(--sans); color: var(--ochre); margin: -.6rem 0 1rem; }
+.savebar { position: sticky; bottom: 0; z-index: 5; background: var(--sheet); border-top: 2px solid var(--indigo);
+  padding: .7rem 0; margin-top: 1rem; display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-end; }
+.savebar label { flex: 1 1 18rem; }
+.edited-note { font: .75rem var(--sans); color: var(--verdigris); }
 figure.fig { margin: 1rem 0; max-width: 46rem; }
 figure.fig img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 4px; background: #fff; }
 figure.fig figcaption { font-size: .9rem; margin-top: .4rem; }
@@ -788,36 +800,16 @@ async function tablesNow() {
   return S.tables.list;
 }
 const noteHtml = (n) => { const m = /^([a-j]) (.*)$/.exec(n); return m ? `<sup>${esc(m[1])}</sup> ${esc(m[2])}` : esc(n); };
-function pubTableHtml(t, tools = true) {
-  const head = t.columns.map((c, j) => `<th class="${j ? "r" : ""}">${esc(c).replace(/\n/g, "<br>")}</th>`).join("");
-  const body = t.rows.map((r) => `<tr>${r.cells.map((c, j) => { const mk = (r.marks || {})[j]; return `<td class="${j ? "r" : ""}${r.indent && !j ? " ind" : ""}">${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}</td>`; }).join("")}</tr>`).join("");
-  return `<div class="pubtable" id="pt-${t.number}"><p class="ptitle"><strong>Table ${t.number}.</strong> ${esc(t.title)}</p>
-    <div class="tablewrap"><table class="pub"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
-    <div class="pnotes">${t.footnotes.map((n) => `<p>${noteHtml(n)}</p>`).join("")}</div>
-    ${tools ? `<p class="small ptools"><span class="muted">Built by Saksi from the recorded results, without a model; journal layout.</span>
-      <button class="linkish" data-action="copytable" data-n="${t.number}">Copy for Word</button> ·
-      <button class="linkish" data-action="tabledocx" data-n="${t.number}">Download .docx</button></p>` : ""}</div>`;
-}
-function wordHtml(t) {
-  const cell = (txt, j, extra = "") => `<td style="padding:2pt 6pt;${j ? "text-align:right;white-space:nowrap;" : ""}${extra}">${txt}</td>`;
-  const top = "border-top:1.5pt solid black;", mid = "border-bottom:.75pt solid black;", bot = "border-bottom:1.5pt solid black;";
-  const head = t.columns.map((c, j) => cell(`<b>${esc(c).replace(/\n/g, " ")}</b>`, j, top + mid)).join("");
+function pubTableHtml(t, { editable = false, note = "" } = {}) {
+  const ce = (k) => editable ? ` contenteditable="true" data-te="${k}"` : "";
+  const head = t.columns.map((c, j) => `<th class="${j ? "r" : ""}"${ce("col:" + j)}>${esc(c).replace(/\n/g, "<br>")}</th>`).join("");
   const body = t.rows.map((r, i) => `<tr>${r.cells.map((c, j) => { const mk = (r.marks || {})[j];
-    return cell(`${r.indent && !j ? "&nbsp;&nbsp;&nbsp;&nbsp;" : ""}${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}`, j, i === t.rows.length - 1 ? bot : ""); }).join("")}</tr>`).join("");
-  return `<p style="font-family:Calibri,Arial;font-size:10pt"><b>Table ${t.number}.</b> ${esc(t.title)}</p>
-    <table style="border-collapse:collapse;font-family:Calibri,Arial;font-size:10pt"><tr>${head}</tr>${body}</table>
-    ${t.footnotes.map((n) => `<p style="font-family:Calibri,Arial;font-size:8.5pt;margin:0">${noteHtml(n)}</p>`).join("")}`;
-}
-async function copyTable(n) {
-  const t = (S.tables?.list || []).find((x) => x.number === +n);
-  if (!t) throw new Error("That table is not available any more; reload the page.");
-  const tsv = [t.columns.map((c) => c.replace(/\n/g, " ")), ...t.rows.map((r) => r.cells)].map((r) => r.join("\t")).join("\n");
-  if (window.ClipboardItem && navigator.clipboard?.write) {
-    await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([wordHtml(t)], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })]);
-  } else {
-    const range = document.createRange(); range.selectNode(document.getElementById("pt-" + n));
-    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); document.execCommand("copy"); sel.removeAllRanges();
-  }
+    return `<td class="${j ? "r" : ""}${r.indent && !j ? " ind" : ""}${editable && j ? " locked" : ""}"${j ? (editable ? ' title="From the computed results: numbers cannot be edited"' : "") : ce("row:" + i)}>${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}</td>`; }).join("")}</tr>`).join("");
+  return `<div class="pubtable" id="pt-${t.number}" data-aid="${esc(t.analysis_id)}"><p class="ptitle"><strong>Table ${t.number}.</strong> <span${ce("title")}>${esc(t.title)}</span></p>
+    <div class="tablewrap"><table class="pub"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+    <div class="pnotes">${t.footnotes.map((n, k) => `<p${ce("note:" + k)}>${noteHtml(n)}</p>`).join("")}</div>
+    ${t.edited?.length && !editable ? `<p class="edited-note">Wording edited by the authors; the numbers are as computed.</p>` : ""}
+    ${note ? `<p class="small muted">${note}</p>` : ""}</div>`;
 }
 async function downloadTables(n) {
   const r = await fetch(`/projects/${S.pid}/tables.docx${n ? "?number=" + n : ""}`, { headers: { "X-Saksi-Token": S.token } });
@@ -826,6 +818,8 @@ async function downloadTables(n) {
   const link = Object.assign(document.createElement("a"), { href: url, download: `saksi-${S.pid}-${n ? "table-" + n : "tables"}.docx` });
   document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+const TABLE_NOTE = "Built by Saksi from the recorded results, without a model. It goes into the draft's Results, where the text first refers to it; the authors can reword it there, but not change its numbers.";
 
 /* Analyses: the standard sequence */
 const SEQ = [
@@ -914,8 +908,8 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
   let body;
   if (!out) body = `<p class="msg err small">${esc(a.error || "")}</p>`;
   else if (a.standard === "data_quality") body = qualityHtml(out);
-  else if (a.standard === "table1") body = pub ? pubTableHtml(pub) : table1Html(out);
-  else if (pub) body = `${pubTableHtml(pub)}
+  else if (a.standard === "table1") body = pub ? pubTableHtml(pub, { note: TABLE_NOTE }) : table1Html(out);
+  else if (pub) body = `${pubTableHtml(pub, { note: TABLE_NOTE })}
       ${(out.notes || []).length ? `<details class="small"><summary>The Analysis Agent's notes</summary><ul>${out.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}
       ${diagnosticsHtml(out.diagnostics)}
       ${a.kind === "multivariable" && !out.diagnostics ? `<p class="msg warn small">The standard diagnostics are missing for this multivariable model${ex.diagnostics_missing ? ", even after the Analysis Agent was asked to add them" : ""}. Its results should not be relied on until they are checked.</p>` : ""}`;
@@ -997,7 +991,7 @@ async function analyses() {
     <p class="small">Labels are fixed before any result. <strong>Confirmatory</strong>: the pre-specified primary analysis the study was designed and powered for. <strong>Exploratory</strong>: everything else, pre-specified or added later. <strong>Descriptive</strong>: the standard data-quality check and Table 1.</p>
     ${canRun && pending.length ? `<div class="bigaction"><p><strong>${pending.length} step${pending.length > 1 ? "s" : ""} to run</strong>, in order: ${esc(pending.map((q) => q.label).join("; "))}. Each runs in a locked-down sandbox on the uploaded file; the models never see a data row.</p>
       <button class="btn" data-action="runall" data-label="Running the analyses">Run the analyses</button></div>` : ""}
-    ${tables.length ? `<p class="small"><strong>${tables.length} publication-ready table${tables.length > 1 ? "s" : ""}</strong>, numbered as in the paper. <button class="linkish" data-action="tabledocx">Download all as one Word file</button></p>` : ""}
+    ${tables.length ? `<p class="small"><strong>${tables.length} table${tables.length > 1 ? "s" : ""} and ${s.figures.filter((f) => f.number).length} figure${s.figures.filter((f) => f.number).length === 1 ? "" : "s"}</strong>, numbered as in the paper. They go into the draft's Results section, each beside the text that explains it.</p>` : ""}
     ${canRun && Object.keys(s.analyses).length ? `<p class="small"><span class="aibadge">AI</span>Under each analysis you can ask the Analysis Agent to run a variant or to redo it.</p>` : ""}
     ${sections.join("")}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
@@ -1036,6 +1030,121 @@ function renderManuscript(text, marks = []) {
   }).join("");
 }
 
+/* The manuscript as a canvas: Results with its tables and figures in place, editable in place */
+function parseBlocks(text) {
+  const blocks = [];
+  for (const chunk of (text || "").split(/\n{2,}/)) {
+    let para = [];
+    const flush = () => { if (para.length) { blocks.push({ type: "p", md: para.join(" ").trim() }); para = []; } };
+    for (const ln of chunk.split("\n")) {
+      const h = ln.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { flush(); blocks.push({ type: "h", level: h[1].length, md: ln.trim(), text: h[2].trim() }); }
+      else if (/^\s*[-*]\s+/.test(ln)) { flush(); blocks.push({ type: "li", md: ln.replace(/^\s*[-*]\s+/, "").trim() }); }
+      else if (ln.trim()) para.push(ln.trim());
+    }
+    flush();
+  }
+  return blocks;
+}
+const blocksText = (blocks) => blocks.filter((b) => b.type === "h" || b.md).map((b) => b.type === "h" ? b.md : b.type === "li" ? "- " + b.md : b.md).join("\n\n");
+function inlineMd(t, marks, editing) {
+  let h = esc(t);
+  if (!editing) for (const m of marks) {
+    const q = esc(m.quote);
+    if (q.length >= 12 && h.includes(q)) h = h.replace(q, `<mark data-point="${esc(m.id)}" title="${esc(m.id)}">${q}</mark>`);
+  }
+  return h.replace(/\[A:([A-Za-z0-9_.\-]+)\]/g, (_, r) => `<span class="cite" contenteditable="false" data-ref="${r}" title="Computed result: ${r}">${r}</span>`)
+    .replace(/\[Authors?:([^\]]+)\]/g, '<span class="placeholder">[Authors:$1]</span>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+function refsIn(t) {
+  const out = { table: [], figure: [] };
+  for (const m of t.matchAll(/\b(Tables?|Fig(?:ure)?s?\.?)\s+(\d+(?:\s*(?:,|and|to|-|–)\s*\d+)*)/gi)) {
+    const kind = /^tab/i.test(m[1]) ? "table" : "figure", nums = (m[2].match(/\d+/g) || []).map(Number);
+    for (const [, a, b] of m[2].matchAll(/(\d+)\s*(?:to|-|–)\s*(\d+)/g)) for (let i = +a; i <= +b; i++) nums.push(i);
+    out[kind].push(...nums);
+  }
+  return out;
+}
+async function renderCanvas(text, marks, tables, figures, editing) {
+  const blocks = parseBlocks(text), placed = { table: new Set(), figure: new Set() };
+  const tmap = new Map(tables.map((t) => [t.number, t])), fmap = new Map(figures.map((f) => [f.number, f]));
+  const objects = async (refs) => {
+    let h = "";
+    for (const n of [...new Set(refs.table)].sort((a, b) => a - b)) if (tmap.has(n) && !placed.table.has(n)) { placed.table.add(n); h += pubTableHtml(tmap.get(n), { editable: editing }); }
+    for (const n of [...new Set(refs.figure)].sort((a, b) => a - b)) if (fmap.has(n) && !placed.figure.has(n)) { placed.figure.add(n); h += await figureHtml(fmap.get(n)); }
+    return h;
+  };
+  const rest = async () => {
+    const t = tables.filter((x) => !placed.table.has(x.number)), f = figures.filter((x) => !placed.figure.has(x.number));
+    if (!t.length && !f.length) return "";
+    const h = await objects({ table: t.map((x) => x.number), figure: f.map((x) => x.number) });
+    return `<p class="notref">Not yet referred to in the text: ${esc([...t.map((x) => "Table " + x.number), ...f.map((x) => "Figure " + x.number)].join(", "))}. Each needs a sentence that points to it and says what it shows.</p>${h}`;
+  };
+  let out = "", inResults = false, restDone = false;
+  for (const b of blocks) {
+    if (b.type === "h") {
+      if (inResults && !restDone) { out += await rest(); restDone = true; }
+      inResults = /^results\b/i.test(b.text);
+      const lv = Math.min(b.level + 1, 4);
+      out += `<h${lv} class="blk" data-k="h" data-md="${esc(b.md)}">${esc(b.text)}</h${lv}>`;
+      continue;
+    }
+    const ce = editing ? ` contenteditable="true" spellcheck="true"` : "";
+    out += b.type === "li" ? `<ul><li class="blk" data-k="li"${ce}>${inlineMd(b.md, marks, editing)}</li></ul>`
+                           : `<p class="blk" data-k="p"${ce}>${inlineMd(b.md, marks, editing)}</p>`;
+    out += await objects(refsIn(b.md));
+  }
+  if (!restDone) out += await rest();
+  return out;
+}
+function serialiseBlock(el) {
+  const walk = (n) => {
+    if (n.nodeType === 3) return n.nodeValue.replace(/ /g, " ");
+    if (n.nodeType !== 1) return "";
+    if (n.classList.contains("cite")) return `[A:${n.dataset.ref}]`;
+    if (n.tagName === "BR") return "\n\n";
+    const inner = [...n.childNodes].map(walk).join("");
+    if (n.tagName === "STRONG" || n.tagName === "B") return inner.trim() ? `**${inner}**` : "";
+    return ["DIV", "P"].includes(n.tagName) ? "\n\n" + inner : inner;
+  };
+  return [...el.childNodes].map(walk).join("").split(/\n{2,}/).map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n\n");
+}
+function canvasText() {
+  return [...document.querySelectorAll("#ms .blk")].map((el) => {
+    if (el.dataset.k === "h") return el.dataset.md;
+    const t = serialiseBlock(el);
+    return !t ? "" : el.dataset.k === "li" ? t.split("\n\n").map((x) => "- " + x).join("\n\n") : t;
+  }).filter(Boolean).join("\n\n");
+}
+function canvasTableEdits(base) {
+  const edits = {};
+  for (const box of document.querySelectorAll("#ms .pubtable[data-aid]")) {
+    const t = base.find((x) => x.analysis_id === box.dataset.aid);
+    if (!t) continue;
+    const e = {};
+    for (const el of box.querySelectorAll("[data-te]")) {
+      const [k, i] = el.dataset.te.split(":"), now = el.innerText.replace(/ /g, " ").trim();
+      const orig = k === "title" ? t.title : k === "col" ? t.columns[+i] : k === "row" ? t.rows[+i].cells[0] : t.footnotes[+i];
+      const same = (a, b) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+      if (same(now, orig)) continue;
+      if (k === "title") e.title = now;
+      else ((e[{ col: "columns", row: "rows", note: "footnotes" }[k]] ||= {})[i] = now);
+    }
+    if (Object.keys(e).length) edits[t.analysis_id] = e;
+  }
+  return edits;
+}
+async function draftTables(v) {
+  const key = `${S.state.head_seq}|${v}`;
+  if (S.dtables?.key !== key || S.dtables?.pid !== S.pid) {
+    let list = [];
+    try { list = (await api(`/projects/${S.pid}/tables?version=${v}`)).tables || []; } catch { /* none */ }
+    S.dtables = { key, pid: S.pid, list };
+  }
+  return S.dtables.list;
+}
+
 async function draft() {
   const s = S.state;
   if (!s.draft_version) {
@@ -1052,6 +1161,8 @@ async function draft() {
   const signed = s.signoffs[v] || {};
   const canEdit = isAuthor() && current && ["AUTHOR_REVISION", "RESPONSE"].includes(s.stage);
   const canSign = canEdit && !signed[S.you];
+  const editing = canEdit && S.canvas === v;
+  const tables = await draftTables(v);
   const versions = Object.keys(s.drafts).map(Number).sort((a, b) => a - b);
   const attempts = d.writer_attempts || [];
   return `<section>
@@ -1064,12 +1175,20 @@ async function draft() {
     ${full?.untraced?.length ? `<details open><summary>Numbers that could not be traced</summary><ul class="small">${full.untraced.map((u) => `<li><mark>${esc(u.number)}</mark> in: ${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${full?.exploratory_not_labelled?.length ? `<details open><summary>Exploratory results not called exploratory</summary><ul class="small">${full.exploratory_not_labelled.map((u) => `<li>${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${attempts.length > 1 ? `<p class="small muted">The Writing Agent's first attempt failed the check; it rewrote the draft once from the findings${attempts.at(-1).passed_check ? " and passed" : ", and what remains is for the authors"}.</p>` : ""}
-    ${marks.length ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
-    <article class="manuscript-view">${renderManuscript(text || "", marks)}</article>
+    ${marks.length && !editing ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
+    ${checks.tables_not_referred?.length || checks.figures_not_referred?.length || checks.references_unknown?.length ? `<p class="msg warn small">${[
+      checks.tables_not_referred?.length ? `Not referred to in the text: ${checks.tables_not_referred.map((n) => "Table " + n).join(", ")}` : "",
+      checks.figures_not_referred?.length ? `Not referred to in the text: ${checks.figures_not_referred.map((n) => "Figure " + n).join(", ")}` : "",
+      checks.references_unknown?.length ? `Referred to but not built: ${checks.references_unknown.join(", ")}` : ""].filter(Boolean).map(esc).join(". ")}.</p>` : ""}
+    ${canEdit && !editing ? `<div class="bigaction"><p><strong>Edit on the page.</strong> Click any paragraph to change its words. In the tables you can reword the title, headings, row labels and footnotes; the numbers are locked, because they come from the results. Saving makes version ${v + 1}, recorded under your name and checked again.</p>
+      <button class="btn" data-action="canvas">Edit on the page</button></div>` : ""}
+    <article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
+    ${editing ? `<form class="savebar" data-form="canvassave">
+      <label><span class="small">What you changed and why (kept in the record)</span><input type="text" name="summary" required placeholder="For example: added the small-events limitation; relabelled the GDM groups"></label>
+      <button class="btn" data-label="Saving">Save as version ${v + 1}</button>
+      <button class="btn quiet" type="button" data-action="canvasoff">Stop editing</button></form>` : ""}
+    ${tables.length ? `<p class="small muted">The tables, in this version's wording, can also be <button class="linkish" data-action="tabledocx">downloaded as a Word file</button>.</p>` : ""}
   </section>
-  ${await draftTable1()}
-  ${okFigures().length ? `<section><h2>Figures</h2><p class="small muted">Numbered in the order they were made. The draft may cite them by these numbers.</p>
-    ${(await Promise.all(okFigures().map(figureHtml))).join("")}</section>` : ""}
   <section><h2>Sign-offs for version ${v}</h2>
     ${Object.keys(signed).length ? `<ul>${Object.entries(signed).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.claim_restatement)}”${x.checks_at_signoff ? ` <span class="tag ${x.checks_at_signoff.ok ? "good" : "attn"}">number check ${x.checks_at_signoff.ok ? "passed" : "had problems"} when signed</span>` : ""}</li>`).join("")}</ul>` : "<p>No sign-offs yet.</p>"}
     ${canSign ? `<form class="stack" data-form="signoff"><p class="small muted">There is no approve button. Say what the paper claims, in your own words, and answer each question.</p>
@@ -1077,16 +1196,10 @@ async function draft() {
       ${s.signoff_questions.map((q, i) => `<label><span>${esc(q)}</span><textarea name="q${i}" required></textarea></label>`).join("")}
       <div><button class="btn" data-label="Signing off">Sign off version ${v}</button></div></form>` : ""}
   </section>
-  ${canEdit ? `<section><h2>Edit the draft</h2><p class="small muted">Your edit becomes version ${v + 1}, is recorded under your name, and is number-checked again. Sign-offs are needed again for the new version.</p>
+  ${canEdit && !editing ? `<section><details><summary>Edit the text as plain text (Markdown) instead</summary><p class="small muted">For larger rewrites. Your edit becomes version ${v + 1}, is recorded under your name, and is number-checked again. Sign-offs are needed again for the new version.</p>
     <form class="stack" data-form="edit" style="max-width:none"><textarea class="manuscript" name="text">${esc(text)}</textarea>
       <label><span>What you changed and why</span><input type="text" name="summary" required></label>
-      <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></section>` : ""}`;
-}
-async function draftTable1() {
-  const tables = await tablesNow();
-  if (!tables.length) return "";
-  return `<section><h2>Tables</h2><p class="small muted">Built by Saksi from the computed results, in journal layout; the draft refers to them by these numbers.
-    <button class="linkish" data-action="tabledocx">Download all as one Word file</button></p>${tables.map((t) => pubTableHtml(t)).join("")}</section>`;
+      <div><button class="btn" data-label="Saving">Save as version ${v + 1}</button></div></form></details></section>` : ""}`;
 }
 const okFigures = () => S.state.figures.filter((f) => f.number && S.state.analyses[f.analysis_id]?.status === "ok").sort((a, b) => a.number - b.number);
 async function maybeOpenDraft() {
@@ -1275,8 +1388,9 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "canvas": S.canvas = S.version || S.state.draft_version; S.notice = null; await render(); document.querySelector("#ms [contenteditable=true]")?.focus(); return;
+    case "canvasoff": S.canvas = null; return render();
     case "openask": { const d = document.querySelector(`details.askai:has(form[data-id="${CSS.escape(t.dataset.id)}"])`); if (d) { d.open = true; d.scrollIntoView({ block: "center" }); d.querySelector("textarea")?.focus(); } return; }
-    case "copytable": try { await copyTable(t.dataset.n); t.textContent = "Copied: paste into Word"; } catch (e) { t.textContent = "Copy failed: use Download .docx"; } return;
     case "tabledocx": try { await downloadTables(t.dataset.n); } catch (e) { S.notice = { kind: "err", text: e.message }; render(); } return;
     case "showcode": { const box = document.getElementById("code-" + t.dataset.sha); box.innerHTML = `<pre>${esc(await blob(t.dataset.sha))}</pre>`; return; }
     case "download": {
@@ -1285,6 +1399,13 @@ document.addEventListener("click", async (ev) => {
       document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); return;
     }
   }
+});
+
+document.addEventListener("paste", (ev) => {
+  const el = ev.target.closest?.(".canvas [contenteditable=true]");
+  if (!el) return;
+  ev.preventDefault();
+  document.execCommand("insertText", false, (ev.clipboardData || window.clipboardData).getData("text/plain"));
 });
 
 document.addEventListener("change", async (ev) => {
@@ -1405,6 +1526,15 @@ document.addEventListener("submit", async (ev) => {
     case "signoff": {
       const answers = {}; s.signoff_questions.forEach((q, i) => (answers[q] = val("q" + i)));
       return act(btn, () => command("sign_off", { version: s.draft_version, claim_restatement: val("claim"), answers }), `You signed off version ${s.draft_version}.`);
+    }
+    case "canvassave": {
+      const base = await tablesNow(), v = s.draft_version;
+      const raw = await blob(s.drafts[v].text_sha256);
+      let text = canvasText();
+      if (text === blocksText(parseBlocks(raw))) text = raw;          // the words did not change: keep the text exactly
+      const table_edits = canvasTableEdits(base);
+      return act(btn, async () => { const r = await command("edit_draft", { base_version: v, text, summary: val("summary"), table_edits }); S.canvas = null; return r; },
+        `Saved as version ${v + 1}. The numbers were checked again; each author now signs off the new version.`);
     }
     case "edit": return act(btn, () => command("edit_draft", { base_version: s.draft_version, text: fd.get("text").toString(), summary: val("summary") }), `Saved as version ${s.draft_version + 1}.`);
     case "additem": {

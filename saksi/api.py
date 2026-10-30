@@ -60,7 +60,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note", "table1"}),
     "request_analysis": ("request_analysis", {"request_id", "prompt"}),
     "accept_analyses": ("accept_analyses", {"analysis_set_sha256"}),
-    "edit_draft": ("edit_draft", {"base_version", "text", "summary"}),
+    "edit_draft": ("edit_draft", {"base_version", "text", "summary", "table_edits"}),
     "open_draft": ("open_draft", {"version"}),
     "sign_off": ("sign_off", {"version", "claim_restatement", "answers"}),
     "start_review": ("start_review", set()),
@@ -245,18 +245,29 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         return ledger(existing(pid).log.events())
 
     @app.get("/projects/{pid}/tables")
-    def get_tables(pid: str, who: str = Depends(actor)):
-        """Publication-ready tables, built by code from the recorded results."""
-        from .tables import build
+    def get_tables(pid: str, version: int | None = None, who: str = Depends(actor)):
+        """Publication-ready tables, built by code from the recorded results; with a draft version, in that
+        version's wording."""
+        from .tables import apply_edits, build
         p = existing(pid)
-        return {"tables": build(p.state(), p.blobs)}
+        s = p.state()
+        ts = build(s, p.blobs)
+        d = s.drafts.get(version) if version else None
+        if d and d.get("table_edits_sha256"):
+            ts = apply_edits(ts, p.blobs.get_json(d["table_edits_sha256"]))
+        return {"tables": ts}
 
     @app.get("/projects/{pid}/tables.docx")
     def get_tables_docx(pid: str, number: int | None = None, who: str = Depends(actor)):
         from .tables import build, to_docx
         p = existing(pid)
         s = p.state()
-        ts = [t for t in build(s, p.blobs) if number is None or t["number"] == number]
+        ts = build(s, p.blobs)
+        d = s.drafts.get(s.draft_version) if s.draft_version else None
+        if d and d.get("table_edits_sha256"):
+            from .tables import apply_edits
+            ts = apply_edits(ts, p.blobs.get_json(d["table_edits_sha256"]))
+        ts = [t for t in ts if number is None or t["number"] == number]
         if not ts:
             raise HTTPException(404, "no such table")
         name = f"saksi-{pid}-table-{number}.docx" if number else f"saksi-{pid}-tables.docx"

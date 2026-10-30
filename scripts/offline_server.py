@@ -53,15 +53,15 @@ DRAFT = f"""[Authors: introduction]
 As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration.
 
 ## Results
-The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status [A:s_table1.r1].
+The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality]. Table 1 describes the {t1['n_analysed']} women by GDM status; those with GDM were slightly older and more often had previous GDM [A:s_table1.r1].
 
-Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events [A:primary]. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
+Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3) [A:primary]. Table 2 and Figure 1 give the adjusted estimates. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
-The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
+The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope (Figure 2) {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
 
-In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} [A:x_q1].
+In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (Table 4) [A:x_q1].
 
-In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} [A:auc.r1].
+In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} (Table 3; Figures 4 and 5) [A:auc.r1].
 
 ## Discussion
 The intervals are wide and include no association, so the data are compatible with both no association and a modest one. [Authors: comparison with previous studies]

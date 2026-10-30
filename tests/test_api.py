@@ -134,7 +134,7 @@ def test_review_loop_over_http(tmp_path, monkeypatch):
     draft = ("## Methods\nLogistic regression as planned.\n\n## Results\n"
              "Of 400 records, 12 lacked booking BMI [A:s_data_quality]. "
              "Booking BMI was associated with GDM [A:primary]. 388 women were analysed against 400 planned, "
-             "with 18 GDM events against 40 planned [A:primary].\n\n## Discussion\nThe sample was small.\n")
+             "with 18 GDM events against 40 planned [A:primary]. Table 1 and Figures 1 and 2 show the model.\n\n## Discussion\nThe sample was small.\n")
     model = ScriptedModel({
         "curate": [CURATOR_REPLY], "plan": [{"analyses": [PLAN_REPLY["analyses"][0]]}], "code": [fence(GOOD)],
         "write": [draft],

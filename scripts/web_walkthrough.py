@@ -111,9 +111,6 @@ with sync_playwright() as p:
     page.wait_for_function("() => !document.querySelector('.btn.busy')", timeout=60000); page.wait_for_timeout(250)
     print("table 1:", note(page)[:80])
     assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
-    with page.expect_download() as dl:
-        page.get_by_role("button", name="Download all as one Word file").first.click()
-    print("tables docx bytes:", Path(dl.value.path()).stat().st_size)
     shot(page, "05b-analyses-ai")
     click(page, "Accept these results")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")  # resume saved identity (author A)
@@ -122,6 +119,11 @@ with sync_playwright() as p:
     click(page, "Accept these results")
     page.get_by_role("tab", name="Draft").click(); click(page, "Ask the Writing Agent for the first draft"); shot(page, "06-draft")
     print("draft:", page.locator(".msg.ok, .msg.warn").first.inner_text()[:120])
+    print("draft check:", page.locator("#panel .msg").filter(has_text="Number check").first.inner_text()[:90])
+    print("in place:", page.locator("#ms .pubtable").count(), "tables,", page.locator("#ms figure.fig").count(), "figures")
+    with page.expect_download() as dl:
+        page.get_by_role("button", name="downloaded as a Word file").click()
+    print("tables docx bytes:", Path(dl.value.path()).stat().st_size)
     # sign off: A then B (switch identity via selector)
     def signoff(pg):
         pg.get_by_role("tab", name="Draft").click(); pg.wait_for_timeout(400)
@@ -143,10 +145,18 @@ with sync_playwright() as p:
     # authors respond
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")
     page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(400)
-    ta = page.locator("form[data-form=edit] textarea[name=text]")
-    ta.fill(ta.input_value() + "\n" + LIMIT + "\n")
-    page.fill("form[data-form=edit] input[name=summary]", "Added the small-events limitation (R1)")
+    # Edit on the page: add a sentence to the Discussion, and reword a Table 1 heading (its numbers are locked).
+    click(page, "Edit on the page")
+    disc = page.locator("#ms p.blk", has_text="compatible with both no association")
+    disc.click(); page.keyboard.press("Control+End"); page.keyboard.type(" " + LIMIT)
+    head = page.locator("#ms .pubtable[data-aid='s_table1.r1'] th[data-te='col:2']")
+    head.fill("No GDM (n = 380)")
+    assert page.locator("#ms td.locked").count() > 0, "numbers are locked on the page"
+    shot(page, "08a-canvas")
+    page.fill("form[data-form=canvassave] input[name=summary]", "Added the small-events limitation (R1); relabelled a group")
     click(page, "Save as version 2")
+    print("canvas save:", note(page)[:80])
+    assert "No GDM" in page.locator("#ms .pubtable[data-aid='s_table1.r1']").inner_text()
     page.get_by_role("tab", name="Review").click()
     page.fill("form[data-form=respond] input[name=note]", "Added a limitation to the Discussion.")
     click(page, "Respond"); signoff(page)

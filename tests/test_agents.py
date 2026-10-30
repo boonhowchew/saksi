@@ -317,7 +317,15 @@ def _to_drafting(p, agents, model):
         s = p.accept_analyses(a, s.analysis_set_sha())
     assert s.stage == "DRAFTING"
     est = {e["name"]: e for e in p.blobs.get_json(s.analyses["primary"]["outputs_sha256"])["estimates"]}
+    # Every table and figure must be referred to in the text.
+    from saksi import tables
+    nt, nf = len(tables.build(s, p.blobs)), max(f["number"] or 0 for f in s.figures)
+    global REFS
+    REFS = f"Tables 1 to {nt} and Figures 1 to {nf} give the estimates. "
     return est["booking_bmi"]
+
+
+REFS = ""
 
 
 def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
@@ -328,7 +336,7 @@ def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
             f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned [A:primary]. "
             f"Booking BMI was associated with GDM "
             f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
-            f"{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
+            f"{REFS}{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
 
 
 def test_writer_fixes_its_own_draft_after_check(setup):
@@ -598,3 +606,40 @@ def test_authors_change_table1_with_a_reason(setup):
     assert new["supersedes"] == "s_table1" and new["by"] == "system" and new["spec"]["table1"]["variables"] == ["age", "booking_bmi"]
     t1 = p.blobs.get_json(new["outputs_sha256"])
     assert [r["variable"] for r in t1["rows"]] == ["age", "booking_bmi"]
+
+
+def test_authors_reword_tables_on_the_draft_but_numbers_are_locked(setup):
+    from saksi import tables
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi, extra="", exploratory="An exploratory model gave a similar estimate [A:x_q1].")]
+    s = agents.write_draft("bhc")
+    text = p.blobs.get_text(s.drafts[1]["text_sha256"])
+    # Every table and figure must be referred to in the text.
+    bare = text.replace(REFS, "")
+    r = p.check_text(bare)
+    assert r["tables_not_referred"] == [1, 2] and r["figures_not_referred"] and not r["ok"]
+    assert p.check_text(text + "\n\nSee Table 9.")["references_unknown"] == ["Table 9"]
+    # Words can change; numbers cannot.
+    with pytest.raises(WorkflowError, match="must keep its numbers"):
+        p.edit_draft("bhc", 1, text, "x", table_edits={"primary": {"footnotes": {"0": "n = 999 analysed."}}})
+    with pytest.raises(WorkflowError, match="no table"):
+        p.edit_draft("bhc", 1, text, "x", table_edits={"nope": {"title": "x"}})
+    s = p.edit_draft("bhc", 1, text, "Relabelled Table 1",
+                     table_edits={"primary": {"title": "Booking BMI and gestational diabetes", "rows": {"0": "Booking BMI, per kg/m2"}}})
+    d = s.drafts[2]
+    base = tables.build(s, p.blobs)
+    shown = tables.apply_edits(base, p.blobs.get_json(d["table_edits_sha256"]))
+    assert shown[0]["title"] == "Booking BMI and gestational diabetes" and shown[0]["rows"][0]["cells"][0] == "Booking BMI, per kg/m2"
+    assert shown[0]["rows"][0]["cells"][1:] == base[0]["rows"][0]["cells"][1:] and shown[0]["edited"] == ["rows", "title"]
+    # Carried forward by a text-only edit; an edit that changes nothing is refused.
+    s = p.edit_draft("bhc", 2, text + "\n\nAdded a sentence.", "more")
+    assert s.drafts[3]["table_edits_sha256"] == d["table_edits_sha256"]
+    with pytest.raises(WorkflowError, match="nothing changed"):
+        p.edit_draft("bhc", 3, p.blobs.get_text(s.drafts[3]["text_sha256"]), "same")
+    # A heading keeps its group size; the group's code can become words.
+    t = {"analysis_id": "a", "number": 1, "title": "T", "columns": ["Characteristic", "GDM: 0\n(n = 380)"],
+         "rows": [{"cells": ["0", "1 (2.0)"]}], "footnotes": ["n = 5."]}
+    assert tables.check_edits([t], {"a": {"columns": {"1": "No GDM\n(n = 380)"}, "rows": {"0": "Nulliparous"}}})
+    with pytest.raises(ValueError, match="must keep its numbers"):
+        tables.check_edits([t], {"a": {"columns": {"1": "No GDM"}}})
