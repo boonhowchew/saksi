@@ -454,7 +454,7 @@ class Agents:
             raise AgentError("there are no successful analyses to write up")
         results = {k: {"label": v["label"], "basis": v.get("basis"), "kind": v.get("kind"),
                        "plan_analysis_id": v["plan_analysis_id"], "spec": v["spec"],
-                       "sample_check": v.get("sample_check"),
+                       "sample_check": v.get("sample_check"), "protocol_departure": v.get("protocol_deviation"),
                        "results": _for_writer(v, self.project.blobs.get_json(v["outputs_sha256"]), ok)}
                    for k, v in sorted(ok.items(), key=lambda kv: _position(kv[1]))}
         failed_brief = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
@@ -601,6 +601,9 @@ def _brief(findings: dict[str, Any]) -> str:
         lines.append(f"- UNKNOWN ANALYSIS TAG [A:{ref}]: use only keys from RESULTS")
     for ref in findings.get("analyses_not_reported", []):
         lines.append(f"- ANALYSIS NOT REPORTED: [A:{ref}] must be reported")
+    for ref in findings.get("departure_not_disclosed", []):
+        lines.append(f"- DEPARTURE FROM THE PROTOCOL NOT DISCLOSED for [A:{ref}]: in a sentence citing it, say that "
+                     "its primary role differs from the protocol, and give the authors' reason from protocol_departure")
     for ref in findings.get("shortfall_not_reported", []):
         lines.append(f"- SAMPLE SHORTFALL NOT STATED for [A:{ref}]: state the planned and achieved numbers "
                      "from its sample_check, citing it")

@@ -71,14 +71,18 @@ def _conventional_spans(sentence: str) -> list[tuple[int, int]]:
 
 def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any],
           dataset_counts: Iterable[float] = (), required_refs: Iterable[str] = (),
-          must_state: dict[str, list[float]] | None = None) -> dict[str, Any]:
+          must_state: dict[str, list[float]] | None = None,
+          must_disclose: Iterable[str] = ()) -> dict[str, Any]:
     """analyses: id -> analysis record (needs 'label'); outputs: id -> results JSON.
     required_refs: analyses the draft must report (guards against selective reporting).
     must_state: id -> numbers that a sentence citing that analysis must state (e.g. the planned
-    sample size when the achieved sample fell short of it)."""
+    sample size when the achieved sample fell short of it).
+    must_disclose: analyses whose primary role departs from the protocol; some sentence citing each must
+    say so (it must mention both "protocol" and "primary"). A minimal check; the reviewer judges the rest."""
     counts = [float(c) for c in dataset_counts]
     rows, untraced, unlabelled, unknown_refs = [], [], [], set()
     stated: dict[str, set[float]] = {}
+    disclosed: set[str] = set()
     for para in text.split("\n\n"):
         # Drop heading LINES only. A heading followed directly by text on the next
         # line is common in model output; skipping the whole paragraph would hide it.
@@ -86,6 +90,9 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
         for sent in filter(None, (x.strip() for x in SENTENCE.split(para))):
             refs = CITE.findall(sent)
             unknown_refs.update(r for r in refs if r not in analyses)
+            low = sent.lower()
+            if "protocol" in low and "primary" in low:
+                disclosed.update(refs)
             pool = [v for r in refs if r in outputs for v in numeric_leaves(outputs[r])] + counts
             plain = CITE.sub("", sent)
             skip = _conventional_spans(plain)
@@ -114,12 +121,14 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     not_reported = sorted(set(required_refs) - set(CITE.findall(text)))
     shortfall_unreported = sorted(k for k, vals in (must_state or {}).items()
                                   if any(float(v) not in stated.get(k, set()) for v in vals))
+    departure_undisclosed = sorted(set(must_disclose) - disclosed)
     return {
         "numbers_checked": len(rows), "traced": len(rows) - len(untraced), "untraced": untraced,
         "exploratory_not_labelled": unlabelled, "unknown_analysis_refs": sorted(unknown_refs),
         "nothing_checked_but_numbers_present": nothing_checked, "analyses_not_reported": not_reported,
-        "shortfall_not_reported": shortfall_unreported,
-        "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported or shortfall_unreported),
+        "shortfall_not_reported": shortfall_unreported, "departure_not_disclosed": departure_undisclosed,
+        "ok": not (untraced or unlabelled or unknown_refs or nothing_checked or not_reported or shortfall_unreported
+                   or departure_undisclosed),
     }
 
 

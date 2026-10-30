@@ -5,10 +5,15 @@
 
 An analysis is CONFIRMATORY only if all of these hold (ICH E9 sense):
   1. it is in the analysis plan every author confirmed before any result existed;
-  2. the protocol names it as the primary hypothesis (a verbatim quotation, found in the protocol);
-  3. the protocol's sample-size justification covers it (a verbatim quotation, found in the protocol),
-     and any numeric target given for it appears in that quotation.
+  2. it is the primary analysis: the protocol names it primary (a verbatim quotation, found in the
+     protocol), OR the authors name it primary, with a reason, before any result (author's decision,
+     30 Oct). The second is a departure from the protocol: it is recorded, shown to the reviewer, and
+     the draft must disclose it with the reason;
+  3. the protocol describes it, and the protocol's sample-size justification covers it (verbatim
+     quotations, found in the protocol), with any numeric target given for it in that quotation.
 Anything else is EXPLORATORY: "pre-specified" if it is in the plan, "post hoc" if it is not.
+Giving a protocol-named primary analysis another role is also a departure, disclosed the same way.
+Only an author can name a primary or change the protocol's; an agent's plan cannot.
 
 The quotations are checked here, by code, against the stored protocol, whoever proposed
 the plan. A missing or unfound quotation fails safe to exploratory.
@@ -58,9 +63,12 @@ def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any
     size_q = str(analysis.get("sample_size_quote") or "")
     target = _target(analysis.get("sample_size_target"))
     described = _found(str(analysis.get("protocol_quote") or ""), text)
-    primary = _found(primary_q, text) if role == "primary" else {"given": bool(primary_q), "status": "not_checked"}
-    size = _found(size_q, text)
+    reason = str(analysis.get("primary_reason") or "").strip()
     ok = lambda f: f["status"] in ("exact", "close")
+    primary = _found(primary_q, text)
+    by_protocol = ok(primary)
+    by_authors = role == "primary" and not by_protocol and bool(reason)
+    size = _found(size_q, text)
     # Planned numbers must appear in the protocol's own wording of the justification.
     size_words = size.get("protocol_text") or size_q
     targets_ok = all(v in _ints(size_words) for v in target.values() if v is not None)
@@ -78,11 +86,17 @@ def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any
     conditions = [
         {"key": "described", "label": "Described in the protocol", "met": ok(described),
          "detail": detail(described, "protocol sentence describing it")},
-        {"key": "primary", "label": "Named as the primary analysis in the protocol",
-         "met": role == "primary" and ok(primary),
-         "detail": (detail(primary, "sentence naming it primary") if role == "primary" else
+        {"key": "primary", "label": "The primary analysis",
+         "met": role == "primary" and (by_protocol or by_authors),
+         "detail": ("named primary in the protocol" if role == "primary" and by_protocol else
+                    "named primary by the authors, not by the protocol; the draft must disclose this and the "
+                    f"authors' reason ({reason})" if by_authors else
+                    detail(primary, "sentence naming it primary") + ". Authors may also name it primary "
+                    "themselves, with a reason that the draft will disclose" if role == "primary" else
+                    f"the protocol names it primary, but the authors made it a {role} analysis; the draft must "
+                    "disclose this" + (f" and the authors' reason ({reason})" if reason else "") if by_protocol else
                     f"listed as a {role} analysis. If the protocol names it primary, set its role to primary "
-                    "and paste that sentence")},
+                    "and paste that sentence; authors may also name it primary, with a reason")},
         {"key": "powered", "label": "Covered by the protocol's sample-size calculation",
          "met": ok(size) and targets_ok,
          "detail": (detail(size, "sample-size justification") if not ok(size) else
@@ -97,7 +111,18 @@ def assess(analysis: dict[str, Any], protocol_text: str | None) -> dict[str, Any
     checks = {"protocol_available": bool(text), "protocol_quote_verified": ok(described),
               "primary_quote_verified": role == "primary" and ok(primary), "sample_size_quote_verified": ok(size),
               "targets_in_quote": targets_ok}
+    deviation = None
+    if by_authors:
+        deviation = {"kind": "primary_named_by_authors", "reason": reason,
+                     "statement": "The protocol does not name this analysis as primary; the authors named it the "
+                                  f"primary analysis before any result. Their reason: {reason}"}
+    elif by_protocol and role != "primary":
+        deviation = {"kind": "protocol_primary_changed", "reason": reason,
+                     "statement": f"The protocol names this analysis as primary; the authors made it a {role} "
+                                  "analysis before any result. Their reason: " + (reason or "none given")}
     return {"role": role, "label": "confirmatory" if confirmatory else "exploratory", "basis": "pre-specified",
+            "primary_basis": "protocol" if role == "primary" and by_protocol else "authors" if by_authors else None,
+            "deviation": deviation,
             "primary_quote": primary_q, "sample_size_quote": size_q, "sample_size_target": target,
             "quotes": {"described": described, "primary": primary, "sample_size": size},
             "conditions": conditions, "checks": checks, "reasons_not_confirmatory": reasons}

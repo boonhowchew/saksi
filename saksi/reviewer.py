@@ -96,6 +96,7 @@ class ReviewerAssistant:
         ok = {k: v for k, v in s.analyses.items() if v["status"] == "ok" and blobs.has(v.get("outputs_sha256") or "")}
         results = {k: {"label": v["label"], "basis": v.get("basis"), "plan_analysis_id": v["plan_analysis_id"],
                        "title": v["spec"].get("title"), "sample_check": v.get("sample_check"),
+                       "protocol_departure": v.get("protocol_deviation"),
                        "results": blobs.get_json(v["outputs_sha256"])}
                    for k, v in ok.items()}
         facts = interval_facts({k: v["results"] for k, v in results.items()})

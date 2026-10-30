@@ -220,7 +220,7 @@ const STAGES = [
   ["FINAL", "Final", "The manuscript and its complete record are finished."]];
 const INTROS = {
   people: "Who is working on this study. Authors check and sign everything; the reviewer reviews once every author has signed off. The AI agents act only when a person asks, and the record names who asked.",
-  materials: "The study's files. Saksi stores them privately, checks that it can read them, and never sends a data row to an AI model.",
+  materials: "The study's files. Saksi stores them privately, checks that it can read them, and never sends a data row to an AI model. This version handles quantitative studies: a dataset and its protocol. A qualitative path (transcripts, coding and themes, with the same record, approvals and quotation checks) is designed but not yet built.",
   plan: "Which of the protocol's analyses this paper reports. The Analysis Agent drafts the plan and code checks it against the protocol. The authors choose and confirm it before any analysis runs.",
   analyses: "The confirmed analyses, run as code in a locked-down sandbox on the uploaded file: results, figures, and exactly how each was produced.",
   draft: "The manuscript. Code checks every number against the results, every edit is recorded, and each author signs off.",
@@ -345,7 +345,7 @@ function describe(e) {
     default: return esc(e.type);
   }
 }
-const labelText = (a) => a.label === "confirmatory" ? "confirmatory" : `exploratory${a.basis ? ", " + a.basis : ""}`;
+const labelText = (a) => a.label === "confirmatory" ? `confirmatory${a.primary_basis === "authors" ? ", primary named by the authors" : ""}` : `exploratory${a.basis ? ", " + a.basis : ""}`;
 const labelTag = (a) => `<span class="tag ${a.label === "confirmatory" ? "conf" : "expl"}" title="${a.label === "confirmatory" ? "The pre-specified primary analysis the study was designed and powered for" : "Not what the study was designed and powered for"}">${esc(labelText(a))}</span>`;
 const stageName = (code) => (STAGES.find(([c]) => c === code) || [code, code])[1];
 
@@ -647,10 +647,10 @@ function plan() {
         <td><strong>${i + 1}. ${esc(a.title || a.id)}</strong> <span class="tag">${esc(a.kind || "other")}</span>
           <div id="why-${esc(a.id)}" style="${out ? "" : "display:none"};margin-top:.35rem"><input type="text" name="why:${esc(a.id)}" value="${esc(a.exclusion_reason || "")}" placeholder="Why is it left out? The draft will say." ${editable ? "" : "disabled"} style="width:100%"></div>
           <details class="small"><summary>Why ${out ? "left out" : a.label === "confirmatory" ? "confirmatory" : "exploratory"}, and the details</summary>${planItemBody(a)}</details></td>
-        <td>${out ? `<span class="tag">left out</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""}</td>
+        <td>${out ? `<span class="tag">left out</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified", primary_basis: a.design?.primary_basis }) : ""}</td>
         <td class="ticks">${ticks(a)}</td></tr>`; }).join("")}
       </tbody></table></div>
-      <p class="small muted">Checks, in order: described in the protocol; named as the primary analysis; covered by the sample-size calculation. An analysis is confirmatory only with all three; anything else is reported as exploratory.</p>
+      <p class="small muted">Checks, in order: described in the protocol; the primary analysis (named so by the protocol, or by the authors with a reason that the draft discloses); covered by the sample-size calculation. An analysis is confirmatory only with all three; anything else is reported as exploratory. To name a primary, use “Correct the details myself”.</p>
       ${canAct && !locked ? (!s.plan_confirmed_by.includes(S.you)
         ? `<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center"><button class="btn" data-label="Confirming">Confirm this plan</button>
             <span class="small muted">If you changed which analyses are included, your choice is saved as a revised plan and confirmed in one step.</span></div>`
@@ -661,6 +661,12 @@ function plan() {
       ${prepareBox(true)}
       <button class="btn quiet" data-action="editplan">Correct the details myself</button></details>` : ""}
   </section>`;
+}
+
+function departureHtml(dev, by) {
+  if (!dev) return "";
+  return `<div class="msg warn small"><strong>Departure from the protocol, to be disclosed.</strong> ${esc(dev.statement)}.${by ? ` Decided by ${esc(name(by))}.` : ""}
+    The draft must say so, citing this analysis, and the reviewer sees it.</div>`;
 }
 
 function planItemBody(a) {
@@ -674,8 +680,9 @@ function planItem(a, i) {
   const wording = { described: d.quotes?.described, primary: d.quotes?.primary, powered: d.quotes?.sample_size };
   const t = d.sample_size_target || {};
   return `<div class="item ${out ? "" : d.label === "confirmatory" ? "good" : "attn"}">
-    <h3>${i + 1}. ${esc(a.title || a.id)} ${out ? `<span class="tag">left out of this paper</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified" }) : ""} <span class="muted small">${esc(a.id)}</span></h3>
+    <h3>${i + 1}. ${esc(a.title || a.id)} ${out ? `<span class="tag">left out of this paper</span>` : a.label ? labelTag({ label: a.label, basis: "pre-specified", primary_basis: a.design?.primary_basis }) : ""} <span class="muted small">${esc(a.id)}</span></h3>
     ${out ? `<p class="small"><strong>Left out:</strong> ${esc(a.exclusion_reason)}. The draft will name it as a protocol analysis not performed.</p>` : ""}
+    ${departureHtml(d.deviation, a.primary_reason_by)}
     ${conds.length ? `<ul class="checks">${conds.map((c) => {
       const w = wording[c.key];
       return `<li class="${c.met ? "met" : "unmet"}"><span class="mark">${c.met ? "✓" : "✗"}</span><div><strong>${esc(c.label)}.</strong> <span class="small">${esc(c.detail[0].toUpperCase() + c.detail.slice(1))}.</span>
@@ -706,9 +713,10 @@ function planEditor(p) {
       <label class="inline"><input type="checkbox" name="${f(id, "inc")}" ${a.included === false ? "" : "checked"}> Include in this paper</label>
       <label><span>If left out, why (required; the draft will report it)</span><input type="text" name="${f(id, "why")}" value="${esc(a.exclusion_reason || "")}"></label>
       <label><span>Place in the standard sequence</span><select name="${f(id, "kind")}">${["descriptive", "univariable", "multivariable", "other"].map((k) => `<option value="${k}" ${a.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>
-      <label><span>Role in the protocol</span><select name="${f(id, "role")}">${["primary", "secondary", "other"].map((r) => `<option value="${r}" ${(d.role || a.role) === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      <label><span>Role (as in the protocol, unless the authors decide otherwise below)</span><select name="${f(id, "role")}">${["primary", "secondary", "other"].map((r) => `<option value="${r}" ${(d.role || a.role) === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
       <label><span>Protocol sentence describing this analysis</span><textarea name="${f(id, "pq")}">${esc(a.protocol_quote || "")}</textarea></label>
       <label><span>Protocol sentence naming it the primary analysis (primary analyses only)</span><textarea name="${f(id, "prq")}">${esc(d.primary_quote || a.primary_quote || "")}</textarea></label>
+      <label><span>Authors' decision: if you name this the primary analysis although the protocol does not, or you change the protocol's primary, say why. The draft will disclose it and the reviewer will see it</span><textarea name="${f(id, "prr")}" placeholder="Leave empty if the roles follow the protocol">${esc(a.primary_reason || "")}</textarea></label>
       <label><span>The protocol's sample-size justification, if it covers this analysis</span><textarea name="${f(id, "ssq")}">${esc(d.sample_size_quote || a.sample_size_quote || "")}</textarea></label>
       <div class="row2"><label><span>Planned participants</span><input type="text" inputmode="numeric" name="${f(id, "n")}" value="${esc(t.n ?? "")}"></label>
         <label><span>Planned outcome events</span><input type="text" inputmode="numeric" name="${f(id, "ev")}" value="${esc(t.events ?? "")}"></label></div>
@@ -843,6 +851,7 @@ async function analysisBlock(id, a) {
     <h3>${esc(a.spec?.title || id)} ${a.standard ? `<span class="tag">descriptive</span>` : labelTag(a)}
       <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
     ${sampleBlock(a.sample_check)}
+    ${departureHtml(a.protocol_deviation)}
     ${a.requested_by ? `<p class="small muted">${a.standard ? "Run" : "Requested"} by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
     ${body}
     ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
@@ -943,7 +952,7 @@ async function draft() {
       <label class="small"><span class="hidden">Version</span><select data-change="version" aria-label="Version">${versions.map((x) => `<option value="${x}" ${x === v ? "selected" : ""}>Version ${x}${x === s.draft_version ? " (current)" : ""}</option>`).join("")}</select></label></div>
     <p class="small muted">${d.type === "draft.created" ? "Written" : "Edited"} by ${esc(name(d.by))}${d.requested_by ? " for " + esc(name(d.requested_by)) : ""}, ${fmtTime(d.ts)}${d.summary ? `: “${esc(d.summary)}”` : ""}${d.diff ? ` (${d.diff.words_added} words added, ${d.diff.words_removed} removed)` : ""}.</p>
     <div class="msg ${checks.ok ? "ok" : "warn"}"><strong>${checks.ok ? "Number check passed." : "Number check found problems."}</strong>
-      ${esc(checks.numbers_checked)} numbers checked against the computed results${checks.untraced ? `; ${checks.untraced} could not be traced` : ""}${checks.exploratory_not_labelled ? `; ${checks.exploratory_not_labelled} exploratory result${checks.exploratory_not_labelled > 1 ? "s" : ""} not called exploratory` : ""}${checks.analyses_not_reported?.length ? `; not reported: ${esc(checks.analyses_not_reported.join(", "))}` : ""}${checks.unknown_analysis_refs?.length ? `; unknown analyses cited: ${esc(checks.unknown_analysis_refs.join(", "))}` : ""}${checks.shortfall_not_reported?.length ? `; sample shortfall not stated for: ${esc(checks.shortfall_not_reported.join(", "))}` : ""}.</div>
+      ${esc(checks.numbers_checked)} numbers checked against the computed results${checks.untraced ? `; ${checks.untraced} could not be traced` : ""}${checks.exploratory_not_labelled ? `; ${checks.exploratory_not_labelled} exploratory result${checks.exploratory_not_labelled > 1 ? "s" : ""} not called exploratory` : ""}${checks.analyses_not_reported?.length ? `; not reported: ${esc(checks.analyses_not_reported.join(", "))}` : ""}${checks.unknown_analysis_refs?.length ? `; unknown analyses cited: ${esc(checks.unknown_analysis_refs.join(", "))}` : ""}${checks.shortfall_not_reported?.length ? `; sample shortfall not stated for: ${esc(checks.shortfall_not_reported.join(", "))}` : ""}${checks.departure_not_disclosed?.length ? `; departure from the protocol not disclosed for: ${esc(checks.departure_not_disclosed.join(", "))}` : ""}.</div>
     ${full?.untraced?.length ? `<details open><summary>Numbers that could not be traced</summary><ul class="small">${full.untraced.map((u) => `<li><mark>${esc(u.number)}</mark> in: ${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${full?.exploratory_not_labelled?.length ? `<details open><summary>Exploratory results not called exploratory</summary><ul class="small">${full.exploratory_not_labelled.map((u) => `<li>${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${attempts.length > 1 ? `<p class="small muted">The Writing Agent's first attempt failed the check; it rewrote the draft once from the findings${attempts.at(-1).passed_check ? " and passed" : ", and what remains is for the authors"}.</p>` : ""}
@@ -1257,7 +1266,7 @@ document.addEventListener("submit", async (ev) => {
         const a = { ...p.analyses[id] }, g = (k) => val(`${k}:${id}`);
         delete a.design; delete a.label; delete a.protocol_quote_verified;
         return { ...a, included: !!fd.get(`inc:${id}`), exclusion_reason: g("why") || null, role: g("role"), kind: g("kind"),
-          protocol_quote: g("pq"), primary_quote: g("prq"), sample_size_quote: g("ssq"),
+          protocol_quote: g("pq"), primary_quote: g("prq"), primary_reason: g("prr") || null, sample_size_quote: g("ssq"),
           sample_size_target: { n: num(g("n")), events: num(g("ev")) }, method: g("method"), missing_data: g("md") };
       });
       const t1vars = val("t1vars").split(",").map((x) => x.trim()).filter(Boolean);

@@ -170,6 +170,9 @@ Rules:
   exploratory analysis must contain the word "exploratory", and say whether it was pre-specified or post hoc.
 - If an analysis has a sample_check with a shortfall, state the planned and the achieved numbers from it in the
   Results, citing that analysis, and treat the shortfall as a limitation.
+- If an analysis has a protocol_departure, disclose it in Methods or Results in a sentence that cites that analysis:
+  say plainly how its primary role differs from the protocol, that the authors decided this before any result, and
+  give their reason. Mention it again as a limitation in the Discussion.
 - Report the number analysed and excluded for each analysis.
 - If a planned analysis failed, say so in Methods and report no result for it.
 - Name each protocol analysis NOT PERFORMED IN THIS PAPER in the Methods, with the authors' reason.
@@ -237,7 +240,9 @@ Rules:
   honestly, and that its conclusions respect them.
 - Labels are set by code before any result: "confirmatory" is the pre-specified primary analysis covered by the
   protocol's sample-size justification; everything else is "exploratory" (pre-specified or post hoc). A shortfall
-  against the planned sample is in sample_check.
+  against the planned sample is in sample_check. The authors may name a primary analysis that the protocol does not,
+  or change the protocol's primary, before any result, with a reason; that is in protocol_departure. Ask whether
+  the reason is convincing and whether the draft discloses it fully.
 - Phrase each point as a question to the authors. Do not assert that something is wrong.
 - At most 10 points, most important first. Fewer is better than padding.
 - Use only the materials given. Do not cite literature.

@@ -408,9 +408,22 @@ class Project:
         # Confirmatory or exploratory is decided here, by code, against the stored protocol,
         # whoever proposed the plan. Anything the proposer claimed about it is overwritten.
         text = self._protocol_text(s, protocol_ref)
+        old = (s.plan or {}).get("analyses") or {}
+        for x in analyses:
+            if a["kind"] != "human":
+                # Naming a primary the protocol does not, or changing the protocol's, is the authors' call.
+                x.pop("primary_reason", None); x.pop("primary_reason_by", None)
+            elif str(x.get("primary_reason") or "").strip():
+                same = str((old.get(x["id"]) or {}).get("primary_reason") or "").strip() == str(x["primary_reason"]).strip()
+                x["primary_reason_by"] = (old.get(x["id"]) or {}).get("primary_reason_by") if same else by
+            else:
+                x.pop("primary_reason_by", None)
         plan = {}
         for x in analyses:
             d = assess(x, text)
+            if a["kind"] == "human" and d["deviation"] and not d["deviation"]["reason"] and x["included"]:
+                raise WorkflowError(f"the protocol names {x['id']!r} as primary; say why it is now a {d['role']} "
+                                    "analysis (the draft will disclose it)")
             plan[x["id"]] = {**x, "design": d, "label": d["label"],
                              "kind": x.get("kind") if x.get("kind") in KIND_ORDER else "other",
                              "protocol_quote_verified": d["checks"]["protocol_quote_verified"]}
@@ -510,6 +523,8 @@ class Project:
         self._emit(by, "analysis.completed", {
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
             "basis": basis, "standard": standard, "kind": standard or (planned or {}).get("kind") or "other",
+            "primary_basis": ((planned or {}).get("design") or {}).get("primary_basis"),
+            "protocol_deviation": ((planned or {}).get("design") or {}).get("deviation"),
             "sample_check": check, "figures": figs,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
             "execution": execution, "status": status, "error": error, "request_id": request_id,
@@ -584,12 +599,13 @@ class Project:
                    for k, v in ok.items()}
         must_state = {k: [r["target"] for r in v["sample_check"]["targets"].values() if r.get("short")]
                       for k, v in ok.items() if (v.get("sample_check") or {}).get("shortfall")}
+        must_disclose = sorted(k for k, v in ok.items() if v.get("protocol_deviation"))
         counts = []
         if s.curator_reports:
             rep = self.blobs.get_json(s.curator_reports[-1]["report_sha256"])
             counts.append(rep.get("profile", {}).get("rows"))
         return trace(text, s.analyses, outputs, [c for c in counts if c is not None], required_refs=sorted(ok),
-                     must_state=must_state)
+                     must_state=must_state, must_disclose=must_disclose)
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
                      call: dict[str, Any] | None, requested_by: str | None = None,
@@ -865,6 +881,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
             "analyses_not_reported": r.get("analyses_not_reported", []),
             "nothing_checked_but_numbers_present": r.get("nothing_checked_but_numbers_present", False),
             "shortfall_not_reported": r.get("shortfall_not_reported", []),
+            "departure_not_disclosed": r.get("departure_not_disclosed", []),
             "ok": r["ok"]}
 
 
