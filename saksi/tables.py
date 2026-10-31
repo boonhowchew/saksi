@@ -247,6 +247,11 @@ def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[
             continue
         out = blobs.get_json(a["outputs_sha256"])
         t = _table1(aid, a, out, labels) if a.get("standard") == "table1" else _results(aid, a, out, labels)
+        heading = ((a.get("description") or {}).get("heading") or "").strip()
+        if t and heading and not a.get("standard") and not t.get("laid_out_by"):
+            t["title"] = heading
+        elif t and heading and t.get("laid_out_by") and a.get("basis") == "post hoc":
+            t["title"] = heading           # an author's request is not a table title
         if t:
             tables.append(t | {"label": a.get("label")})
     seen: dict[str, dict[str, Any]] = {}
@@ -301,12 +306,23 @@ def to_docx(tables: list[dict[str, Any]], heading: str | None = None) -> bytes:
         p.add_run(t["title"])
         tb = doc.add_table(rows=1 + len(t["rows"]), cols=len(t["columns"]))
         last = len(t["rows"])
+        # Proportionate widths: the label column gets room for its words, the value columns share the rest.
+        from docx.shared import Cm
+        ncol = len(t["columns"])
+        total = 16.0
+        first = total * (0.36 if ncol <= 4 else 0.28 if ncol <= 6 else 0.22)
+        rest = (total - first) / max(ncol - 1, 1)
+        tb.autofit = False
+        for row in tb.rows:
+            for j, cell in enumerate(row.cells):
+                cell.width = Cm(first if j == 0 else rest)
+        size = Pt(10 if ncol <= 5 else 9 if ncol <= 7 else 8)
         for j, h in enumerate(t["columns"]):
             c = tb.rows[0].cells[j]
             c.text = ""
             for k, part in enumerate(h.split("\n")):
                 run = c.paragraphs[0].add_run(part)
-                run.bold = True
+                run.bold, run.font.size = True, size
                 if k < len(h.split("\n")) - 1:
                     run.add_break()
             tight(c.paragraphs[0])
@@ -318,7 +334,7 @@ def to_docx(tables: list[dict[str, Any]], heading: str | None = None) -> bytes:
                 c = tb.rows[i].cells[j]
                 c.text = ""
                 para = c.paragraphs[0]
-                para.add_run(("    " if r.get("indent") and j == 0 else "") + str(v))
+                para.add_run(("    " if r.get("indent") and j == 0 else "") + str(v)).font.size = size
                 mk = (r.get("marks") or {}).get(j) or (r.get("marks") or {}).get(str(j))
                 if mk:
                     para.add_run(mk).font.superscript = True

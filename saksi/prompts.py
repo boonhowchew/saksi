@@ -119,8 +119,9 @@ Return ONLY a JSON object:
 CODE = """You are the Analysis Agent in Saksi. Write Python that performs exactly ONE analysis.
 
 Contract (mandatory):
-- Define a top-level function `analyse(data_path, seed)` that reads the CSV at data_path with pandas and returns
-  a JSON-serialisable dict.
+- Define a top-level function `analyse(data_path, seed)` that reads the CSV at data_path with
+  pd.read_csv(data_path, na_values=["#NULL!", "."]) (missing codes from SPSS and SAS) and returns a
+  JSON-serialisable dict.
 - Allowed imports only: numpy, pandas, scipy, statsmodels, sklearn, patsy, matplotlib, math, statistics, json, warnings,
   itertools, collections, functools, typing, dataclasses.
 - Do not print data, open or write files, use the network, eval/exec, or getattr. Use `seed` for any randomness.
@@ -345,7 +346,9 @@ Otherwise write the Results text for this analysis: one short paragraph, two at 
   includes the null, do not call the result an association or a difference.
 - If AUTHOR'S INSTRUCTION is given, follow it within these rules.
 
-Reply with the text only: no heading and no list."""
+Start with ONE line "Heading: " followed by a journal-style subheading for this result (at most 10 words: what was
+examined, for example "Booking BMI and gestational diabetes"; never how or by whom it was requested, and never a label
+such as exploratory). Then a blank line and the text. No other heading and no list."""
 
 ASSIST = """You are Saksi's analysis assistant. An author is looking at the generated Results of their study and has
 written to you, about one result or about the Results as a whole. Decide what they want, answer briefly, and propose

@@ -61,6 +61,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "register_human": ("register_human", {"actor", "role"}),
     "withdraw_material": ("withdraw_material", {"sha256", "reason"}),
     "withdraw_analysis": ("withdraw_analysis", {"analysis_id", "reason"}),
+    "edit_description": ("edit_description", {"analysis_id", "text", "heading"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
     "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note", "table1", "report"}),
     "request_analysis": ("request_analysis", {"request_id", "prompt"}),

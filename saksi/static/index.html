@@ -83,12 +83,15 @@ fieldset.roles { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
 .diag { border-top: 1px dashed var(--rule); margin-top: .9rem; padding-top: .6rem; }
 .pubtable { margin: .8rem 0 1rem; }
 .pubtable .ptitle { margin: 0 0 .35rem; font-size: .92rem; }
-table.pub { font-family: var(--serif); font-size: .9rem; font-variant-numeric: tabular-nums; }
+table.pub { font-family: var(--serif); font-size: .9rem; font-variant-numeric: tabular-nums; width: 100%; table-layout: auto; }
+table.pub th:first-child, table.pub td:first-child { min-width: 13rem; width: 32%; white-space: normal; }
+table.pub th.r { white-space: normal; min-width: 6.5rem; max-width: 11rem; line-height: 1.25; }
 table.pub th, table.pub td { border: 0; padding: .28rem .6rem; color: var(--ink); }
 table.pub th { font-weight: 600; vertical-align: bottom; }
 table.pub thead tr { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); }
 table.pub tbody tr:last-child { border-bottom: 2px solid var(--ink); }
-table.pub .r { text-align: right; white-space: nowrap; }
+table.pub td.r { text-align: right; white-space: nowrap; }
+table.pub th.r { text-align: right; }
 table.pub td.ind { padding-left: 1.7rem; }
 table.pub sup, .pnotes sup { line-height: 0; font-size: .72em; }
 .pubtable .pnotes p { font-size: .78rem; margin: .12rem 0; color: var(--muted); }
@@ -101,7 +104,15 @@ details.askai > form { padding: 0 .8rem .8rem; }
 fieldset.choice { border: 0; padding: 0; margin: 0 0 .4rem; display: grid; gap: .45rem; }
 fieldset.choice label.inline { align-items: flex-start; gap: .5rem; }
 fieldset.choice input { margin-top: .25rem; }
-.manuscript-view.results { max-width: 52rem; }
+.manuscript-view.results { max-width: 60rem; }
+.manuscript-view.results .rtext, .manuscript-view.results h4 { max-width: 46rem; }
+.manuscript-view .pubtable .tablewrap { overflow-x: auto; }
+.rtext[contenteditable="true"], .rsec h4[contenteditable="true"] { outline: 1px dashed transparent; border-radius: 3px; }
+.rtext[contenteditable="true"]:hover, .rsec h4[contenteditable="true"]:hover { outline-color: var(--rule); }
+.rtext[contenteditable="true"]:focus, .rsec h4[contenteditable="true"]:focus { outline: 2px solid var(--indigo); background: #FAFBFE; }
+.editbar { display: flex; gap: .5rem; align-items: center; margin: .3rem 0; font-family: var(--sans); }
+.editbar[hidden] { display: none; }
+.byline { font: .76rem var(--sans); color: var(--muted); margin: .1rem 0 .4rem; }
 .results h2 { font: 600 1.35rem var(--serif); border-bottom: 1px solid var(--rule); padding-bottom: .3rem; }
 .results h3.rgroup { font: 600 1.05rem var(--serif); margin: 1.6rem 0 .2rem; color: var(--muted); }
 .rsec { margin: 1rem 0 1.6rem; }
@@ -389,7 +400,8 @@ function describe(e) {
     case "stage.advanced": return `Moved to ${esc(stageName(p.to))}: ${esc(p.reason)}`;
     case "analysis.requested": return `${who} asked for an exploratory analysis`;
     case "analysis.withdrawn": return `${who} left the exploratory analysis ${esc(p.analysis_id)} out of the paper: ${esc(p.reason)}`;
-    case "analysis.described": return `${who} wrote the ${p.section === "methods" ? "Methods" : "Results"} text for ${esc(p.analysis_id)}${p.requested_by ? " for " + esc(name(p.requested_by)) : ""}: numbers ${p.checks?.ok ? "checked" : "with problems"}`;
+    case "analysis.described": if (p.edited_by_author) return `${who} edited the ${p.section === "methods" ? "Methods" : "Results"} text for ${esc(p.analysis_id)}: numbers ${p.checks?.ok ? "checked" : "with problems"}`;
+      return `${who} wrote the ${p.section === "methods" ? "Methods" : "Results"} text for ${esc(p.analysis_id)}${p.requested_by ? " for " + esc(name(p.requested_by)) : ""}: numbers ${p.checks?.ok ? "checked" : "with problems"}`;
     case "analysis.completed": if (p.standard) return `Saksi ran its standard ${p.standard === "table1" ? "Table 1" : "data-quality check"}${forWhom}: ${p.status === "ok" ? "done" : "failed"}`;
       return `${who} ran ${esc(p.analysis_id)} (${esc(labelText(p))}): ${p.status === "ok" ? "done" : "failed"}${forWhom}`;
     case "analyses.accepted": return `${who} accepted the results`;
@@ -828,17 +840,17 @@ function svgURI(svg) {
   let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return "data:image/svg+xml;base64," + btoa(bin);
 }
-async function figureHtml(f) {
+async function figureHtml(f, plain = false) {
   const uri = svgURI(await blob(f.svg_sha256) || "");
   const c = f.caption_check || {};
   const problems = (c.untraced ? `${c.untraced} number${c.untraced > 1 ? "s" : ""} not in the results` : "")
     + (c.exploratory_not_labelled ? `${c.untraced ? "; " : ""}does not say exploratory` : "");
   return `<figure class="fig"><img src="${uri}" alt="Figure ${f.number || "(replaced)"}: ${esc(f.caption)}" loading="lazy">
     <figcaption><strong>${f.number ? `Figure ${f.number}.` : "Replaced figure."}</strong> ${esc(f.caption)}
-    <br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
+    ${plain ? "" : `<br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
     ${problems ? `<span class="tag attn">caption: ${esc(problems)}</span>` : `<span class="tag good">caption checked</span>`}
     ${f.warning ? `<span class="tag bad">${esc(f.warning)}</span>` : ""}
-    <a class="small" href="${uri}" download="saksi-figure-${f.number || "replaced"}.svg">Download SVG</a></figcaption></figure>`;
+    <a class="small" href="${uri}" download="saksi-figure-${f.number || "replaced"}.svg">Download SVG</a>`}</figcaption></figure>`;
 }
 
 /* Publication-ready tables: built on the server from the recorded results, no model */
@@ -852,6 +864,16 @@ async function tablesNow() {
   return S.tables.list;
 }
 const noteHtml = (n) => { const m = /^([a-j]) (.*)$/.exec(n); return m ? `<sup>${esc(m[1])}</sup> ${esc(m[2])}` : esc(n); };
+function tableEditors() {
+  const s = S.state, names = new Set();
+  let prev = null;
+  for (const v of Object.keys(s.drafts).map(Number).sort((a, b) => a - b)) {
+    const d = s.drafts[v];
+    if (d.table_edits_sha256 && d.table_edits_sha256 !== prev) names.add(name(d.by));
+    prev = d.table_edits_sha256 || null;
+  }
+  return [...names].join(", ");
+}
 function pubTableHtml(t, { editable = false, note = "" } = {}) {
   const ce = (k) => editable ? ` contenteditable="true" data-te="${k}"` : "";
   const head = t.columns.map((c, j) => `<th class="${j ? "r" : ""}"${ce("col:" + j)}>${esc(c).replace(/\n/g, "<br>")}</th>`).join("");
@@ -860,7 +882,7 @@ function pubTableHtml(t, { editable = false, note = "" } = {}) {
   return `<div class="pubtable" id="pt-${t.number}" data-aid="${esc(t.analysis_id)}"><p class="ptitle"><strong>Table ${t.number}.</strong> <span${ce("title")}>${esc(t.title)}</span></p>
     <div class="tablewrap"><table class="pub"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
     <div class="pnotes">${t.footnotes.map((n, k) => `<p${ce("note:" + k)}>${noteHtml(n)}</p>`).join("")}</div>
-    ${t.edited?.length && !editable ? `<p class="edited-note">Wording edited by the authors; the numbers are as computed.</p>` : ""}
+    ${t.edited?.length && !editable ? `<p class="edited-note">Wording edited by ${esc(tableEditors() || "an author")}; the numbers are as computed.</p>` : ""}
     ${note ? `<p class="small muted">${note}</p>` : ""}</div>`;
 }
 async function downloadTables(n) {
@@ -1012,14 +1034,36 @@ async function rtext(id, a, tables, canRun) {
   const d = a.description;
   if (!d) return canRun ? `<p class="small muted">Text not written yet. <button class="linkish" data-agent="describe" data-args='${esc(JSON.stringify({ analysis_id: id }))}' data-label="The Writing Agent is writing">Write it</button></p>` : "";
   const text = resolveRefs(await blob(d.text_sha256) || "", id, tables);
-  return `<div class="rtext">${text.split(/\n{2,}/).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}</div>
+  const ce = canRun ? ` contenteditable="true" spellcheck="true" data-desc="${esc(id)}"` : "";
+  const edited = editorsOf(id);
+  return `<div class="rtext"${ce}>${text.split(/\n{2,}/).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}</div>
+    ${canRun ? `<div class="editbar" id="eb-${esc(id)}" hidden><button class="btn" data-action="savedesc" data-id="${esc(id)}" data-label="Saving">Save my changes</button>
+      <button class="btn quiet" data-action="canceldesc">Cancel</button><span class="small muted">Saved under your name; its numbers are checked again.</span></div>` : ""}
+    ${edited.length ? `<p class="byline">Wording edited by ${esc(edited.join(", "))}.</p>` : ""}
     ${d.checks?.ok ? "" : `<p class="small"><span class="tag attn">${esc(d.checks?.untraced || 0)} number(s) in this text are not in the results</span></p>`}`;
+}
+function changesHtml() {
+  const types = new Set(["analysis.completed", "analysis.described", "analysis.withdrawn", "analyses.accepted"]);
+  const rows = S.events.filter((e) => types.has(e.type)).slice().reverse();
+  if (!rows.length) return "";
+  return `<details class="alldetails"><summary>Who did what to these results (${rows.length})</summary>
+    <ul class="small">${rows.map((e) => `<li>${fmtTime(e.ts)}: ${describe(e)}</li>`).join("")}</ul></details>`;
+}
+function editorsOf(id) {
+  return [...new Set(S.events.filter((e) => e.type === "analysis.described" && e.payload.analysis_id === id && e.payload.edited_by_author).map((e) => name(e.actor_id)))];
+}
+function unresolveRefs(text, id, tables) {
+  const t = tables.find((x) => x.analysis_id === id);
+  let out = text;
+  if (t?.number) out = out.replace(new RegExp(`\\bTable ${t.number}\\b`, "g"), "[[Table]]");
+  for (const f of S.state.figures) if (f.analysis_id === id && f.number) out = out.replace(new RegExp(`\\bFigure ${f.number}\\b`, "g"), `[[Figure:${f.name}]]`);
+  return out;
 }
 function chatBox(id, canRun) {
   if (!canRun) return "";
-  const key = id || "_", log = S.chat[key] || [];
+  const key = id || "_", log = (S.chat[key] || []).slice(-2);
   return `<div class="chat">${log.map((m, i) => `<p class="cm ${m.who}"><strong>${m.who === "you" ? "You" : "Saksi AI"}:</strong> ${esc(m.text)}
-      ${m.pending ? `<button class="linkish" data-action="confirmai" data-key="${esc(key)}" data-i="${i}" data-label="Working">Yes, ${esc(m.pending.label)}</button>` : ""}</p>`).join("")}
+      ${m.pending ? `<button class="linkish" data-action="confirmai" data-key="${esc(key)}" data-i="${(S.chat[key] || []).length - log.length + i}" data-label="Working">Yes, ${esc(m.pending.label)}</button>` : ""}</p>`).join("")}
     <form class="chatform" data-form="assist" data-id="${esc(id || "")}"><span class="aibadge">AI</span>
       <input type="text" name="message" required autocomplete="off" aria-label="Message to Saksi AI" placeholder="${id ? "Ask about this result, or say what to change" : "Ask Saksi AI to change anything in the Results, or ask a question"}">
       <button class="btn" data-label="Saksi AI is working">Send</button></form></div>`;
@@ -1027,8 +1071,9 @@ function chatBox(id, canRun) {
 async function resultsView(tables, canRun) {
   const cur = currentList();
   if (!cur.length) return "";
-  const head = (id, a) => a.standard === "table1" ? "Characteristics of the participants" : (a.spec?.title || id);
-  let h = "", posthoc = false;
+  const head = (id, a) => a.description?.heading || (a.standard === "table1" ? "Characteristics of the participants"
+    : a.basis === "post hoc" ? "Additional analysis" : (a.spec?.title || id));
+  let h = "";
   const dq = cur.find(([, a]) => a.standard === "data_quality");
   if (dq) h += `<div class="rsec methodsnote" id="r-${esc(dq[0])}"><h3>Data checks <span class="small muted">· for the statistical analysis part of Methods</span></h3>
     ${await rtext(dq[0], dq[1], tables, canRun)}${chatBox(dq[0], canRun)}</div>`;
@@ -1036,13 +1081,12 @@ async function resultsView(tables, canRun) {
   if (!cur.some(([, a]) => a.standard === "table1")) h += `<div class="rsec"><h4>Characteristics of the participants</h4>${table1Builder(canRun)}</div>`;
   for (const [id, a] of cur) {
     if (a.standard === "data_quality") continue;
-    if (a.basis === "post hoc" && !posthoc) { h += `<h3 class="rgroup">Further analyses requested by the authors</h3>`; posthoc = true; }
     const t = tables.find((x) => x.analysis_id === id);
     const figs = S.state.figures.filter((f) => f.analysis_id === id && f.number).sort((x, y) => x.number - y.number);
-    h += `<div class="rsec" id="r-${esc(id)}"><h4>${esc(head(id, a))}</h4>
+    h += `<div class="rsec" id="r-${esc(id)}"><h4${canRun && a.description ? ` contenteditable="true" data-head="${esc(id)}"` : ""}>${esc(head(id, a))}</h4>
       ${await rtext(id, a, tables, canRun)}
       ${t ? (t.number ? pubTableHtml(t) : `<p class="notref">Same results as Table ${esc(t.duplicate_of.number)} (${esc(t.duplicate_of.analysis_id)}), so the table is not shown again.</p>`) : ""}
-      ${(await Promise.all(figs.map(figureHtml))).join("")}
+      ${(await Promise.all(figs.map((f) => figureHtml(f, true)))).join("")}
       ${chatBox(id, canRun)}</div>`;
   }
   return `<article class="manuscript-view results" id="results-view">${h}</article>`;
@@ -1187,6 +1231,7 @@ async function analyses() {
       return canRun && n && !pending.length && S.busy == null ? `<div class="bigaction"><p><strong>${n} result${n > 1 ? "s have" : " has"} no text yet.</strong> The Writing Agent writes the passage that reports each one (Methods for the data checks), and code checks its numbers.</p>
         <button class="btn" data-action="describeall" data-label="Writing the texts">Write the text for ${n === 1 ? "it" : "all " + n}</button></div>` : ""; })()}
     ${results ? `<details class="alldetails" id="details-all" ${S.detailsOpen ? "open" : ""}><summary>How each result was produced: data checks, code, provenance, diagnostics, earlier runs</summary>${sections.join("")}</details>` : sections.join("")}
+    ${results ? changesHtml() : ""}
     ${leftOut.length ? `<section><h2 class="step">Left out of the paper <span class="who">Exploratory analyses the authors asked for and then left out. Kept in the record; the reviewer is told.</span></h2>
       ${(await Promise.all(leftOut.map(async ([id, a]) => `<details class="replaced"><summary>${esc(a.spec?.title || id)} (${esc(id)}): left out by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”</summary>${await analysisBlock(id, a, [], false)}</details>`))).join("")}</section>` : ""}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
@@ -1638,6 +1683,15 @@ document.addEventListener("click", async (ev) => {
       if (x.action.type === "table1") { const f = document.querySelector("form[data-form=t1change]"); f?.scrollIntoView({ block: "center" }); f?.querySelector("textarea")?.focus(); return; }
       return act(t, () => runProposal(x.action, x.title), "Done. The result is below, with its text.", "Saksi is working on it. An analysis can take a minute or two.");
     }
+    case "savedesc": {
+      const id = t.dataset.id, box = document.querySelector(`[data-desc="${CSS.escape(id)}"]`), head = document.querySelector(`[data-head="${CSS.escape(id)}"]`);
+      const tables = await tablesNow();
+      const text = unresolveRefs(serialiseBlock(box), id, tables);
+      const args = { analysis_id: id, text };
+      if (head) args.heading = head.innerText.trim();
+      return act(t, () => command("edit_description", args), "Your changes were saved under your name, and the numbers checked again.");
+    }
+    case "canceldesc": return render();
     case "describeall": return act(t, () => describeMissing(S.state), "Each result now has its text, with its numbers checked.");
     case "canvas": S.canvas = S.version || S.state.draft_version; S.notice = null; await render(); document.querySelector("#ms [contenteditable=true]")?.focus(); return;
     case "canvasoff": S.canvas = null; return render();
@@ -1653,8 +1707,14 @@ document.addEventListener("click", async (ev) => {
 });
 
 document.addEventListener("toggle", (ev) => { if (ev.target.id === "details-all") S.detailsOpen = ev.target.open; }, true);
+document.addEventListener("input", (ev) => {
+  const el = ev.target.closest?.("[data-desc],[data-head]");
+  if (!el) return;
+  const id = el.dataset.desc || el.dataset.head, bar = document.getElementById("eb-" + id);
+  if (bar) bar.hidden = false;
+});
 document.addEventListener("paste", (ev) => {
-  const el = ev.target.closest?.(".canvas [contenteditable=true]");
+  const el = ev.target.closest?.(".canvas [contenteditable=true], .rtext[contenteditable=true], .rsec h4[contenteditable=true]");
   if (!el) return;
   ev.preventDefault();
   document.execCommand("insertText", false, (ev.clipboardData || window.clipboardData).getData("text/plain"));

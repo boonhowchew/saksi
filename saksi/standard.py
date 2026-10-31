@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 def analyse(data_path, seed):
-    df = pd.read_csv(data_path)
+    df = pd.read_csv(data_path, na_values=["#NULL!", "."])   # SPSS and SAS missing codes
     n = int(len(df))
     cols = []
     for c in df.columns:
@@ -68,6 +68,10 @@ from scipy import stats
 SPEC = __SPEC__
 MAX_LEVELS, MAX_CATEGORIES = 6, 15
 
+def _lab(v):
+    """A group or category label: 1.0 read from a column with missing values shows as 1."""
+    return str(int(v)) if isinstance(v, float) and float(v).is_integer() else str(v)
+
 def _num(x, d=4):
     x = float(x)
     return None if np.isnan(x) else round(x, d)
@@ -81,7 +85,7 @@ def _summary(x, normal):
     return {"n": int(len(x)), "median": _num(x.median()), "q1": _num(x.quantile(0.25)), "q3": _num(x.quantile(0.75))}
 
 def analyse(data_path, seed):
-    df = pd.read_csv(data_path)
+    df = pd.read_csv(data_path, na_values=["#NULL!", "."])   # SPSS and SAS missing codes
     by = SPEC.get("stratify_by")
     notes = []
     if by and by not in df.columns:
@@ -91,7 +95,7 @@ def analyse(data_path, seed):
         by = None
     d = df[df[by].notna()] if by else df
     levels = sorted(d[by].unique().tolist(), key=lambda v: (str(type(v)), v)) if by else []
-    groups = [{"level": str(l), "n": int((d[by] == l).sum())} for l in levels]
+    groups = [{"level": _lab(l), "n": int((d[by] == l).sum())} for l in levels]
     rows = []
     for v in SPEC.get("variables") or []:
         if v not in d.columns:
@@ -112,7 +116,7 @@ def analyse(data_path, seed):
                    "overall": _summary(x, normal), "missing": miss}
             if by:
                 samples = [d.loc[d[by] == l, v].dropna().astype(float) for l in levels]
-                row["by_group"] = {str(l): _summary(d.loc[d[by] == l, v], normal) for l in levels}
+                row["by_group"] = {_lab(l): _summary(d.loc[d[by] == l, v], normal) for l in levels}
                 if all(len(z) > 1 for z in samples) and len(samples) >= 2:
                     if normal and len(samples) == 2:
                         lev = stats.levene(*samples).pvalue
@@ -134,13 +138,13 @@ def analyse(data_path, seed):
             row = {"variable": v, "type": "categorical", "summary": "n (%)", "missing": miss, "categories": []}
             for c in order:
                 k = int((cats == c).sum())
-                cat = {"level": str(c), "overall": {"n": k, "pct": round(100.0 * k / len(cats), 1)}}
+                cat = {"level": _lab(c), "overall": {"n": k, "pct": round(100.0 * k / len(cats), 1)}}
                 if by:
                     cat["by_group"] = {}
                     for l in levels:
                         g = d.loc[(d[by] == l) & d[v].notna(), v]
                         kk = int((g == c).sum())
-                        cat["by_group"][str(l)] = {"n": kk, "pct": round(100.0 * kk / len(g), 1) if len(g) else None}
+                        cat["by_group"][_lab(l)] = {"n": kk, "pct": round(100.0 * kk / len(g), 1) if len(g) else None}
                 row["categories"].append(cat)
             if by and len(order) > 1:
                 tab = pd.crosstab(d[v], d[by])

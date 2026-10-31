@@ -469,14 +469,15 @@ class Agents:
         if based_on and (parent is None or parent.get("standard")):
             raise WorkflowError(f"{based_on!r} is not a current analysis the Analysis Agent ran")
         self.project.request_analysis(requested_by, request_id, prompt)
+        who = (s.actors.get(requested_by) or {}).get("name") or requested_by
         spec = {"id": f"x_{request_id}", "title": prompt, "author_request": prompt,
-                "note": "Exploratory: requested by an author, not specified in the protocol."}
+                "note": f"Exploratory: requested by {who}, not specified in the protocol."}
         context = None
         if parent:
             ptitle = parent["spec"].get("title") or based_on
             spec.update({"title": f"{ptitle}: {prompt}"[:160], "kind": parent.get("kind") or "other",
                          "based_on": {"analysis_id": based_on, "title": ptitle},
-                         "note": f"Exploratory: a variant of {based_on}, asked for by an author after seeing its "
+                         "note": f"Exploratory: a variant of {based_on}, asked for by {who} after seeing its "
                                  "results. The original stays and is reported too."})
             context = (f"THIS IS A VARIANT OF AN EARLIER ANALYSIS ({based_on}). Its specification:\n"
                        f"{json.dumps(parent['spec'], indent=1)[:6000]}\nIts code:\n```python\n"
@@ -652,6 +653,9 @@ class Agents:
             r = self._chat("describe", RESULT_TEXT, messages, json_mode=False, purpose=f"describe:{analysis_id}")
             call, text = r.record.to_payload(), r.text.strip()
             text = re.sub(r"^#+\s.*\n", "", text).strip()
+            m = re.match(r"^\s*\**heading\**\s*:\s*(.+?)\s*(?:\n|$)", text, re.I)
+            heading = m.group(1).strip(" *#")[:120] if m else ""
+            text = text[m.end():].strip() if m else text
             check = trace(text, {analysis_id: {"label": a["label"]}}, {analysis_id: out}, counts,
                           required_refs=[analysis_id])
             attempts.append({"attempt": attempt, "passed_check": check["ok"],
@@ -665,7 +669,7 @@ class Agents:
             raise AgentError("the Writing Agent returned no text")
         return self.project.describe_analysis(WRITER_ID, analysis_id, text, section, summarise(check),
                                               requested_by=requested_by, call=call, instruction=instruction,
-                                              attempts=attempts)
+                                              attempts=attempts, heading=heading)
 
     # -- Writing -------------------------------------------------------------
     def write_draft(self, requested_by: str) -> State:

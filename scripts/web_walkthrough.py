@@ -126,6 +126,13 @@ with sync_playwright() as p:
     t1.get_by_role("button", name="Rebuild Table 1").click()
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(250)
     print("table 1:", note(page)[:80])
+    # The text beside a result is edited in place, and saved under the author's name.
+    box = page.locator(".rtext[data-desc='primary']")
+    box.click(); page.keyboard.press("Control+End"); page.keyboard.type(" The interval was wide.")
+    page.locator("#eb-primary").get_by_role("button", name="Save my changes").click()
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
+    print("text edit:", page.locator("#r-primary .byline").inner_text())
+    shot(page, "05c-results-edited")
     assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
     shot(page, "05b-analyses-ai")
     click(page, "Accept these results")

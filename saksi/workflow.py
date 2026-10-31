@@ -631,7 +631,8 @@ class Project:
 
     def describe_analysis(self, by: str, analysis_id: str, text: str, section: str, checks: dict[str, Any],
                           requested_by: str, call: dict[str, Any] | None = None,
-                          instruction: str | None = None, attempts: list[dict[str, Any]] | None = None) -> State:
+                          instruction: str | None = None, attempts: list[dict[str, Any]] | None = None,
+                          heading: str = "") -> State:
         """The Writing Agent's text for one analysis (Results, or Methods for the data checks), number-checked."""
         s = self.state()
         a = self._require_role(s, by, "writer")
@@ -644,7 +645,38 @@ class Project:
         self._emit(by, "analysis.described", {"analysis_id": analysis_id, "section": section,
                                                "text_sha256": self.blobs.put_text(text), "checks": checks,
                                                "instruction": instruction, "attempts": attempts or [],
-                                               "requested_by": requested_by, "llm_call_seq": call_seq})
+                                               "heading": heading, "requested_by": requested_by,
+                                               "llm_call_seq": call_seq})
+        return self.state()
+
+    def edit_description(self, by: str, analysis_id: str, text: str, heading: str | None = None) -> State:
+        """An author edits the text (and subheading) that reports a result, on the Analyses page. Recorded under
+        their name and number-checked like any text; the earlier wording stays in the record."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "ANALYSIS", "RESPONSE")
+        a = current(s).get(analysis_id)
+        if a is None:
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis")
+        if not (text or "").strip():
+            raise WorkflowError("the text cannot be empty")
+        old = a.get("description") or {}
+        heading = (old.get("heading") or "") if heading is None else heading.strip()[:120]
+        if old and self.blobs.has(old.get("text_sha256", "")) and self.blobs.get_text(old["text_sha256"]) == text \
+                and heading == (old.get("heading") or ""):
+            raise WorkflowError("nothing changed")
+        out = self.blobs.get_json(a["outputs_sha256"]) | ({"sample_check": a["sample_check"]} if a.get("sample_check") else {})
+        rows = []
+        if s.curator_reports:
+            r = self.blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("profile", {}).get("rows")
+            rows = [r] if r else []
+        check = trace(text, {analysis_id: {"label": a["label"]}}, {analysis_id: out}, rows, required_refs=[analysis_id])
+        section = "methods" if a.get("standard") == "data_quality" else "results"
+        self._emit(by, "analysis.described", {"analysis_id": analysis_id, "section": section,
+                                               "text_sha256": self.blobs.put_text(text),
+                                               "checks": summarise_checks(check), "heading": heading,
+                                               "edited_by_author": True, "previous_by": old.get("by"),
+                                               "requested_by": None})
         return self.state()
 
     def record_checklist(self, by: str, version: int, guideline: str, items: list[dict[str, Any]],

@@ -25,13 +25,16 @@ IDENTIFIER_NAME = re.compile(
     r"dob|birth|mrn|rn|patient_id|hospital_no|record_no)($|_|\b)", re.I)
 
 
+NA_CODES = ["#NULL!", "."]      # SPSS and SAS write these for missing values; pandas does not know them
+
+
 def read_table(data: bytes, filename: str) -> pd.DataFrame:
     name = filename.lower()
     if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(io.BytesIO(data))
     if name.endswith(".tsv"):
-        return pd.read_csv(io.BytesIO(data), sep="\t")
-    return pd.read_csv(io.BytesIO(data))
+        return pd.read_csv(io.BytesIO(data), sep="\t", na_values=NA_CODES)
+    return pd.read_csv(io.BytesIO(data), na_values=NA_CODES)
 
 
 def _r(x: Any) -> Any:

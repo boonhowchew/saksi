@@ -172,7 +172,7 @@ def describe_reply(user):
                 f"There were {out['duplicate_rows']} duplicated records"
                 + (f", and {miss[0]['column']} was missing for {miss[0]['missing']}" if miss else "") + f" [A:{aid}].")
     if info.get("standard") == "table1":
-        return (f"[[Table]] shows the characteristics of the {out['n_analysed']} participants by "
+        return (f"Heading: Characteristics of the participants\n\n[[Table]] shows the characteristics of the {out['n_analysed']} participants by "
                 f"{out.get('stratify_by') or 'group'} [A:{aid}].")
     est = (out.get("estimates") or [None])[0]
     lead = "In this exploratory analysis, " if info["label"] == "exploratory" else ""
@@ -181,7 +181,7 @@ def describe_reply(user):
     ci = (f" (95% CI {est['ci_lower']:.2f} to {est['ci_upper']:.2f})" if est.get("ci_lower") is not None else "")
     what = est["measure"] if est["name"] == est["measure"] else f"{est['measure']} for {est['name']}"
     sentence = f"{lead}the {what} was {est['estimate']:.2f}{ci} [A:{aid}]."
-    return f"{refs} give the results. {sentence[0].upper()}{sentence[1:]}"
+    return f"Heading: {info['title'][:60]}\n\n{refs} give the results. {sentence[0].upper()}{sentence[1:]}"
 
 
 def fence(code):
@@ -844,3 +844,28 @@ def test_draft_is_checked_against_the_guideline_for_the_design(setup):
     assert items[0]["status"] == "missing"
     assert items[1]["status"] == "reported" and items[1]["quote"]            # quotation found in the draft
     assert items[2]["status"] == "partly" and "not found" in items[2]["note"]  # an invented quotation is caught
+
+
+def test_authors_edit_the_result_text_in_place_under_their_name(setup):
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model)
+    s = agents.describe("bhc", "primary")
+    assert s.analyses["primary"]["description"]["heading"] == "BMI and GDM"          # the subheading line is parsed
+    assert not p.blobs.get_text(s.analyses["primary"]["description"]["text_sha256"]).startswith("Heading")
+    text = "In this exploratory analysis, [[Table]] gives the estimates; 4.5 events per parameter [A:primary]."
+    s = p.edit_description("coauthor", "primary", text, heading="Booking BMI and gestational diabetes")
+    d = s.analyses["primary"]["description"]
+    assert d["by"] == "coauthor" and d["edited_by_author"] and d["checks"]["ok"] and d["heading"].startswith("Booking")
+    with pytest.raises(WorkflowError, match="nothing changed"):
+        p.edit_description("coauthor", "primary", text, heading="Booking BMI and gestational diabetes")
+    s = p.edit_description("bhc", "primary", text.replace("4.5", "9.9"))
+    assert s.analyses["primary"]["description"]["checks"]["untraced"] == 1             # still checked
+
+
+def test_spss_missing_codes_are_missing_values_not_a_group():
+    from saksi import standard
+    from saksi.sandbox import LocalExecutor
+    csv = "gdm,age,smoker\n0,30,1\n1,31,0\n#NULL!,29,#NULL!\n0,33,0\n1,35,1\n".encode()
+    r = LocalExecutor().run(standard.code("table1", {"stratify_by": "gdm", "variables": ["age", "smoker"]}), csv, seed=1)
+    assert [g["level"] for g in r.results["groups"]] == ["0", "1"]
+    assert r.results["n_excluded"] == 1
