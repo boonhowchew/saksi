@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("outline" if "what this paper is going to report" in system
+        purpose = ("curator_update" if "Bring your earlier report on this dataset up to date" in system
+                   else "outline" if "what this paper is going to report" in system
                    else "suggest" if "propose an answer to each" in system
                    else "prep" if "preparing a raw research dataset" in system
                    else "review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
@@ -127,6 +128,8 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "curator_update" and not self.script.get("curator_update"):
+            reply = CURATOR_UPDATE_REPLY
         elif purpose == "outline" and not self.script.get("outline"):
             reply = OUTLINE_REPLY
         elif purpose == "suggest" and not self.script.get("suggest"):
@@ -145,6 +148,11 @@ class ScriptedModel:
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
 
 
+CURATOR_UPDATE_REPLY = {"summary": "The protocol is now available and the identifiers have been removed.", "flags": [
+    {"severity": "high", "column": "", "issue": "No study protocol was uploaded", "suggested_check": "Upload it",
+     "status": "resolved", "resolution": "The protocol has been uploaded."},
+    {"severity": "medium", "column": "age", "issue": "One implausible age", "suggested_check": "Check the source",
+     "status": "open", "resolution": ""}]}
 PREP_REPLY = {"summary": "Two identifiers and a few implausible values.", "questions": [], "steps": [
     {"id": "s1", "type": "drop_columns", "columns": ["patient_name"], "title": "Remove patient names",
      "reason": "Direct identifier, flagged by the Data Curator"},
@@ -162,10 +170,11 @@ OUTLINE_REPLY = {
     "questions": ["Is booking BMI associated with GDM, independent of age, parity and previous GDM?",
                   "How well does the model discriminate women with and without GDM?"],
     "design": "cohort", "design_note": "Women were followed from booking to the diagnosis of GDM.",
-    "population": "Pregnant women booking at six public health clinics [Authors: dates].",
+    "population": "Pregnant women booking at six public health clinics.",
     "outcomes": ["Gestational diabetes: diagnosed by OGTT (gdm)"], "exposures": ["Booking BMI, kg/m2 (booking_bmi)"],
     "approach": "Data checks and Table 1 first; then a multivariable logistic regression with model diagnostics; then discrimination by the AUC.",
-    "methods": "### Study design and setting\nA cohort study [Authors: setting and dates].\n\n### Participants\nPregnant women at booking.\n\n### Variables and definitions\nGDM by OGTT; booking BMI in kg/m2.\n\n### Data preparation\nIdentifiers were removed.\n\n### Sample size\n400 women give 80% power.\n\n### Statistical analysis\nLogistic regression with diagnostics."}
+    "open_items": ["When were the women recruited (first and last booking dates)?"],
+    "methods": "### Study design and setting\nA cohort study in six public health clinics.\n\n### Participants\nPregnant women at booking.\n\n### Variables and definitions\nGDM by OGTT; booking BMI in kg/m2.\n\n### Data preparation\nIdentifiers were removed.\n\n### Sample size\n400 women give 80% power.\n\n### Statistical analysis\nLogistic regression with diagnostics."}
 
 
 def suggest_reply(user):
@@ -1011,3 +1020,74 @@ def test_outline_of_what_the_paper_reports_with_a_methods_draft(setup):
     model.script["curate"] = [CURATOR_REPLY]
     s = agents.curate("bhc")
     assert "THE AUTHORS' ANSWERS" in next(b for b in reversed(model.bodies) if "Data Curator" in b["messages"][0]["content"])["messages"][1]["content"]
+
+
+def test_curator_report_brought_up_to_date_in_one_call(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    first = p.state().curator_reports[-1]
+    n = len(model.bodies)
+    p.answer_question("bhc", "Is B.BMI coded 1/2?", "Yes, 1 = 27 or less, 2 = above 27.")
+    s = agents.update_curator_report("bhc")
+    assert len(model.bodies) == n + 1                                  # one call, however wide the data
+    body = model.bodies[-1]["messages"][1]["content"]
+    assert "EARLIER FINDINGS" in body and "Yes, 1 = 27 or less" in body and "PROTOCOL:" in body
+    r = s.curator_reports[-1]
+    assert r["seq"] > first["seq"] and r["ts"]
+    rep = p.blobs.get_json(r["report_sha256"])
+    assert rep["updated_from_seq"] == first["seq"]
+    assert [f["status"] for f in rep["flags"]] == ["resolved", "open"] and rep["flags"][0]["resolution"]
+    assert rep["dictionary"] == p.blobs.get_json(first["report_sha256"])["dictionary"]   # kept, not redone
+
+
+def test_methods_settled_with_what_only_the_authors_know_asked_not_left_as_placeholders(setup):
+    from saksi.workflow import open_questions
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    agents.propose_plan("bhc")
+    s = agents.outline("bhc")
+    methods = p.blobs.get_text(s.outline["methods_sha256"])
+    assert "[Authors" not in methods
+    q = "When were the women recruited (first and last booking dates)?"
+    assert s.outline["open_items"] == [q] and q in open_questions(s)
+    assert "finished" in model.bodies[-1]["messages"][0]["content"] and "open_items" in model.bodies[-1]["messages"][0]["content"]
+    s = p.answer_question("bhc", q, "January 2019 to December 2020.")
+    assert any(a["question"] == q for a in s.answers)
+
+
+def test_authors_leave_a_figure_out_and_its_information_goes_in_the_text(setup):
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    live = sorted((f for f in s.figures if f["number"]), key=lambda f: f["number"])
+    assert len(live) >= 2
+    gone = live[0]
+    # The assistant proposes it, by number; the page carries it out through the recorded route.
+    model.script["assist"] = [{"reply": "I will leave Figure 1 out and give its numbers in the text.",
+                               "action": {"type": "remove_figure", "analysis_id": None, "figure": "Figure 1",
+                                          "instruction": "Remove Figure 1 and put the info in the text"}}]
+    _, prop = agents.assist("bhc", "Remove figure 1 and put the info in the text")
+    assert prop["action"]["type"] == "remove_figure" and prop["action"]["figure_name"] == gone["name"]
+    assert prop["action"]["analysis_id"] == gone["analysis_id"]
+    with pytest.raises(WorkflowError, match="say why"):
+        p.omit_figure("bhc", gone["analysis_id"], gone["name"], " ")
+    s = p.omit_figure("bhc", gone["analysis_id"], gone["name"], "Its information is given in the text instead.")
+    f = next(x for x in s.figures if x["analysis_id"] == gone["analysis_id"] and x["name"] == gone["name"])
+    assert f["number"] is None and f["omitted"]["by"] == "bhc"
+    assert sorted(x["number"] for x in s.figures if x["number"]) == list(range(1, len(live)))    # renumbered
+    # Out of the paper: the text need not, and must not, refer to it.
+    r = p.check_text("See Figure %d [A:s_table1]." % len(live))
+    assert "Figure %d" % len(live) in r["references_unknown"]
+    with pytest.raises(WorkflowError, match="no such figure"):
+        p.omit_figure("bhc", gone["analysis_id"], gone["name"], "again")
+    s = p.restore_figure("coauthor", gone["analysis_id"], gone["name"])
+    assert sorted(x["number"] for x in s.figures if x["number"]) == list(range(1, len(live) + 1))
+
+
+def test_draft_methods_get_the_software_used(setup):
+    from saksi.agents import _software
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    sw = _software(s)
+    assert sw.get("python") and "statsmodels" in sw

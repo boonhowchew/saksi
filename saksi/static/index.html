@@ -152,6 +152,7 @@ details.replaced { margin: .8rem 0 0; border-top: 1px dashed var(--rule); paddin
 details.replaced > summary { color: var(--muted); font-size: .85rem; cursor: pointer; }
 details.replaced .item { opacity: .8; }
 .diag h4 { margin: 0 0 .4rem; }
+figure.fig.omitted img { opacity: .45; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -680,11 +681,19 @@ async function materials() {
     const full = await blobJSON(r.report_sha256);
     if (full) {
       const sev = { high: "bad", medium: "attn", low: "" };
+      const open = (full.flags || []).filter((f) => f.status !== "resolved"), done = (full.flags || []).filter((f) => f.status === "resolved");
+      const stale = curatorStale();
+      const when = new Date(r.ts || Date.now()).toLocaleString();
       rep = `<section><h2>Data Curator's report on ${esc(repFile)}</h2>
-        <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
+        <p class="muted small">${full.updated_from_seq ? "Brought up to date" : "Written"} ${esc(when)}, requested by ${esc(name(r.requested_by))}. From an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record.</p>
+        ${S.curatorError ? `<p class="msg bad small">The last update did not complete: ${esc(S.curatorError)}</p>` : ""}
+        ${stale ? `<p class="msg warn small">Out of date: ${esc(stale)} since it was written.</p>` : ""}
+        ${isAuthor() && s.stage !== "FINAL" ? `<p><button class="btn ${stale ? "primary" : "secondary"} small" data-action="updatecurator">Update the report</button></p>` : ""}
         <p>${esc(full.summary)}</p>
-        ${full.flags?.length ? `<details ${full.flags.some((f) => f.severity === "high") ? "open" : ""}><summary>${full.flags.length} things for the authors to check${full.flags.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
-          ${full.flags.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+        ${open.length ? `<details ${open.some((f) => f.severity === "high") ? "open" : ""}><summary>${open.length} things for the authors to check${open.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
+          ${open.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div></details>` : (full.flags || []).length ? `<p class="msg ok small">Every earlier finding has been resolved.</p>` : ""}
+        ${done.length ? `<details><summary>${done.length} resolved since the first report</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Issue</th><th>How it was resolved</th></tr></thead><tbody>
+          ${done.map((f) => `<tr><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.resolution || "")}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
         ${full.protocol_variables_missing_from_data?.length ? `<p class="msg warn small">Named in the protocol but not found in the data: ${esc(full.protocol_variables_missing_from_data.join(", "))}</p>` : ""}
         <details><summary>Data dictionary (${(full.dictionary || []).length} columns)</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Label</th><th>Type</th><th>Units or coding</th><th>Role</th></tr></thead><tbody>
           ${(full.dictionary || []).map((d) => `<tr><td>${esc(d.column)}</td><td>${esc(d.label)}</td><td>${esc(d.type)}</td><td>${esc(d.units_or_coding)}</td><td>${esc(d.role)}</td></tr>`).join("")}</tbody></table></div></details>
@@ -825,7 +834,7 @@ const GUIDELINE = { cross_sectional: "STROBE (cross-sectional)", cohort: "STROBE
   rct: "CONSORT", diagnostic_accuracy: "STARD", prediction_model: "TRIPOD+AI", systematic_review: "PRISMA 2020",
   qualitative: "SRQR / COREQ", other: "STROBE (general)" };
 function openQs(p) {
-  return [...(p.report?.questions || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
+  return [...(p.report?.questions || []), ...(S.state.outline?.open_items || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
 }
 function preparationLine() {
   const ds = S.state.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
@@ -836,14 +845,17 @@ async function methodsDraft(o) {
   const text = await blob(o.methods_sha256) || "";
   const can = isAuthor() && S.state.stage !== "FINAL";
   const html = parseBlocks(text).map((b) => b.type === "h" ? `<h4>${esc(b.text)}</h4>` : `<p>${inlineMd(b.md, [], false)}</p>`).join("");
-  return `<details class="methods" open><summary><strong>Methods, drafted before the analysis</strong> <span class="small muted">The draft's Methods start from this. ${can ? "Click to edit; your changes are saved under your name." : ""}</span></summary>
+  return `<details class="methods" open><summary><strong>Methods, as settled before the analysis</strong> <span class="small muted">${(o.open_items || []).some((q) => !S.state.answers.some((a) => a.question === q)) ? "Saksi needs your answers to the questions below to finish it. " : "Finished from the protocol, your choices and answers. "}The manuscript's Methods give this in full detail. ${can ? "Click to edit; your changes are saved under your name." : ""}</span></summary>
     <div class="manuscript-view methodsdraft" ${can ? `contenteditable="true" spellcheck="true" data-methods="1"` : ""}>${html}</div>
     ${can ? `<div class="editbar" id="eb-methods" hidden><button class="btn" data-action="savemethods" data-label="Saving">Save my changes</button><button class="btn quiet" data-action="canceldesc">Cancel</button></div>` : ""}</details>`;
 }
 function settledBox(p) {
   const answered = new Set(S.state.answers.map((a) => a.question));
   const open = openQs(p).filter((q) => !answered.has(q));
+  const o = S.state.outline;
   if (open.length) return "";
+  if (!o || (!o.edited_by?.length && (o.plan_seq !== p.seq || o.answers !== S.state.answers.length)))
+    return `<p class="msg warn small">The Writing Agent is finishing the Methods with your answers. The plan can be confirmed once it is done.</p>`;
   return `<div class="bigaction"><p><strong>Saksi has nothing more to ask.</strong> The aim, design and analyses are settled with you. Confirm the plan and Saksi goes straight on to the analysis${S.state.authors.length > 1 ? " once every author has confirmed" : ""}.</p>
     <button class="btn" data-action="confirmplan">Confirm the plan and start the analysis</button></div>`;
 }
@@ -958,8 +970,11 @@ async function figureHtml(f, plain = false) {
   const c = f.caption_check || {};
   const problems = (c.untraced ? `${c.untraced} number${c.untraced > 1 ? "s" : ""} not in the results` : "")
     + (c.exploratory_not_labelled ? `${c.untraced ? "; " : ""}does not say exploratory` : "");
-  return `<figure class="fig"><img src="${uri}" alt="Figure ${f.number || "(replaced)"}: ${esc(f.caption)}" loading="lazy">
-    <figcaption><strong>${f.number ? `Figure ${f.number}.` : "Replaced figure."}</strong> ${esc(f.caption)}
+  const can = isAuthor() && S.state.stage !== "FINAL" && S.state.plan_locked;
+  const ctl = (f.omitted ? `<br><span class="small">Left out of the paper by ${esc(name(f.omitted.by))}: “${esc(f.omitted.reason)}”.</span>${can ? ` <button class="linkish small" data-action="restorefig" data-aid="${esc(f.analysis_id)}" data-name="${esc(f.name)}" data-label="Putting it back">Put it back</button>` : ""}`
+    : plain && can ? ` <button class="linkish small" data-action="omitfig" data-aid="${esc(f.analysis_id)}" data-name="${esc(f.name)}" data-label="Leaving it out">Leave this figure out and give its information in the text</button>` : "");
+  return `<figure class="fig${f.omitted ? " omitted" : ""}"><img src="${uri}" alt="Figure ${f.number || ""}: ${esc(f.caption)}" loading="lazy">
+    <figcaption><strong>${f.number ? `Figure ${f.number}.` : f.omitted ? "Figure left out." : "Replaced figure."}</strong> ${esc(f.caption)}${ctl}
     ${plain ? "" : `<br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
     ${problems ? `<span class="tag attn">caption: ${esc(problems)}</span>` : `<span class="tag good">caption checked</span>`}
     ${f.warning ? `<span class="tag bad">${esc(f.warning)}</span>` : ""}
@@ -1229,6 +1244,7 @@ async function runProposal(action, message) {
     case "new_analysis": r = await agent("run_request", { request_id: nextQ(), prompt: action.instruction }); break;
     case "redo": r = await agent("redo", { analysis_id: id, reason: action.instruction }); break;
     case "rewrite_text": return agent("describe", action.instruction ? { analysis_id: id, instruction: action.instruction } : { analysis_id: id });
+    case "remove_figure": return omitFigure(id, action.figure_name, action.instruction || message);
     case "table1": r = await agent("change_table1", { table1: { stratify_by: action.stratify_by || null, variables: action.variables || [] }, reason: action.instruction || message }); break;
     case "leave_out": return command("withdraw_analysis", { analysis_id: id, reason: action.instruction || message });
     default: return null;
@@ -1237,6 +1253,21 @@ async function runProposal(action, message) {
   return r;
 }
 
+// A figure the authors leave out: recorded under their name, unnumbered, out of the draft; its information goes into
+// the text, which the Writing Agent rewrites (and the draft, if there is one, is rewritten to match).
+async function omitFigure(aid, figName, reason) {
+  const f = S.state.figures.find((x) => x.analysis_id === aid && x.name === figName);
+  await command("omit_figure", { analysis_id: aid, name: figName, reason: reason || "Its information is given in the text instead." });
+  const r = await agent("describe", { analysis_id: aid, instruction: `The figure "${f?.caption || figName}" has been left out of the paper. Give its key information in the text instead, and do not refer to it.` });
+  return refreshDraftAfterResultsChange(r);
+}
+async function refreshDraftAfterResultsChange(r) {
+  const s = r?.state || S.state;
+  if (Object.keys(s.drafts || {}).length && ["DRAFTING", "AUTHOR_REVISION", "RESPONSE"].includes(s.stage)) {
+    try { return await agent("write_draft"); } catch { /* the Draft page offers it */ }
+  }
+  return r;
+}
 function maybeStartAnalysis() {
   const s = S.state;
   if (!s || S.busy || !isAuthor() || s.stage !== "ANALYSIS" || Object.keys(s.analyses).length) return;
@@ -1245,22 +1276,40 @@ function maybeStartAnalysis() {
   S.autoGen[S.pid] = true;
   setTimeout(() => startGenerating(), 0);
 }
+// What has changed since the Curator's report on the data in use was written (null if nothing).
+function curatorStale() {
+  const s = S.state;
+  const ds = s.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
+  if (!ds) return null;
+  const reports = s.curator_reports;
+  const last = reports.filter((r) => r.material_sha256 === ds.sha256).at(-1) || (ds.prepared_from ? reports.filter((r) => r.material_sha256 === ds.prepared_from).at(-1) : null);
+  if (!last) return null;
+  const pr = s.materials.filter((m) => m.kind === "protocol" && !m.withdrawn).at(-1);
+  const why = [];
+  if ((pr?.seq || 0) > last.seq) why.push("the protocol was uploaded");
+  if (ds.seq > last.seq) why.push("the data were prepared");
+  const n = s.answers.filter((a) => a.seq > last.seq).length;
+  if (n) why.push(`${n} answer${n > 1 ? "s were" : " was"} given`);
+  return why.length ? why.join(", ") : null;
+}
+function updateCurator(btn) {
+  S.curatorError = null;
+  return act(btn, async () => {
+    try { return await agent("update_curator_report", {}); }
+    catch (e) { S.curatorError = e.message || String(e); throw e; }
+  }, "The Data Curator's report is up to date with the protocol, the data in use and your answers.",
+    "The Data Curator is bringing its report up to date: the protocol, the data in use or your answers have changed.");
+}
 function maybeUpdateCurator() {
   const s = S.state;
   if (S.busy || !isAuthor() || s.stage === "FINAL") return;
-  const ds = s.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
-  if (!ds) return;
-  const reports = s.curator_reports;
-  const last = reports.filter((r) => r.material_sha256 === ds.sha256).at(-1) || (ds.prepared_from ? reports.filter((r) => r.material_sha256 === ds.prepared_from).at(-1) : null);
-  if (!last) return;
-  const pr = s.materials.filter((m) => m.kind === "protocol" && !m.withdrawn).at(-1);
-  const newer = Math.max(pr?.seq || 0, ds.seq || 0, ...s.answers.map((a) => a.seq));
-  const key = `${S.pid}|${newer}`;
+  const stale = curatorStale();
+  if (!stale) return;
+  const key = `${S.pid}|${stale}`;
   S.curatorTried = S.curatorTried || {};
-  if (last.seq > newer || S.curatorTried[key]) return;
+  if (S.curatorTried[key]) return;
   S.curatorTried[key] = true;
-  act(null, () => agent("curate", { material_sha256: ds.sha256 }), "The Data Curator's report is up to date with the protocol, the data in use and your answers.",
-    "The Data Curator is updating its report: the protocol, the data in use or your answers have changed since it was written.");
+  updateCurator(null);
 }
 function maybeSuggestAnswers() {
   const s = S.state, p = s.plan;
@@ -1279,7 +1328,7 @@ function maybeSuggestAnswers() {
     }
   }
   const answered = new Set(s.answers.map((a) => a.question));
-  const qs = [...(p.report?.questions || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
+  const qs = openQs(p);
   const open = qs.filter((q) => !answered.has(q) && !s.suggested_answers?.[q]);
   const key = `${S.pid}|${p.seq}|${open.length}`;
   S.suggestTried = S.suggestTried || {};
@@ -1776,6 +1825,21 @@ document.addEventListener("click", async (ev) => {
   }
   const a = t.dataset.action, s = S.state;
   switch (a) {
+    case "downloadfile": {
+      try {
+        const r = await fetch(`/projects/${S.pid}/materials/${t.dataset.sha}`, { headers: { "X-Saksi-Token": S.token } });
+        if (!r.ok) throw new Error(`The file could not be downloaded (the server answered ${r.status}).`);
+        const url = URL.createObjectURL(await r.blob());
+        const link = Object.assign(document.createElement("a"), { href: url, download: t.dataset.name });
+        document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { S.notice = { kind: "err", text: e.message }; render(); }
+      return;
+    }
+    case "updatecurator": return updateCurator(t);
+    case "omitfig": return act(t, () => omitFigure(t.dataset.aid, t.dataset.name, "Its information is given in the text instead."),
+      "The figure is left out, its information is in the text, and the draft follows.", "Leaving the figure out and rewriting the text to give its information.");
+    case "restorefig": return act(t, async () => { await command("restore_figure", { analysis_id: t.dataset.aid, name: t.dataset.name });
+      return agent("describe", { analysis_id: t.dataset.aid, instruction: "The figure has been put back in the paper; refer to it." }); }, "The figure is back in the paper.");
     case "signout": S.pid = S.token = S.state = null; S.notice = S.secret = null; return render();
     case "reload": return refresh();
     case "resume": { const x = store.get()[+t.dataset.i]; try { await openProject(x.pid, x.token, true); } catch (e) { S.pid = null; S.state = null; S.notice = { kind: "err", text: e.message }; } return render(); }
@@ -1960,16 +2024,6 @@ document.addEventListener("submit", async (ev) => {
       }, "Saksi checked the data, proposed how to prepare it, and drafted the plan. Start with the data preparation below, then the plan.",
       "The Data Curator is checking the data; then Saksi proposes how to prepare it and drafts the plan. This takes a few minutes.")
       .then(() => { if (S.state?.preparations?.length) { S.tab = "materials"; return render(); } if (S.state?.plan) { S.tab = "plan"; return render(); } });
-    case "downloadfile": {
-      try {
-        const r = await fetch(`/projects/${S.pid}/materials/${t.dataset.sha}`, { headers: { "X-Saksi-Token": S.token } });
-        if (!r.ok) throw new Error(`The file could not be downloaded (the server answered ${r.status}).`);
-        const url = URL.createObjectURL(await r.blob());
-        const link = Object.assign(document.createElement("a"), { href: url, download: t.dataset.name });
-        document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } catch (e) { S.notice = { kind: "err", text: e.message }; render(); }
-      return;
-    }
     case "applyprep": return act(btn, () => command("prepare_dataset", { step_ids: fd.getAll("step").map(String), note: val("note") }),
       "The prepared dataset is now in use. The original is kept, and each step is recorded with what it did.");
     case "prepchat": return act(btn, () => agent("prepare_data", { instructions: val("message") }),

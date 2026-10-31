@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, CURATOR_UPDATE, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -247,6 +247,41 @@ class Agents:
         return self.project.record_curator_report(CURATOR_ID, report, call,
                                                   requested_by=requested_by, material_sha256=ds["sha256"])
 
+    def update_curator_report(self, requested_by: str) -> State:
+        """Bring the Curator's report up to date in one call: each earlier finding marked open or resolved (and how),
+        with the protocol, the authors' answers and the data preparation in view. Quick, even on wide datasets."""
+        s = self.project.state()
+        ds = self._latest(s, "dataset")
+        prev_r = next((r for r in reversed(s.curator_reports) if r.get("material_sha256") in (ds["sha256"], ds.get("prepared_from"))), None)
+        if prev_r is None:
+            return self.curate(requested_by, ds["sha256"])
+        prev = self.project.blobs.get_json(prev_r["report_sha256"])
+        try:
+            protocol, _ = self._protocol_text(s)
+        except AgentError:
+            protocol = "(no protocol uploaded yet)"
+        prof = prev["profile"] if prev_r.get("material_sha256") == ds["sha256"] else profile(read_table(self._bytes(ds), ds["filename"]))
+        cols = [{"name": c["name"], "missing": c.get("missing")} for c in prof["columns"]]
+        prep = ds.get("preparation")
+        user = (f"EARLIER FINDINGS:\n{json.dumps({'summary': prev.get('summary'), 'flags': prev.get('flags')}, indent=1)[:30000]}\n\n"
+                f"PROTOCOL:\n{protocol[:CURATE_PROTOCOL_CHARS]}\n\nTHE AUTHORS' ANSWERS:\n{answers_text(s)}\n\n"
+                f"DATA PREPARATION LOG:\n{json.dumps(prep['log'] if prep else None, indent=1)}\n\n"
+                f"COLUMNS NOW (dataset in use: {ds['filename']}):\n{json.dumps(cols, separators=(',', ':'))[:30000]}")
+        obj, call, _ = self._json_call(CURATOR_ID, "curate", CURATOR_UPDATE, user, "curator_update")
+        flags = [f for f in obj.get("flags") or [] if isinstance(f, dict) and f.get("issue")]
+        dictionary = prev.get("dictionary") or []
+        if prep:
+            names = {c["name"] for c in prof["columns"]}
+            dictionary = [d for d in dictionary if d.get("column") in names] + [
+                {"column": st["new"], "label": st.get("label") or st["new"], "type": "binary", "units_or_coding": "0=No, 1=Yes",
+                 "role": "derived"} for st in prep["steps"] if st.get("new") in names and not any(d.get("column") == st["new"] for d in dictionary)]
+        report = {"profile": prof, "dictionary": dictionary, "flags": flags,
+                  "protocol_variables_missing_from_data": prev.get("protocol_variables_missing_from_data", []),
+                  "summary": str(obj.get("summary") or prev.get("summary") or ""), "prompt": prompt_ref("curator_update"),
+                  "prompts": [prompt_ref("curator_update")], "columns": len(prof["columns"]), "updated_from_seq": prev_r["seq"]}
+        return self.project.record_curator_report(CURATOR_ID, report, call, requested_by=requested_by,
+                                                  material_sha256=ds["sha256"])
+
     # -- Analysis plan -------------------------------------------------------
     def propose_plan(self, requested_by: str, instructions: str | None = None) -> State:
         s = self.project.state()
@@ -336,12 +371,14 @@ class Agents:
                 f"TABLE 1: {json.dumps(plan.get('table1'))}\n\nTHE PLAN'S AIM AND DESIGN SO FAR: {json.dumps(plan.get('report'))}\n\n"
                 f"THE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}\n\n"
                 f"DATA PREPARATION: {json.dumps(preparation_in_use(s))[:8000]}\n\n"
+                f"SUPPORTING MATERIALS THE AUTHORS UPLOADED:\n{self._supporting_text(s)[:20000]}\n\n"
                 f"DATA DICTIONARY:\n{json.dumps(d.get('dictionary'), separators=(',', ':'))[:20000]}\n\n"
                 f"REPORTING GUIDELINE ITEMS FOR METHODS:\n"
                 f"{json.dumps([i for i in guidelines.item_list((plan.get('report') or {}).get('design')) if i['section'] == 'methods'])}")
         obj, call, _ = self._json_call(WRITER_ID, "checklist", OUTLINE, user, "outline")
         methods = str(obj.pop("methods", "") or "").strip()
-        clean = {"aim": str(obj.get("aim") or "")[:800], "questions": [str(q)[:400] for q in obj.get("questions") or []][:6],
+        clean = {"open_items": [str(q)[:400] for q in obj.get("open_items") or []][:8],
+                 "aim": str(obj.get("aim") or "")[:800], "questions": [str(q)[:400] for q in obj.get("questions") or []][:6],
                  "design": obj.get("design") if obj.get("design") in standard.REPORT_DESIGNS else "other",
                  "design_note": str(obj.get("design_note") or "")[:400], "population": str(obj.get("population") or "")[:800],
                  "outcomes": [str(x)[:300] for x in obj.get("outcomes") or []][:8],
@@ -699,7 +736,7 @@ class Agents:
             supersedes=supersedes if ok else None, redo_reason=redo_reason if ok else None)
 
     # -- The assistant on the Analyses page ----------------------------------
-    ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "leave_out", "none"}
+    ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "leave_out", "remove_figure", "none"}
 
     def assist(self, requested_by: str, message: str, analysis_id: str | None = None):
         """An author writes to the assistant about one result or the whole Results. The assistant answers and
@@ -733,6 +770,18 @@ class Agents:
         act = obj.get("action") if isinstance(obj.get("action"), dict) else {}
         kind = act.get("type") if act.get("type") in self.ACTIONS else "none"
         target = act.get("analysis_id") or analysis_id
+        fig = None
+        if kind == "remove_figure":
+            live = [f for f in s.figures if f.get("number") and not f.get("omitted")]
+            want = re.sub(r"\D", "", str(act.get("figure") or ""))
+            fig = next((f for f in live if str(f["number"]) == want), None)
+            if fig is None:
+                own = [f for f in live if f["analysis_id"] == target]
+                fig = own[0] if len(own) == 1 else None
+            if fig is None:
+                kind, reply = "none", reply + " (Tell me which figure, by its number.)"
+            else:
+                target = fig["analysis_id"]
         if kind in {"variant", "redo", "rewrite_text", "leave_out"}:
             if target not in cur or cur[target].get("standard") and kind != "rewrite_text":
                 kind, reply = "none", reply + " (I could not find a result I can change that way.)"
@@ -740,6 +789,8 @@ class Agents:
                 kind, reply = "none", reply + " (A planned analysis is reported; only an exploratory one added after the plan can be left out.)"
         proposal = {"reply": reply or "Done.", "action": {"type": kind, "analysis_id": target if kind != "none" else None,
                                                           "instruction": str(act.get("instruction") or message)[:2000]}}
+        if fig is not None and kind == "remove_figure":
+            proposal["action"].update({"figure_name": fig["name"], "figure_number": fig["number"]})
         if kind == "table1":
             proposal["action"].update({"stratify_by": act.get("stratify_by"), "variables": act.get("variables") or []})
         return self.project.state(), proposal
@@ -844,6 +895,7 @@ class Agents:
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
                 f"METHODS DRAFTED WITH THE AUTHORS BEFORE THE ANALYSIS (use it as the basis of Methods; keep what the "
                 f"authors wrote):\n{self.project.blobs.get_text(s.outline['methods_sha256']) if s.outline else '(none)'}\n\n"
+                f"SOFTWARE (from the sandbox's recorded provenance): {json.dumps(_software(s))}\n\n"
                 f"SUPPORTING MATERIALS THE AUTHORS UPLOADED (use them for Methods details such as ethics approval, "
                 f"registration, setting and definitions; never for results):\n{self._supporting_text(s)}\n\n"
                 f"DATA PREPARATION (applied by Saksi's code before analysis; describe it in Methods):\n"
@@ -968,6 +1020,14 @@ def _figure_list(s: State, ok: dict[str, Any]) -> str:
     rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}"
             for f in sorted(s.figures, key=lambda f: f["number"] or 0) if f["analysis_id"] in ok and f["number"]]
     return "\n".join(rows) or "(none)"
+
+
+def _software(s: State) -> dict[str, str]:
+    for a in s.analyses.values():
+        pk = ((a.get("execution") or {}).get("provenance") or {}).get("packages")
+        if pk:
+            return {"python": ((a.get("execution") or {}).get("provenance") or {}).get("python") or "3", **pk}
+    return {}
 
 
 def _texts(s: State, ok: dict[str, Any], blobs) -> str:

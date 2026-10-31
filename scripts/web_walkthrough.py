@@ -79,6 +79,12 @@ with sync_playwright() as p:
     print("proposed steps:", page.locator("form[data-form=applyprep] tbody tr").count())
     click(page, "Apply the ticked steps"); shot(page, "03b-data-prepared")
     print("prepared:", page.locator("section.prep .msg.ok").inner_text()[:110])
+    # The Curator's report follows: the preparation (and later answers) bring it up to date by itself.
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
+    page.wait_for_selector("text=Brought up to date", timeout=60000)
+    print("curator:", page.locator("section", has_text="Data Curator's report").locator("p.muted.small").first.inner_text()[:70],
+          "| resolved:", page.locator("summary", has_text="resolved since").count())
+    click(page, "Update the report"); print("curator button:", note(page)[:70])
     page.get_by_role("tab", name="Plan").click()
     page.wait_for_selector("ol.qa .suggest", timeout=60000)              # Saksi proposes answers by itself
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
@@ -146,6 +152,19 @@ with sync_playwright() as p:
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
     print("text edit:", page.locator("#r-primary .byline").inner_text())
     shot(page, "05c-results-edited")
+    # A figure the authors do not want: left out, its information put in the text, recorded under their name.
+    page.wait_for_function("() => !document.querySelector('.busy') && !S.busy", timeout=120000); page.wait_for_timeout(300)
+    nfig = page.locator("#results-view figure.fig").count()
+    page.locator("#results-view figure.fig").first.get_by_role("button", name="Leave this figure out").click()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=120000); page.wait_for_timeout(300)
+    print("figure out:", note(page)[:70], "|", nfig, "->", page.locator("#results-view figure.fig").count(), "figures")
+    assert page.locator("#results-view figure.fig").count() == nfig - 1
+    # The record keeps it, folded under the details, and it can be put back (the offline draft refers to all five).
+    page.locator("#details-all").evaluate("d => d.open = true")
+    page.get_by_role("button", name="Put it back").first.click()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=120000); page.wait_for_timeout(300)
+    print("figure back:", note(page)[:40], "|", page.locator("#results-view figure.fig").count(), "figures")
+    assert page.locator("#results-view figure.fig").count() == nfig
     assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
     shot(page, "05b-analyses-ai")
     click(page, "Accept these results")

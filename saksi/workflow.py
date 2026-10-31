@@ -181,7 +181,7 @@ def apply(s: State, ev: Event) -> State:
             if m["sha256"] == p["sha256"] and not m.get("withdrawn"):
                 m["withdrawn"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
     elif t == "curator.reported":
-        s.curator_reports.append(p | {"seq": ev.seq})
+        s.curator_reports.append(p | {"seq": ev.seq, "ts": ev.ts})
     elif t == "plan.proposed":
         analyses = {}
         for k, a in p["analyses"].items():
@@ -229,6 +229,16 @@ def apply(s: State, ev: Event) -> State:
     elif t == "checklist.assessed":
         if p["version"] in s.drafts:
             s.drafts[p["version"]]["checklist"] = p | {"seq": ev.seq}
+    elif t == "figure.omitted":
+        for f in s.figures:
+            if f["analysis_id"] == p["analysis_id"] and f["name"] == p["name"]:
+                f["omitted"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
+        _number_figures(s)
+    elif t == "figure.restored":
+        for f in s.figures:
+            if f["analysis_id"] == p["analysis_id"] and f["name"] == p["name"]:
+                f.pop("omitted", None)
+        _number_figures(s)
     elif t == "analysis.withdrawn":
         s.analyses[p["analysis_id"]]["withdrawn"] = {"reason": p["reason"], "by": ev.actor_id, "seq": ev.seq}
         _number_figures(s)
@@ -745,6 +755,28 @@ class Project:
                         "warning": f.get("warning")})
         return out
 
+    def omit_figure(self, by: str, analysis_id: str, name: str, reason: str) -> State:
+        """Authors leave a figure out of the paper (its information goes in the text). Recorded with the reason;
+        the figure stays in the record and can be put back."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
+        if not any(f["analysis_id"] == analysis_id and f["name"] == name and not f.get("omitted") for f in s.figures):
+            raise WorkflowError("no such figure in the paper")
+        if not (reason or "").strip():
+            raise WorkflowError("say why the figure is left out")
+        self._emit(by, "figure.omitted", {"analysis_id": analysis_id, "name": name, "reason": reason.strip()})
+        return self.state()
+
+    def restore_figure(self, by: str, analysis_id: str, name: str) -> State:
+        s = self.state()
+        self._require_role(s, by, "author")
+        if not any(f["analysis_id"] == analysis_id and f["name"] == name and f.get("omitted") for f in s.figures):
+            raise WorkflowError("that figure was not left out")
+        self._require_stage(s, "ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
+        self._emit(by, "figure.restored", {"analysis_id": analysis_id, "name": name})
+        return self.state()
+
     def withdraw_analysis(self, by: str, analysis_id: str, reason: str) -> State:
         """Leave an exploratory analysis that was asked for after the plan out of the paper. It stays in the record,
         with the reason, and the reviewer is told. Pre-specified analyses cannot be left out this way."""
@@ -1157,7 +1189,7 @@ def open_questions(s: State) -> list[str]:
     """Saksi's questions about this paper: the plan's own, then what each included analysis left unresolved
     (the same wording the page shows)."""
     p = s.plan or {}
-    qs = list(((p.get("report") or {}).get("questions")) or [])
+    qs = list(((p.get("report") or {}).get("questions")) or []) + list((s.outline or {}).get("open_items") or [])
     for i in p.get("order") or []:
         a = p["analyses"][i]
         if a.get("included", True) is not False:
@@ -1180,7 +1212,7 @@ def current(s: State) -> dict[str, dict[str, Any]]:
 def _number_figures(s: State) -> None:
     """Figures are numbered in reporting order; a replaced analysis's figures lose their number."""
     live = [f for f in s.figures if not s.analyses.get(f["analysis_id"], {}).get("superseded_by")
-            and not s.analyses.get(f["analysis_id"], {}).get("withdrawn")]
+            and not s.analyses.get(f["analysis_id"], {}).get("withdrawn") and not f.get("omitted")]
     live.sort(key=lambda f: (position(s.analyses[f["analysis_id"]]), f["seq"]))
     for f in s.figures:
         f["number"] = None
@@ -1222,7 +1254,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",

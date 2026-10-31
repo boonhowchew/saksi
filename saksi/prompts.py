@@ -221,6 +221,11 @@ Rules:
   values, duplicates, outliers), citing [A:s_data_quality]: this belongs in Methods, not Results; how Table 1 was
   summarised and compared (its notes give the rules); the univariable analyses, then the multivariable models; name
   the model diagnostics that were checked.
+- Methods must be complete and ready for publication, more detailed than METHODS DRAFTED WITH THE AUTHORS, which is
+  its basis: expand each subsection with the specifics from the protocol, the data preparation log, the rules Saksi
+  applied (Table 1 summaries and tests from its notes, the standard model diagnostics and their thresholds, how missing
+  data were handled, the two-sided 5% significance level and 95% confidence intervals), the reporting guideline's
+  Methods items, and the software used (from SOFTWARE). Keep what the authors wrote.
 - TEXT ALREADY WRITTEN gives number-checked text for each analysis, with its section. Use it as the basis of that
   analysis's passage: keep its numbers and citations, and edit only for flow.
 - Results, in this order: the sample's characteristics,
@@ -368,6 +373,8 @@ Actions you can propose:
 - "table1": rebuild Table 1 with another grouping or other characteristics (give stratify_by and variables, using
   column names from the data dictionary).
 - "leave_out": leave an exploratory analysis added after the plan out of the paper (not a planned one).
+- "remove_figure": leave a figure out of the paper and put its information in the text (give "figure", its number).
+  The analysis and its numbers stay; only the figure goes.
 - "none": just answer.
 
 Integrity: refuse, and explain why, any request that would hide or reshape results because of what they show (for
@@ -376,8 +383,9 @@ covariates to change its estimate). Say so in "reply".
 
 Reply with ONLY a JSON object:
 {"reply": "your answer to the author, 1 to 4 sentences",
- "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|leave_out|none",
+ "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|leave_out|remove_figure|none",
             "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
+            "figure": "figure number or null (remove_figure only)",
             "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""
 
 DATA_PREP = """You are the Analysis Agent in Saksi, preparing a raw research dataset for analysis, before any result.
@@ -448,8 +456,12 @@ research question and approach, and a draft of its Methods. Draw on the protocol
 this paper (the plan), their answers to Saksi's questions, the data dictionary and profile (aggregate only), and how the
 data were prepared. Be specific to this study: names of the outcome and exposures with their definitions and the
 columns they come from, the setting and population as the protocol gives them, the planned sample size and what it was
-calculated for. Write in plain, precise scientific English. Put "[Authors: ...]" where only the authors can supply
-something (for example ethics approval number, recruitment dates). Never report or guess any result.
+calculated for. Write in plain, precise scientific English, as finished text ready to go forward to the analysis:
+no placeholders, no "none", no notes to yourself. Where something only the authors can supply is missing (for example
+recruitment dates or the ethics approval number) and is not in THE AUTHORS' ANSWERS or the supporting materials, leave
+it out of the text and ask for it in "open_items", one short question each. For data preparation, describe exactly
+what was done, from its log; if nothing was done, say that the data were analysed as collected. Never report or guess
+any result.
 
 Reply with ONLY a JSON object:
 {"aim": "the aim of this paper, one or two sentences",
@@ -461,9 +473,23 @@ Reply with ONLY a JSON object:
  "approach": "three to five sentences, in plain words, on how the data will be analysed to answer the questions",
  "methods": "the Methods section in Markdown, with these subheadings in this order: ### Study design and setting,
              ### Participants, ### Variables and definitions, ### Data preparation, ### Sample size,
-             ### Statistical analysis. 300 to 600 words."}"""
+             ### Statistical analysis. 300 to 600 words, finished.",
+ "open_items": ["a question for the authors about something the Methods needs and only they can supply"]}"""
 
-TEMPLATES = {"outline": OUTLINE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+CURATOR_UPDATE = """You are the Data Curator in Saksi. Bring your earlier report on this dataset up to date. Since you wrote
+it, the protocol may have been uploaded, the authors may have answered questions, and the data may have been prepared
+(steps applied by code, with their effects). You see the earlier findings, the protocol, the answers, the preparation
+log and the columns of the dataset now in use (names and missing counts only; never a record).
+
+For each earlier finding, decide: still "open", or "resolved" (and say in a few words how: which preparation step,
+which answer, or that the protocol is now available and what it shows). Add any new finding the protocol or the
+answers bring to light. Keep the same severity scale (high, medium, low).
+
+Reply with ONLY a JSON object: {"summary": "two or three sentences on the state of the data now",
+"flags": [{"severity": "high|medium|low", "column": "column or empty", "issue": "...", "suggested_check": "...",
+"status": "open|resolved", "resolution": "how it was resolved, or empty"}]}"""
+
+TEMPLATES = {"outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 
