@@ -175,7 +175,7 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
     if laid:
         return {"analysis_id": aid, "kind": "results", "title": laid["title"] or str(a["spec"].get("title") or aid),
                 "columns": laid["columns"], "rows": laid["rows"],
-                "footnotes": laid["footnotes"] + _common_notes(a, out) + [_label_note(a)], "laid_out_by": "analysis code"}
+                "footnotes": laid["footnotes"] + _common_notes(a, out), "laid_out_by": "analysis code"}
     est = [e for e in out.get("estimates") or [] if isinstance(e, dict) and e.get("name") is not None]
     if not est:
         return None
@@ -229,7 +229,6 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
                 f"adjusted R² {_x(f.get('adjusted_r2'))}" if f.get("adjusted_r2") is not None else "",
                 f"largest variance inflation factor {_x(max(vif.values()))}" if vif else ""]
         notes.append("Model diagnostics: " + "; ".join(b for b in bits if b) + ".")
-    notes.append(_label_note(a))
     notes.append("; ".join(f"{k}, {v}" for k, v in sorted(abbr.items())) + ".")
     return {"analysis_id": aid, "kind": "results", "title": str(a["spec"].get("title") or aid),
             "columns": cols, "rows": rows, "footnotes": notes}

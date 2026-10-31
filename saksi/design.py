@@ -19,8 +19,9 @@ The quotations are checked here, by code, against the stored protocol, whoever p
 the plan. A missing or unfound quotation fails safe to exploratory.
 
 After the analysis runs, the achieved sample (and events) is compared with the protocol's
-target, for every analysis the sample-size calculation covers. A shortfall does not change
-the label, which was fixed before any result; it is flagged, and the draft must state it.
+target, for every analysis the sample-size calculation covers. A shortfall is flagged and the draft
+must state it; a confirmatory analysis that falls short is reported as exploratory (author's definition,
+31 Oct), decided from the counts alone (see Project.complete_analysis).
 """
 
 from __future__ import annotations

@@ -75,6 +75,15 @@ with sync_playwright() as p:
     print("remove:", note(page)[:60])
     click(page, "Check the data and draft the plan"); shot(page, "03-plan-drafted")
     print("prepare:", note(page)[:70])
+    # Settle what this paper reports with Saksi, then let it redraft the plan as agreed.
+    print("aim:", page.locator(".reportbox dd").first.inner_text()[:80])
+    page.fill("form[data-form=planchat] input[name=message]", "Yes, report discrimination too, as a secondary question.")
+    page.locator("form[data-form=planchat]").get_by_role("button", name="Send").click()
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(250)
+    print("plan chat:", page.locator(".reportbox .cm.ai").last.inner_text()[:90])
+    page.get_by_role("button", name="Yes, redraft the plan this way").click()
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=120000); page.wait_for_timeout(250)
+    print("redraft:", note(page)[:70])
     # Toggle an analysis out and back in (the reason box appears and goes), then correct a detail.
     page.uncheck("input[data-inc=auc]"); assert page.locator("#why-auc").is_visible()
     page.check("input[data-inc=auc]"); assert not page.locator("#why-auc").is_visible()
@@ -109,7 +118,7 @@ with sync_playwright() as p:
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=120000); page.wait_for_timeout(300)
     print("redo:", note(page)[:80])
     # Table 1 rebuilt with other characteristics (Saksi's own code), from the details below the Results.
-    page.locator("#details-all > summary").click()
+    page.locator("#details-all").evaluate("d => d.open = true")
     page.locator("details.askai:has(form[data-form=t1change]) > summary").click()
     t1 = page.locator("form[data-form=t1change]")
     t1.locator("textarea[name=vars]").fill("age, booking_bmi, parity, previous_gdm, ethnicity")
@@ -122,12 +131,19 @@ with sync_playwright() as p:
     click(page, "Accept these results")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")  # resume saved identity (author A)
     print("acting as:", page.locator(".next strong").inner_text())
-    page.get_by_role("tab", name="Analyses").click(); page.get_by_text("How it ran").first.click(); shot(page, "05-analyses")
+    page.get_by_role("tab", name="Analyses").click(); page.locator("#details-all").evaluate("d => d.open = true")
+    page.locator("#details-all summary", has_text="How it ran").first.click(); shot(page, "05-analyses")
     click(page, "Accept these results")
-    page.get_by_role("tab", name="Draft").click(); click(page, "Ask the Writing Agent for the first draft"); shot(page, "06-draft")
+    # Every author has accepted: Saksi goes on to the draft, writes it and checks it against the guideline.
+    page.wait_for_selector("#ms", timeout=120000)
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=120000); page.wait_for_timeout(500)
+    shot(page, "06-draft")
     print("draft:", page.locator(".msg.ok, .msg.warn").first.inner_text()[:120])
     print("draft check:", page.locator("#panel .msg").filter(has_text="Number check").first.inner_text()[:90])
     print("in place:", page.locator("#ms .pubtable").count(), "tables,", page.locator("#ms figure.fig").count(), "figures")
+    print("checklist:", page.locator("h2", has_text="Reporting checklist").first.inner_text(), "|",
+          page.locator("h2:has-text('Reporting checklist') + p").first.inner_text()[:60])
+    assert page.locator("#results-view .tag.conf, #results-view .tag.expl").count() == 0 if page.locator("#results-view").count() else True
     with page.expect_download() as dl:
         page.get_by_role("button", name="downloaded as a Word file").click()
     print("tables docx bytes:", Path(dl.value.path()).stat().st_size)

@@ -113,11 +113,18 @@ class ScriptedModel:
                    else "plan" if "structured analysis plan" in system
                    else "describe" if "reports ONE analysis" in system
                    else "assist" if "Saksi's analysis assistant" in system
+                   else "plan_assist" if "settle what this particular paper reports" in system
+                   else "checklist" if "against a reporting guideline" in system
                    else "write" if "Writing Agent" in system else "code")
         if purpose == "describe" and not self.script.get("describe"):
             reply = describe_reply                                   # a plain, number-free default
         elif purpose == "assist" and not self.script.get("assist"):
             reply = assist_reply
+        elif purpose == "plan_assist" and not self.script.get("plan_assist"):
+            reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
+                     "redraft": "This paper reports the primary objective only."}
+        elif purpose == "checklist" and not self.script.get("checklist"):
+            reply = checklist_reply
         else:
             reply = self.script[purpose].pop(0)
         if callable(reply):
@@ -126,6 +133,17 @@ class ScriptedModel:
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
         return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+
+
+def checklist_reply(user):
+    """Scripted checklist: every item 'reported' with the draft's first words, except one 'missing'."""
+    import json as _j
+    items = _j.loads(user.split("ITEMS:\n", 1)[1].split("\n\nDRAFT:", 1)[0])
+    draft = user.split("DRAFT:\n", 1)[1]
+    first = next(ln for ln in draft.splitlines() if ln and not ln.startswith("#") and not ln.startswith("["))[:30]
+    return _j.dumps({"items": [{"id": it["id"], "status": "missing" if i == 0 else "reported",
+                                "quote": "" if i == 0 else (first if i % 2 else "words not in the draft at all"),
+                                "note": "[Authors] the setting"} for i, it in enumerate(items)]})
 
 
 def assist_reply(user):
@@ -214,7 +232,10 @@ def test_curate_plan_run_end_to_end(setup):
 
     s = agents.run_planned("bhc")
     prim, auc = s.analyses["primary"], s.analyses["auc"]
-    assert prim["status"] == "ok" and prim["label"] == "confirmatory" and prim["basis"] == "pre-specified"
+    # Planned as the confirmatory primary analysis, but the achieved sample fell short: exploratory (author's
+    # definition, 31 Oct), decided from the counts alone.
+    assert prim["status"] == "ok" and prim["label"] == "exploratory" and prim["basis"] == "pre-specified"
+    assert "fell short" in prim["downgraded"]
     # Planned for 400 women and 40 events; 388 and 18 were analysed. Flagged; the label stays.
     assert prim["sample_check"]["shortfall"] is True
     assert prim["sample_check"]["targets"] == {"n": {"target": 400, "achieved": 388, "short": True},
@@ -231,8 +252,8 @@ def test_curate_plan_run_end_to_end(setup):
     assert auc["spec"]["required_figure"]["name"] == "roc_curve" and auc["execution"]["required_figure_drawn"]
     roc = figs[("auc", "roc_curve")]
     assert roc["drawn_by"] == "analysis code" and roc["label"] == "exploratory"
-    # The code's caption did not say exploratory; Saksi states the label, keeping the original.
-    assert roc["caption"].startswith("Exploratory (pre-specified) analysis. ROC curve")
+    # The code caption is kept as written; the label belongs in the text.
+    assert roc["caption"].startswith("ROC curve")              # no label in captions (author, 31 Oct)
     assert roc["caption_from_code"] == "ROC curve of the primary model in 388 women."
     assert roc["caption_check"]["ok"] is True
     assert p.blobs.get_text(roc["svg_sha256"]).lstrip().startswith("<?xml")
@@ -430,7 +451,7 @@ def test_unresolved_draft_goes_to_authors_who_can_fix_it(setup):
     model.script["write"] = [_draft(bmi), _draft(bmi)]       # agent fails twice
     s = agents.write_draft("bhc")
     d = s.drafts[1]
-    assert d["checks"]["untraced"] == 1 and d["checks"]["exploratory_not_labelled"] == 1
+    assert d["checks"]["untraced"] == 1 and d["checks"]["exploratory_not_labelled"] >= 1
     full = p.blobs.get_json(d["checks_sha256"])
     assert full["untraced"][0]["number"] == "9.99"
     # An author edit that fixes both problems is re-checked automatically.
@@ -594,7 +615,7 @@ def test_publication_tables_built_by_code_and_exported_to_word(setup):
     bmi = next(r for r in t2["rows"] if r["cells"][0] in ("booking_bmi", "BMI at booking"))
     assert re.fullmatch(r"\d\.\d\d \(\d\.\d\d to \d\.\d\d\)", bmi["cells"][1])
     notes = " ".join(t2["footnotes"])
-    assert "events per predictor parameter" in notes and "Primary (confirmatory) analysis" in notes
+    assert "events per predictor parameter" in notes and "confirmatory" not in notes and "xploratory" not in notes
     assert "Below the protocol's planned sample" in notes and "OR, odds ratio" in notes
     assert "Table 2 [A:primary]" in tables.listing(s, p.blobs)
     doc = Document(io.BytesIO(tables.to_docx(ts)))
@@ -613,7 +634,7 @@ def test_redo_replaces_the_run_keeps_the_label_and_the_record(setup):
     s = agents.redo("bhc", "primary", "Parity should be categorical, as the protocol says.")
     new = s.analyses["primary.r1"]
     assert s.analyses["primary"]["superseded_by"] == "primary.r1" and new["supersedes"] == "primary"
-    assert new["label"] == "confirmatory" and new["plan_analysis_id"] == "primary"
+    assert new["label"] == s.analyses["primary"]["label"] and new["plan_analysis_id"] == "primary"
     assert new["redo_reason"].startswith("Parity") and new["requested_by"] == "bhc"
     assert "THE AUTHORS ASKED FOR THIS ANALYSIS TO BE REDONE" in model.bodies[-1]["messages"][1]["content"]
     # The replaced run is out of the paper: not required, its figures unnumbered; the new one takes its place.
@@ -791,3 +812,35 @@ def test_the_assistant_answers_and_proposes_one_checked_action(setup):
     model.script["assist"] = [{"reply": "Leaving it out.", "action": {"type": "leave_out", "analysis_id": "primary"}}]
     _, prop = agents.assist("bhc", "drop the primary analysis", "primary")
     assert prop["action"]["type"] == "none" and "planned analysis is reported" in prop["reply"]
+
+
+def test_plan_states_the_report_aim_and_design_and_saksi_helps_settle_it(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    model.script["plan"] = [dict(PLAN_REPLY, report={"aim": "Is booking BMI associated with GDM?", "design": "cohort",
+                                                     "questions": ["Which objective is this paper's main question?"]})]
+    s = agents.propose_plan("bhc")
+    assert s.plan["report"] == {"aim": "Is booking BMI associated with GDM?", "design": "cohort",
+                                "questions": ["Which objective is this paper's main question?"]}
+    s, out = agents.plan_assist("bhc", "Only the primary objective", history=[{"who": "ai", "text": "Which objective?"}])
+    assert out["redraft"] == "This paper reports the primary objective only." and out["questions"]
+    assert "CONVERSATION SO FAR:\nSAKSI: Which objective?" in model.bodies[-1]["messages"][1]["content"]
+    for a in ("bhc", "coauthor"):
+        s = p.confirm_plan(a, s.plan["sha"])
+    assert s.plan_locked["report"]["design"] == "cohort"
+
+
+def test_draft_is_checked_against_the_guideline_for_the_design(setup):
+    from saksi import guidelines
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi, extra="", exploratory="An exploratory model gave a similar estimate [A:x_q1].")]
+    s = agents.write_draft("bhc")
+    assert "REPORTING GUIDELINE: STROBE" in model.bodies[-1]["messages"][1]["content"]
+    s = agents.checklist("bhc")
+    c = s.drafts[1]["checklist"]
+    items = p.blobs.get_json(c["items_sha256"])
+    assert c["guideline"].startswith("STROBE") and len(items) == len(guidelines.item_list(None))
+    assert items[0]["status"] == "missing"
+    assert items[1]["status"] == "reported" and items[1]["quote"]            # quotation found in the draft
+    assert items[2]["status"] == "partly" and "not found" in items[2]["note"]  # an invented quotation is caught

@@ -120,6 +120,8 @@ section.advisor ul.sugg { list-style: none; padding: 0; margin: .4rem 0; }
 section.advisor ul.sugg li { border-left: 3px solid var(--ochre); background: var(--ochre-wash); padding: .45rem .7rem; margin: .35rem 0; border-radius: 0 4px 4px 0; font-size: .9rem; }
 section.advisor ul.sugg li.note { border-left-color: var(--rule); background: #F6F7FA; }
 section.advisor ul.sugg li .btn { margin-left: .4rem; padding: .2rem .6rem; font-size: .82rem; }
+.reportbox { border: 1px solid var(--indigo); border-radius: 8px; padding: .4rem 1rem .8rem; background: #F7F8FC; }
+.reportbox h2 { margin-top: .4rem; }
 details.alldetails > summary { font: 600 1.05rem var(--sans); cursor: pointer; padding: .4rem 0; }
 .restext { border-left: 3px solid var(--verdigris); background: var(--verdigris-wash); padding: .5rem .8rem; margin: .6rem 0 .8rem; border-radius: 0 4px 4px 0; }
 .restext .manuscript-view { max-width: none; font-size: 1rem; }
@@ -406,7 +408,7 @@ function describe(e) {
     default: return esc(e.type);
   }
 }
-const labelText = (a) => a.label === "confirmatory" ? `confirmatory${a.primary_basis === "authors" ? ", primary named by the authors" : ""}` : `exploratory${a.basis ? ", " + a.basis : ""}`;
+const labelText = (a) => a.downgraded ? "exploratory: sample short of plan" : a.label === "confirmatory" ? `confirmatory${a.primary_basis === "authors" ? ", primary named by the authors" : ""}` : `exploratory${a.basis ? ", " + a.basis : ""}`;
 const labelTag = (a) => `<span class="tag ${a.label === "confirmatory" ? "conf" : "expl"}" title="${a.label === "confirmatory" ? "The pre-specified primary analysis the study was designed and powered for" : "Not what the study was designed and powered for"}">${esc(labelText(a))}</span>`;
 const stageName = (code) => (STAGES.find(([c]) => c === code) || [code, code])[1];
 
@@ -694,15 +696,15 @@ function plan() {
   const nConf = inc.filter((a) => a.label === "confirmatory").length;
   const confirmedBy = s.authors.filter((a) => s.plan_confirmed_by.includes(a));
   const ticks = (a) => (a.design?.conditions || []).map((c) => `<span class="${c.met ? "y" : "n"}" title="${esc(c.label)}: ${c.met ? "yes" : "no"}">${c.met ? "✓" : "✗"}</span>`).join("");
-  return `<section>
-    <p><strong>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol</strong>: ${nConf} confirmatory, ${inc.length - nConf} exploratory${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.
+  return `${reportBox(p, canAct && !locked)}<section>
+    <p><strong>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol</strong>: ${nConf} can answer the paper's question as planned (confirmatory, if the completed study reaches the sample its protocol planned), ${inc.length - nConf} cannot (exploratory)${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.
       ${p.by.startsWith("agent:") ? `Drafted by the ${esc(name(p.by))}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: ${esc(p.note)}` : "."}</p>
     <p class="small">${p.table1 ? `<strong>Table 1</strong> describes ${esc(p.table1.variables.length)} characteristics${p.table1.stratify_by ? `, by ${esc(p.table1.stratify_by)}` : ""}: ${esc(p.table1.variables.join(", "))}.` : `No Table 1 was proposed; ask for a new draft, or add it under “Correct the details myself”.`}
       The analyses then run in the standard order: data quality, Table 1, descriptive, univariable, multivariable with diagnostics.</p>
     <p class="small">${locked ? `<span class="tag good">Locked</span> Every author confirmed this plan before any result existed.`
       : `Confirmed by ${confirmedBy.length} of ${s.authors.length} authors${confirmedBy.length ? ` (${esc(confirmedBy.map(name).join(", "))})` : ""}. A change to the plan needs every author to confirm again.`}</p>
     <form data-form="planconfirm">
-      <div class="tablewrap"><table class="plantable"><thead><tr><th title="Include in this paper">Include</th><th>Analysis</th><th>Label</th><th title="Described in the protocol; named primary; covered by the sample-size calculation">Checks</th></tr></thead><tbody>
+      <div class="tablewrap"><table class="plantable"><thead><tr><th title="Include in this paper">Include</th><th>Analysis</th><th>Planned as</th><th title="Described in the protocol; named primary; covered by the sample-size calculation">Checks</th></tr></thead><tbody>
       ${items.map((a, i) => { const out = a.included === false; return `<tr>
         <td class="inc"><input type="checkbox" name="inc:${esc(a.id)}" data-inc="${esc(a.id)}" ${out ? "" : "checked"} ${editable ? "" : "disabled"} aria-label="Include ${esc(a.title || a.id)}"></td>
         <td><strong>${i + 1}. ${esc(a.title || a.id)}</strong> <span class="tag">${esc(a.kind || "other")}</span>
@@ -728,6 +730,27 @@ function departureHtml(dev, by) {
   if (!dev) return "";
   return `<div class="msg warn small"><strong>Departure from the protocol, to be disclosed.</strong> ${esc(dev.statement)}.${by ? ` Decided by ${esc(name(by))}.` : ""}
     The draft must say so, citing this analysis, and the reviewer sees it.</div>`;
+}
+
+const DESIGN_NAMES = { cross_sectional: "Cross-sectional study", cohort: "Cohort study", case_control: "Case-control study",
+  rct: "Randomised controlled trial", diagnostic_accuracy: "Diagnostic accuracy study", prediction_model: "Prediction model study",
+  systematic_review: "Systematic review", qualitative: "Qualitative study", other: "Other design" };
+const GUIDELINE = { cross_sectional: "STROBE (cross-sectional)", cohort: "STROBE (cohort)", case_control: "STROBE (case-control)",
+  rct: "CONSORT", diagnostic_accuracy: "STARD", prediction_model: "TRIPOD+AI", systematic_review: "PRISMA 2020",
+  qualitative: "SRQR / COREQ", other: "STROBE (general)" };
+function reportBox(p, canTalk) {
+  const r = p.report || {}, design = r.design || "other";
+  const unresolved = p.order.flatMap((id) => (p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`)));
+  const qs = [...(r.questions || []), ...unresolved];
+  return `<section class="reportbox"><h2 class="step">What this paper reports <span class="who">Settled with the authors before any analysis; the Writing Agent writes to it.</span></h2>
+    <dl class="facts"><dt>Aim</dt><dd>${r.aim ? esc(r.aim) : `<span class="muted">Not stated yet. Tell Saksi below, or ask for a new draft.</span>`}</dd>
+      <dt>Study design</dt><dd>${esc(DESIGN_NAMES[design])}: the paper is written and checked against the <strong>${esc(GUIDELINE[design])}</strong> reporting guideline.</dd></dl>
+    ${qs.length ? `<p class="small"><strong>Saksi's questions for you</strong></p><ol class="small">${qs.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>` : ""}
+    ${canTalk ? `<div class="chat">${(S.planChat || []).map((m, i) => `<p class="cm ${m.who}"><strong>${m.who === "you" ? "You" : "Saksi AI"}:</strong> ${esc(m.text)}
+        ${m.pending ? `<button class="linkish" data-action="planredraft" data-i="${i}" data-label="Redrafting">Yes, redraft the plan this way</button>` : ""}</p>`).join("")}
+      <form class="chatform" data-form="planchat"><span class="aibadge">AI</span><input type="text" name="message" required autocomplete="off" aria-label="Message to Saksi about this paper"
+        placeholder="${qs.length ? "Answer Saksi's questions, or say what this paper should report" : "Say what this paper should report, or ask Saksi"}"><button class="btn" data-label="Saksi AI is thinking">Send</button></form></div>` : ""}
+  </section>`;
 }
 
 function planItemBody(a) {
@@ -766,6 +789,9 @@ function planEditor(p) {
   return `<section><h2>Edit the plan</h2>
     <p class="small">Choose which of the protocol's analyses this paper includes, and correct what the Analysis Agent got wrong. For quotations, paste the protocol's own words: code checks them against the protocol again when you save. Saving creates a revised plan that every author confirms; the record keeps both versions.</p>
     <form class="stack" data-form="planedit" style="max-width:none">
+    <fieldset class="edit"><legend>What this paper reports</legend>
+      <label><span>Aim of this paper (one or two sentences)</span><textarea name="aim">${esc(p.report?.aim || "")}</textarea></label>
+      <label><span>Study design (sets the reporting guideline)</span><select name="design">${Object.entries(DESIGN_NAMES).map(([k, v]) => `<option value="${k}" ${(p.report?.design || "other") === k ? "selected" : ""}>${esc(v)}: ${esc(GUIDELINE[k])}</option>`).join("")}</select></label></fieldset>
     <fieldset class="edit"><legend>Table 1</legend>
       <label><span>Stratify by (a column, usually the outcome; leave empty for no stratification)</span><input type="text" name="t1by" value="${esc(p.table1?.stratify_by || "")}"></label>
       <label><span>Characteristics (column names, separated by commas)</span><textarea name="t1vars">${esc((p.table1?.variables || []).join(", "))}</textarea></label></fieldset>
@@ -793,7 +819,7 @@ function sampleBlock(c) {
   if (!c) return "";
   const rows = Object.entries(c.targets).map(([k, r]) => `${k === "n" ? "Participants" : "Outcome events"}: ${r.achieved ?? "not reported"} analysed, ${r.target} planned${r.short ? " (short)" : ""}`);
   return `<div class="msg ${c.shortfall ? "warn" : "ok"} small"><strong>${c.shortfall ? "Below the protocol's planned sample." : "The protocol's planned sample was reached."}</strong> ${esc(rows.join("; "))}.
-    ${c.shortfall ? " The label does not change, because it was fixed before any result; the draft must state the shortfall." : ""}</div>`;
+    ${c.shortfall ? " So the study could not answer this question with the power it planned: the text reports it as exploratory and states the planned and achieved numbers (decided from the counts, never the estimates)." : " The text states this: the study had the size it planned to answer the question."}</div>`;
 }
 
 /* Figures: SVG text from the record, shown as images so nothing in them can run */
@@ -855,7 +881,7 @@ const SEQ = [
   ["univariable", "4. Univariable analyses", "One independent variable at a time, before any adjustment."],
   ["multivariable", "5. Multivariable analyses and model diagnostics", "Adjusted models. After each, Saksi's standard checks: fit, calibration, influence and assumptions."],
   ["other", "6. Other planned analyses", ""],
-  ["posthoc", "7. Exploratory analyses added after the plan", "Not in the confirmed plan, so always exploratory."]];
+  ["posthoc", "7. Analyses added after the plan", "Not in the confirmed plan, so the text reports them as exploratory."]];
 const KIND_RANK = { descriptive: 0, univariable: 1, multivariable: 2, other: 3 };
 function stepOf(a) {
   if (a.standard === "data_quality") return "quality";
@@ -1010,10 +1036,10 @@ async function resultsView(tables, canRun) {
   if (!cur.some(([, a]) => a.standard === "table1")) h += `<div class="rsec"><h4>Characteristics of the participants</h4>${table1Builder(canRun)}</div>`;
   for (const [id, a] of cur) {
     if (a.standard === "data_quality") continue;
-    if (a.basis === "post hoc" && !posthoc) { h += `<h3 class="rgroup">Exploratory analyses added after the plan</h3>`; posthoc = true; }
+    if (a.basis === "post hoc" && !posthoc) { h += `<h3 class="rgroup">Further analyses requested by the authors</h3>`; posthoc = true; }
     const t = tables.find((x) => x.analysis_id === id);
     const figs = S.state.figures.filter((f) => f.analysis_id === id && f.number).sort((x, y) => x.number - y.number);
-    h += `<div class="rsec" id="r-${esc(id)}"><h4>${esc(head(id, a))} ${a.standard ? "" : labelTag(a)}</h4>
+    h += `<div class="rsec" id="r-${esc(id)}"><h4>${esc(head(id, a))}</h4>
       ${await rtext(id, a, tables, canRun)}
       ${t ? (t.number ? pubTableHtml(t) : `<p class="notref">Same results as Table ${esc(t.duplicate_of.number)} (${esc(t.duplicate_of.analysis_id)}), so the table is not shown again.</p>`) : ""}
       ${(await Promise.all(figs.map(figureHtml))).join("")}
@@ -1304,6 +1330,20 @@ function canvasTableEdits(base) {
   }
   return edits;
 }
+async function checklistHtml(d, v, canRun) {
+  const design = S.state.plan_locked?.report?.design || "other", g = GUIDELINE[design];
+  const c = d.checklist;
+  const run = canRun ? `<button class="${c ? "linkish" : "btn"}" data-agent="checklist" data-args='${esc(JSON.stringify({ version: v }))}' data-label="Checking against ${esc(g)}">${c ? "Check again" : `Check this version against ${esc(g)}`}</button>` : "";
+  if (!c) return `<section><h2>Reporting checklist</h2><p class="small">The paper follows the <strong>${esc(g)}</strong> guideline for a ${esc((DESIGN_NAMES[design] || "").toLowerCase())}. ${run}</p></section>`;
+  const items = await blobJSON(c.items_sha256) || [];
+  const mark = { reported: ["good", "reported"], partly: ["attn", "partly"], missing: ["bad", "missing"], not_applicable: ["", "not applicable"] };
+  return `<section><h2>Reporting checklist: ${esc(c.guideline)}</h2>
+    <p class="small">${esc(c.summary.reported)} reported, ${esc(c.summary.partly)} partly, ${esc(c.summary.missing)} missing. Quotations are checked against this version by code; "[Authors]" marks what only you can supply. ${run}</p>
+    <details ${c.summary.missing + c.summary.partly ? "open" : ""}><summary>The items</summary><div class="tablewrap"><table><thead><tr><th>Item</th><th>Status</th><th>Where, or what is needed</th></tr></thead><tbody>
+    ${items.map((x) => `<tr><td><span class="muted small">${esc(x.id)}</span> ${esc(x.item)}</td><td><span class="tag ${mark[x.status][0]}">${mark[x.status][1]}</span></td>
+      <td class="small">${x.quote ? `“${esc(x.quote)}”` : ""}${x.note ? ` ${esc(x.note)}` : ""}</td></tr>`).join("")}</tbody></table></div></details></section>`;
+}
+
 async function draftTables(v) {
   const key = `${S.state.head_seq}|${v}`;
   if (S.dtables?.key !== key || S.dtables?.pid !== S.pid) {
@@ -1356,6 +1396,7 @@ async function draft() {
       <label><span class="small">What you changed and why (kept in the record)</span><input type="text" name="summary" required placeholder="For example: added the small-events limitation; relabelled the GDM groups"></label>
       <button class="btn" data-label="Saving">Save as version ${v + 1}</button>
       <button class="btn quiet" type="button" data-action="canvasoff">Stop editing</button></form>` : ""}
+    ${await checklistHtml(d, v, canEdit || (isAuthor() && current))}
     ${tables.length ? `<p class="small muted">The tables, in this version's wording, can also be <button class="linkish" data-action="tabledocx">downloaded as a Word file</button>.</p>` : ""}
   </section>
   <section><h2>Sign-offs for version ${v}</h2>
@@ -1518,8 +1559,10 @@ document.addEventListener("click", async (ev) => {
   if (t.dataset.tab) { S.tab = t.dataset.tab; S.notice = null; await render(); $("#panel")?.focus?.(); return; }
   if (t.dataset.agent) {
     const label = t.dataset.label;
-    return act(t, () => agent(t.dataset.agent, t.dataset.args ? JSON.parse(t.dataset.args) : {}), "Done. The result is below and in the record.",
+    await act(t, () => agent(t.dataset.agent, t.dataset.args ? JSON.parse(t.dataset.args) : {}), "Done. The result is below and in the record.",
       `${label}. This can take a minute or two; the page updates when it is done.`);
+    if (t.dataset.agent === "write_draft" && S.state.draft_version) document.querySelector("[data-agent=checklist]")?.click();
+    return;
   }
   const a = t.dataset.action, s = S.state;
   switch (a) {
@@ -1529,18 +1572,38 @@ document.addEventListener("click", async (ev) => {
     case "forget": { const list = store.get(); list.splice(+t.dataset.i, 1); store.set(list); return render(); }
     case "confirm_plan": return act(t, () => command("confirm_plan", { plan_sha256: s.plan.sha }), "You confirmed the plan.");
     case "runall": {
-      const queue = pendingSteps(), failures = [];
       return act(t, async () => {
-        for (const [i, q] of queue.entries()) {
-          S.notice = { kind: "warn", text: `Running ${i + 1} of ${queue.length}: ${q.label}. Each step takes up to a minute or two.` };
-          const box = $("#status"); if (box) box.innerHTML = noticeHtml();
-          try { await agent("run_planned", q.args); } catch (e) { failures.push(`${q.label}: ${e.message}`); }
+        // Saksi completes what the plan requires: anything that failed is tried again, learning from the failure.
+        for (let round = 1; round <= 2; round++) {
+          if (round > 1) S.state = (await api(`/projects/${S.pid}`)).state;
+          const queue = pendingSteps();
+          if (!queue.length) break;
+          for (const [i, q] of queue.entries()) {
+            S.notice = { kind: "warn", text: `${round > 1 ? "Trying again, learning from the failure: " : ""}${i + 1} of ${queue.length}: ${q.label}. Each step takes up to a minute or two.` };
+            const box = $("#status"); if (box) box.innerHTML = noticeHtml();
+            try { await agent("run_planned", q.args); } catch { /* recorded; tried again next round */ }
+          }
         }
-        if (failures.length) throw new Error(`${failures.length} step${failures.length > 1 ? "s" : ""} did not finish: ${failures.join(" | ")}`);
-        await describeMissing((await api(`/projects/${S.pid}`)).state);
-      }, "All the analyses ran, in the standard order, each with its text. Check them, then accept the results.");
+        S.state = (await api(`/projects/${S.pid}`)).state;
+        await describeMissing(S.state);
+        const left = pendingSteps();
+        if (left.length) throw new Error(`Still not complete after a second attempt: ${left.map((q) => q.label).join("; ")}. Each failure and its reason is under "How each result was produced". Tell Saksi AI what to change, or ask the Analysis Agent to redraft that part of the plan.`);
+      }, "All the planned analyses ran, in the standard order, each with its text. Check them, then accept the results.");
     }
-    case "accept": return act(t, () => command("accept_analyses", { analysis_set_sha256: s.analysis_set_sha256 }), "You accepted the results.");
+    case "accept": {
+      await act(t, () => command("accept_analyses", { analysis_set_sha256: s.analysis_set_sha256 }),
+        s.authors.length > 1 ? "You accepted the results." : "You accepted the results.");
+      // When every author has accepted, Saksi goes on to write the draft.
+      if (S.state.stage === "DRAFTING" && isAuthor()) {
+        S.tab = "draft"; S.notice = { kind: "ok", text: "Every author accepted the results. Saksi is now writing the draft." };
+        await render();
+        document.querySelector("[data-agent=write_draft]")?.click();
+      } else if (S.state.stage === "ANALYSIS") {
+        const waiting = S.state.authors.filter((a) => !S.state.analyses_accepted_by.includes(a));
+        if (waiting.length) { S.notice = { kind: "ok", text: `You accepted the results. Waiting for ${waiting.map(name).join(", ")}; the draft starts as soon as they accept.` }; await render(); }
+      }
+      return;
+    }
     case "start_review": return act(t, () => command("start_review"), "The review has started.");
     case "submit_response": return act(t, () => command("submit_response"), "The response went to the reviewer.");
     case "usepoint": {
@@ -1558,6 +1621,12 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "planredraft": {
+      const m = S.planChat[+t.dataset.i], instructions = m.pending;
+      m.pending = null;
+      return act(t, () => agent("propose_plan", { instructions }), "The plan was redrafted as agreed. Check it, then confirm it.",
+        "The Analysis Agent is redrafting the plan from the protocol. This can take a minute or two.");
+    }
     case "confirmai": {
       const m = S.chat[t.dataset.key][+t.dataset.i], p = m.pending;
       m.pending = null;
@@ -1670,7 +1739,7 @@ document.addEventListener("submit", async (ev) => {
         return startGenerating();
       }
       await act(btn, async () => {
-        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
+        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, report: p.report, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
         return command("confirm_plan", { plan_sha256: r.state.plan.sha });
       }, `Your choice was saved as a revised plan, and you confirmed it.${s.authors.length > 1 ? " Your co-authors now confirm the new version." : ""}`);
       return startGenerating();
@@ -1688,7 +1757,8 @@ document.addEventListener("submit", async (ev) => {
       });
       const t1vars = val("t1vars").split(",").map((x) => x.trim()).filter(Boolean);
       const table1 = t1vars.length ? { stratify_by: val("t1by") || null, variables: t1vars } : null;
-      return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note"), table1 }); S.planEdit = false; return r; },
+      const report = { aim: val("aim"), design: val("design"), questions: p.report?.questions || [] };
+      return act(btn, async () => { const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, note: val("note"), table1, report }); S.planEdit = false; return r; },
         "Saved as a revised plan. Code re-checked every quotation against the protocol; every author now confirms it.");
     }
     case "askai": {
@@ -1702,6 +1772,19 @@ document.addEventListener("submit", async (ev) => {
       return act(btn, async () => { const r = await agent("run_request", { request_id: rid, prompt: text, based_on: id }); await describeMissing(r.state); return r; },
         "The variant ran. It is labelled exploratory, and the original analysis stays in the paper.",
         "The Analysis Agent is writing and running the variant in the sandbox. This can take a minute or two.");
+    }
+    case "planchat": {
+      const msg = val("message");
+      S.planChat = S.planChat || [];
+      S.planChat.push({ who: "you", text: msg });
+      return act(btn, async () => {
+        const r = await agent("plan_assist", { message: msg, history: S.planChat.slice(0, -1) });
+        const a = r.assist || {};
+        const entry = { who: "ai", text: [a.reply, ...(a.questions || [])].filter(Boolean).join(" ") };
+        if (a.redraft) entry.pending = a.redraft;
+        S.planChat.push(entry);
+        return r;
+      }, null, "Saksi is reading the protocol and your answer.");
     }
     case "assist": {
       const key = f.dataset.id || "_", msg = val("message");

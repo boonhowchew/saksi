@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (ASSIST, CODE, CURATOR, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, PLAN_ASSIST, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -34,6 +34,7 @@ from . import standard
 from .workflow import SYSTEM, Project, State, WorkflowError, current, included_order
 from .workflow import summarise_checks as summarise
 from . import tables as tables_mod
+from . import guidelines
 
 CURATOR_ID, ANALYST_ID, WRITER_ID = "agent:curator", "agent:analyst", "agent:writer"
 
@@ -48,6 +49,7 @@ TASKS = {
     "write": {"reasoning_effort": "medium", "max_tokens": 16000},
     "describe": {"reasoning_effort": "low", "max_tokens": 3000},
     "assist": {"reasoning_effort": "low", "max_tokens": 2500},
+    "checklist": {"reasoning_effort": "low", "max_tokens": 6000},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -253,7 +255,58 @@ class Agents:
             note = f"{asked}. {note}" if note else asked
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
                                          call=call, requested_by=requested_by, note=note,
-                                         table1=_table1_in_data(out.get("table1"), cols))
+                                         table1=_table1_in_data(out.get("table1"), cols), report=out.get("report"))
+
+    def plan_assist(self, requested_by: str, message: str, history: list[dict[str, Any]] | None = None):
+        """Saksi and the authors settle what this paper reports, before any analysis. Answers, asks, and when an
+        answer settles something, proposes instructions to redraft the plan (the page sends them on)."""
+        s = self.project.state()
+        if s.plan is None:
+            raise WorkflowError("there is no plan yet; prepare one first")
+        if not (message or "").strip():
+            raise WorkflowError("write a message")
+        protocol, _ = self._protocol_text(s)
+        d = self._dictionary(s)
+        plan = {"report": s.plan.get("report"), "table1": s.plan.get("table1"),
+                "analyses": {k: {f: a.get(f) for f in ("title", "objective", "role", "kind", "included", "exclusion_reason",
+                                                         "outcome", "exposures", "method", "unresolved", "label")}
+                             for k, a in s.plan["analyses"].items()}}
+        convo = "\n".join(f"{'AUTHOR' if m.get('who') == 'you' else 'SAKSI'}: {str(m.get('text', ''))[:800]}"
+                           for m in (history or [])[-12:])
+        user = (f"PROTOCOL:\n{protocol[:60000]}\n\nDATA DICTIONARY:\n"
+                f"{json.dumps([{'column': c.get('column'), 'label': c.get('label')} for c in d.get('dictionary') or []])[:15000]}\n\n"
+                f"CURRENT PLAN:\n{json.dumps(plan, indent=1)[:30000]}\n\nCONVERSATION SO FAR:\n{convo or '(none)'}\n\n"
+                f"AUTHOR'S NEW MESSAGE: {message}")
+        obj, call, _ = self._json_call(ANALYST_ID, "assist", PLAN_ASSIST, user, purpose="plan_assist")
+        self.project.record_model_call(ANALYST_ID, call)
+        return self.project.state(), {"reply": str(obj.get("reply") or "")[:1500],
+                                      "questions": [str(q)[:400] for q in (obj.get("questions") or [])][:3],
+                                      "redraft": str(obj.get("redraft") or "").strip()[:3000]}
+
+    def checklist(self, requested_by: str, version: int | None = None) -> State:
+        """Check a draft against the reporting guideline for the study design; quotations verified by code."""
+        s = self.project.state()
+        v = version or s.draft_version
+        if not v or v not in s.drafts:
+            raise WorkflowError("there is no draft to check")
+        design = ((s.plan_locked or {}).get("report") or {}).get("design")
+        g, items = guidelines.for_design(design), guidelines.item_list(design)
+        text = self.project.blobs.get_text(s.drafts[v]["text_sha256"])
+        user = (f"GUIDELINE: {g['name']}\n\nITEMS:\n{json.dumps(items, indent=1)}\n\nDRAFT:\n{text[:60000]}")
+        obj, call, _ = self._json_call(WRITER_ID, "checklist", CHECKLIST, user, purpose=f"checklist:{v}")
+        got = {str(x.get("id")): x for x in obj.get("items") or [] if isinstance(x, dict)}
+        out = []
+        for it in items:
+            x = got.get(it["id"], {})
+            status = x.get("status") if x.get("status") in ("reported", "partly", "missing", "not_applicable") else "missing"
+            quote = str(x.get("quote") or "")[:300]
+            found = bool(quote) and quote_found(quote, text)
+            if status in ("reported", "partly") and not found:
+                status, note = "partly" if quote else "missing", "the quotation given was not found in the draft"
+            else:
+                note = str(x.get("note") or "")[:300]
+            out.append({**it, "status": status, "quote": quote if found else "", "note": note})
+        return self.project.record_checklist(WRITER_ID, v, g["name"], out, requested_by=requested_by, call=call)
 
     QUOTE_FIELDS = (("protocol_quote", "the sentence specifying the analysis"),
                     ("primary_quote", "the sentence naming it the primary analysis"),
@@ -319,8 +372,18 @@ class Agents:
                 raise WorkflowError(f"{pid!r} is not in the confirmed plan")
             done = any(a["plan_analysis_id"] == pid and a["status"] == "ok" for a in s.analyses.values())
             if not done:
+                # Saksi completes what the plan requires: a new attempt learns from the last failed one.
+                failed = [a for a in s.analyses.values() if a["plan_analysis_id"] == pid and a["status"] != "ok"]
+                context = None
+                if failed:
+                    last = failed[-1]
+                    code = self.project.blobs.get_text(last["code_sha256"]) if self.project.blobs.has(last.get("code_sha256") or "") else ""
+                    context = (f"AN EARLIER ATTEMPT AT THIS ANALYSIS FAILED. Its error: {(last.get('error') or '')[:1500]}\n"
+                               f"Its code:\n```python\n{code[:10000]}\n```\nWrite code that avoids this failure; keep to "
+                               "the specification. If the specification truly cannot be followed with these data, return "
+                               "{\"error\": \"reason\"} saying exactly what is missing.")
                 self._run_one(requested_by, s.plan_locked["analyses"][pid], plan_analysis_id=pid,
-                              analysis_id=self._next_id(pid))
+                              analysis_id=self._next_id(pid), context=context)
                 s = self.project.state()
         return s
 
@@ -574,7 +637,7 @@ class Agents:
         shown = _for_writer(a, out, current(s)) if a.get("standard") == "data_quality" else out
         info = {"id": analysis_id, "title": a["spec"].get("title"), "label": a["label"], "basis": a.get("basis"),
                 "kind": a.get("kind"), "standard": a.get("standard"), "sample_check": a.get("sample_check"),
-                "protocol_departure": a.get("protocol_deviation")}
+                "protocol_departure": a.get("protocol_deviation"), "downgraded": a.get("downgraded")}
         user = (f"ANALYSIS:\n{json.dumps(info, indent=1)}\n\nRESULTS:\n{json.dumps(shown, indent=1)[:30000]}\n\n"
                 f"TABLE:\n{json.dumps({k: tbl[k] for k in ('title', 'columns', 'rows', 'footnotes')} if tbl else None)[:20000]}\n\n"
                 f"FIGURES:\n{json.dumps(figs, indent=1)}\n\n"
@@ -617,6 +680,7 @@ class Agents:
         results = {k: {"label": v["label"], "basis": v.get("basis"), "kind": v.get("kind"),
                        "plan_analysis_id": v["plan_analysis_id"], "spec": v["spec"],
                        "sample_check": v.get("sample_check"), "protocol_departure": v.get("protocol_deviation"),
+                       "downgraded": v.get("downgraded"),
                        "results": _for_writer(v, self.project.blobs.get_json(v["outputs_sha256"]), ok)}
                    for k, v in sorted(ok.items(), key=lambda kv: _position(kv[1]))}
         failed_brief = {k: {"label": v["label"], "plan_analysis_id": v["plan_analysis_id"],
@@ -632,6 +696,10 @@ class Agents:
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
+                f"REPORT (what this paper answers, confirmed with the plan):\n"
+                f"{json.dumps((s.plan_locked or {}).get('report'), indent=1)}\n\n"
+                f"REPORTING GUIDELINE: {guidelines.for_design(((s.plan_locked or {}).get('report') or {}).get('design'))['name']}\n"
+                f"{json.dumps(guidelines.item_list(((s.plan_locked or {}).get('report') or {}).get('design')), indent=1)}\n\n"
                 f"PLANNED ANALYSES THAT FAILED:\n{json.dumps(failed_brief, indent=1)}\n\n"
                 f"PROTOCOL ANALYSES NOT PERFORMED IN THIS PAPER (authors' decision, with reasons):\n"
                 f"{json.dumps(not_performed(s), indent=1)}\n\n"

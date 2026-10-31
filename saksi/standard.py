@@ -189,6 +189,21 @@ def kind_of(spec: dict[str, Any]) -> str:
     return k if k in KIND_ORDER else infer_kind(spec)
 
 
+REPORT_DESIGNS = ("cross_sectional", "cohort", "case_control", "rct", "diagnostic_accuracy", "prediction_model",
+                  "systematic_review", "qualitative", "other")
+
+
+def clean_report(raw: Any) -> dict[str, Any] | None:
+    """What this paper is about: its aim (one or two sentences), the study design (which sets the reporting guideline)
+    and Saksi's open questions for the authors."""
+    if not isinstance(raw, dict):
+        return None
+    aim = str(raw.get("aim") or "").strip()[:800]
+    design = raw.get("design") if raw.get("design") in REPORT_DESIGNS else "other"
+    qs = [str(q).strip()[:400] for q in (raw.get("questions") or []) if str(q).strip()][:8]
+    return {"aim": aim, "design": design, "questions": qs} if (aim or qs or raw.get("design")) else None
+
+
 def position(a: dict[str, Any]) -> tuple[int, int]:
     """Reporting order: data quality, Table 1, descriptive, univariable, multivariable, other, post hoc.
     A redone analysis keeps the place of the one it replaced (order_seq)."""

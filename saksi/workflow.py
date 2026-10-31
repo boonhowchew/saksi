@@ -41,7 +41,7 @@ from .blobs import BlobStore
 from .canonical import sha256_bytes, sha256_obj
 from .design import assess, sample_check
 from .figures import saksi_figures
-from .standard import KIND_ORDER, STEPS, clean_table1, infer_kind, kind_of, position
+from .standard import KIND_ORDER, STEPS, clean_report, clean_table1, infer_kind, kind_of, position
 from .documents import extract_text
 from .events import Event, EventLog
 from .tracing import CITE, SENTENCE, trace
@@ -188,13 +188,13 @@ def apply(s: State, ev: Event) -> State:
         s.plan = {"sha": p["plan_sha256"], "analyses": analyses, "protocol_ref": p.get("protocol_ref"),
                   "order": p.get("order") or sorted(p["analyses"]), "by": ev.actor_id, "seq": ev.seq,
                   "note": p.get("note"), "changes": p.get("changes"), "requested_by": p.get("requested_by"),
-                  "table1": p.get("table1")}
+                  "table1": p.get("table1"), "report": p.get("report")}
         s.plan_confirmed_by = set()
     elif t == "plan.confirmed":
         s.plan_confirmed_by.add(ev.actor_id)
     elif t == "plan.locked":
         s.plan_locked = {"sha": p["plan_sha256"], "analyses": s.plan["analyses"], "order": s.plan["order"],
-                         "table1": s.plan.get("table1"), "seq": ev.seq}
+                         "table1": s.plan.get("table1"), "report": s.plan.get("report"), "seq": ev.seq}
     elif t == "analysis.requested":
         pass  # kept in the log for attribution; results arrive as analysis.completed
     elif t == "analysis.completed":
@@ -208,6 +208,9 @@ def apply(s: State, ev: Event) -> State:
             s.analyses[p["analysis_id"]]["order_seq"] = old.get("order_seq", old["seq"])
         s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
         _number_figures(s)
+    elif t == "checklist.assessed":
+        if p["version"] in s.drafts:
+            s.drafts[p["version"]]["checklist"] = p | {"seq": ev.seq}
     elif t == "analysis.withdrawn":
         s.analyses[p["analysis_id"]]["withdrawn"] = {"reason": p["reason"], "by": ev.actor_id, "seq": ev.seq}
         _number_figures(s)
@@ -409,7 +412,8 @@ class Project:
 
     def propose_plan(self, by: str, analyses: list[dict[str, Any]], protocol_ref: str | None,
                      call: dict[str, Any] | None = None, requested_by: str | None = None,
-                     note: str | None = None, table1: dict[str, Any] | None = None) -> State:
+                     note: str | None = None, table1: dict[str, Any] | None = None,
+                     report: dict[str, Any] | None = None) -> State:
         """A plan from the Analysis Agent, or a revision by an author. Authors decide which protocol
         analyses this paper includes; leaving one out needs a reason, which the record and the draft keep."""
         s = self.state()
@@ -452,10 +456,11 @@ class Project:
         order = [x["id"] for x in analyses]          # protocol order; dict keys are sorted when hashed
         changes = _plan_changes(s.plan, plan) if s.plan else None
         t1 = clean_table1(table1)
-        hashed = {"analyses": plan, "order": order} | ({"table1": t1} if t1 else {})
+        rep = clean_report(report)
+        hashed = {"analyses": plan, "order": order} | ({"table1": t1} if t1 else {}) | ({"report": rep} if rep else {})
         call_seq = self._log_call(by, call)
         self._emit(by, "plan.proposed", {"analyses": plan, "order": order, "note": note, "changes": changes,
-                                         "table1": t1, "plan_sha256": sha256_obj(hashed),
+                                         "table1": t1, "report": rep, "plan_sha256": sha256_obj(hashed),
                                          "protocol_ref": protocol_ref, "llm_call_seq": call_seq,
                                          "requested_by": requested_by})
         return self.state()
@@ -548,6 +553,12 @@ class Project:
         outputs = self.blobs.get_json(outputs_sha256) if status == "ok" and outputs_sha256 \
             and self.blobs.has(outputs_sha256) else None
         check = sample_check(planned.get("design") if planned else None, outputs)
+        # Author's definition (31 Oct): a pre-specified primary analysis is confirmatory only if the completed study
+        # reached the sample its protocol planned. Decided by code from the counts analysed, never the estimates.
+        downgraded = None
+        if label == "confirmatory" and check and check.get("shortfall"):
+            label, downgraded = "exploratory", ("the achieved sample fell short of the sample the protocol planned, so the "
+                                                "study could not answer its question with the power it planned")
         basis = "standard approach" if standard else "pre-specified" if planned else "post hoc"
         figs = self._figures(s, analysis_id, spec, outputs, label, basis, figures or [], replacing=supersedes) \
             if outputs is not None and not standard else []
@@ -556,7 +567,7 @@ class Project:
             "analysis_id": analysis_id, "plan_analysis_id": plan_analysis_id, "label": label,
             "basis": basis, "standard": standard, "kind": standard or (planned or {}).get("kind") or (spec.get("kind") if spec.get("kind") in KIND_ORDER else "other"),
             "primary_basis": ((planned or {}).get("design") or {}).get("primary_basis"),
-            "supersedes": supersedes, "redo_reason": redo_reason,
+            "supersedes": supersedes, "redo_reason": redo_reason, "downgraded": downgraded,
             "protocol_deviation": ((planned or {}).get("design") or {}).get("deviation"),
             "sample_check": check, "figures": figs,
             "spec": spec, "code_sha256": code_sha256, "outputs_sha256": outputs_sha256,
@@ -583,7 +594,7 @@ class Project:
         made = [f for f in made if f["svg_sha256"] not in seen_svg
                 and not (f.get("flow_counts") and tuple(f["flow_counts"]) in seen_flow)]
         # The label is Saksi's fact, so Saksi states it on captions written by analysis code.
-        prefix = "" if label == "confirmatory" else f"Exploratory ({basis}) analysis. "
+        prefix = ""      # the label belongs in the text, not in captions (author's decision, 31 Oct)
         for f in from_code:
             if not self.blobs.has(f.get("svg_sha256", "")):
                 continue
@@ -595,7 +606,7 @@ class Project:
         for i, f in enumerate(made, start=len(s.figures) + 1):
             cited = " ".join(f"{x.strip().rstrip('.')} [A:{analysis_id}]."      # cite inside every sentence
                              for x in SENTENCE.split(f["caption"]) if x.strip())
-            r = trace(cited, {analysis_id: {"label": label}}, {analysis_id: outputs},
+            r = trace(cited, {analysis_id: {"label": "descriptive"}}, {analysis_id: outputs},
                       [rows] if rows else [])
             out.append({**f, "number": i, "label": label, "caption_check": summarise_checks(r),
                         "warning": f.get("warning")})
@@ -636,16 +647,34 @@ class Project:
                                                "requested_by": requested_by, "llm_call_seq": call_seq})
         return self.state()
 
+    def record_checklist(self, by: str, version: int, guideline: str, items: list[dict[str, Any]],
+                         requested_by: str, call: dict[str, Any] | None = None) -> State:
+        """The reporting-guideline check of one draft version, by the Writing Agent; quotations verified by code."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        if version not in s.drafts:
+            raise WorkflowError(f"no draft version {version}")
+        call_seq = self._log_call(by, call)
+        self._emit(by, "checklist.assessed", {"version": version, "guideline": guideline,
+                                               "items_sha256": self.blobs.put_json(items), "requested_by": requested_by,
+                                               "summary": {k: sum(1 for i in items if i["status"] == k)
+                                                           for k in ("reported", "partly", "missing", "not_applicable")},
+                                               "llm_call_seq": call_seq})
+        return self.state()
+
     def accept_analyses(self, by: str, analysis_set_sha256: str) -> State:
         s = self.state()
         self._require_role(s, by, "author")
         self._require_stage(s, "ANALYSIS")
         if analysis_set_sha256 != s.analysis_set_sha():
             raise WorkflowError("the analyses have changed since you reviewed them")
-        missing = [k for k in s.plan_locked["analyses"]
+        # Only the analyses this paper includes; those the authors left out of the plan are reported as not performed.
+        missing = [k for k in included_order(s.plan_locked)
                    if not any(a["plan_analysis_id"] == k and a["status"] == "ok" for a in s.analyses.values())]
         if missing:
-            raise WorkflowError(f"planned analyses not yet completed successfully: {', '.join(missing)}")
+            raise WorkflowError("some planned analyses have not run successfully yet: " + ", ".join(missing)
+                                + ". Generate the Results again to complete them.")
         self._emit(by, "analyses.accepted", {"analysis_set_sha256": analysis_set_sha256})
         s = self.state()
         if set(s.authors) <= s.analyses_accepted_by.get(analysis_set_sha256, set()):
@@ -1001,7 +1030,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",
     "review.item_added": "review_comments", "review.item_verdict": "review_verdicts",

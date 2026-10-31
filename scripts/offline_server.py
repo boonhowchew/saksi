@@ -55,9 +55,9 @@ As pre-specified in the protocol, a multivariable logistic regression was fitted
 ## Results
 Table 1 describes the {t1['n_analysed']} women by GDM status; those with GDM were slightly older and more often had previous GDM [A:s_table1.r1].
 
-Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3) [A:primary]. Table 2 and Figure 1 give the adjusted estimates. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
+Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3) [A:primary]. Because the achieved sample fell short of the plan, this pre-specified primary analysis is reported as exploratory. Table 2 and Figure 1 give the adjusted estimates. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
-The model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope (Figure 2) {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
+The exploratory model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope (Figure 2) {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
 
 In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (the same as in Table 2) [A:x_q1].
 
@@ -78,8 +78,12 @@ REVIEW1 = {"primary_claim": "Booking BMI was not clearly associated with GDM aft
                 "why_it_matters": "Readers over-interpret non-significant results."}]}
 REVIEW2 = {"primary_claim": "Unchanged.", "summary": "R1 is dealt with in the Discussion.", "points_of_inquiry": [],
            "item_assessments": [{"item_id": "R1", "assessment": "addressed", "quote": LIMIT[:70], "note": "A limitation now states this."}]}
+PLAN_OUT = {"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable"), AUC_PLAN], "table1": TABLE1,
+            "report": {"aim": "Is booking BMI associated with gestational diabetes, independent of age, parity and previous GDM?",
+                       "design": "cohort", "questions": ["Should this paper also report the discrimination of the model?"]}}
 model = ScriptedModel({"curate": [CURATOR_REPLY],
-                       "plan": [{"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable"), AUC_PLAN], "table1": TABLE1}],
+                       # the first plan, then the redraft agreed in the plan conversation
+                       "plan": [PLAN_OUT, PLAN_OUT],
                        # the planned analyses; then, from the walk-through's AI boxes, a variant and a redo
                        "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED), fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
 root = tempfile.mkdtemp()

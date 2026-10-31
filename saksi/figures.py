@@ -201,7 +201,7 @@ def saksi_figures(spec: dict[str, Any], outputs: dict[str, Any], rows: int | Non
                   label: str, basis: str | None) -> list[dict[str, str]]:
     """The figures Saksi draws itself for one analysis, with captions built from recorded numbers only."""
     figs = []
-    prefix = "" if label == "confirmatory" else f"Exploratory ({basis or 'unspecified'}) analysis. "
+    prefix = ""      # the label belongs in the text, not in captions or headings (author's decision, 31 Oct)
     title = spec.get("title") or spec.get("id") or "the analysis"
     fp = forest_svg(outputs.get("estimates") or [])
     if fp:

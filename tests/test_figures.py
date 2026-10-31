@@ -47,10 +47,10 @@ def test_required_figure_is_chosen_by_rule():
     assert required_figure({"method": "multivariable logistic regression", "effect_measure": "odds ratio"}) is None
 
 
-def test_saksi_captions_say_exploratory_and_pass_the_number_check():
+def test_saksi_captions_carry_no_label_and_pass_the_number_check():
     figs = saksi_figures({"title": "BMI and GDM"}, {"estimates": ORS, "n_analysed": 388}, 400, "exploratory", "post hoc")
     assert [f["name"] for f in figs] == ["forest_plot", "participant_flow"]
     for f in figs:
-        assert f["caption"].startswith("Exploratory (post hoc) analysis.")
-        r = trace(f["caption"] + " [A:a]", {"a": {"label": "exploratory"}}, {"a": {}})
+        assert "xploratory" not in f["caption"]                # the label belongs in the text (author, 31 Oct)
+        r = trace(f["caption"] + " [A:a]", {"a": {"label": "descriptive"}}, {"a": {}})
         assert r["ok"], r

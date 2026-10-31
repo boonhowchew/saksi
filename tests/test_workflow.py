@@ -101,7 +101,7 @@ def test_cannot_accept_until_planned_analyses_succeed(proj):
     to_analysis(proj)
     s = proj.complete_analysis("agent:analyst", "primary", plan_analysis_id="primary", spec={}, code_sha256=SHA,
                                outputs_sha256=None, execution={}, status="error", error="did not converge")
-    with pytest.raises(WorkflowError, match="not yet completed"):
+    with pytest.raises(WorkflowError, match="have not run successfully yet"):
         proj.accept_analyses("bhc", s.analysis_set_sha())
 
 

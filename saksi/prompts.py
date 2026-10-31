@@ -109,6 +109,10 @@ Return ONLY a JSON object:
     "unresolved": [str]
   }],
   "protocol_items_not_analysable": [str],
+  "report": {"aim": "the question this paper answers, in one or two sentences, from the protocol's objectives",
+             "design": "cross_sectional|cohort|case_control|rct|diagnostic_accuracy|prediction_model|systematic_review|qualitative|other",
+             "questions": ["what you need the authors to decide for this paper, for example which objective is its main
+                           question, an outcome definition, the population, or a variable with no clear column"]},
   "table1": {"stratify_by": "column or null", "variables": ["column", ...], "why": "one sentence"}
 }"""
 
@@ -173,10 +177,19 @@ Rules:
   A sentence may carry more than one tag.
 - Whether each 95% interval includes the null value (no association) is given in INTERVAL FACTS, computed by code.
   Follow it; never judge it from rounded numbers.
-- Describe each analysis exactly as labelled. "confirmatory" means the pre-specified primary analysis that the study
-  was designed and powered for. "exploratory" means anything else: pre-specified secondary analyses (basis
-  "pre-specified") and analyses added after the plan was confirmed (basis "post hoc"). Every sentence about an
-  exploratory analysis must contain the word "exploratory", and say whether it was pre-specified or post hoc.
+- Labels, decided by code: "confirmatory" means the pre-specified primary analysis, and the completed study reached
+  the sample its protocol planned for it. "exploratory" means anything else: analyses not pre-specified as primary
+  in the protocol (pre-specified secondary analyses, and analyses added after the plan), and a primary analysis
+  whose achieved sample fell short of the plan ("downgraded" gives the reason).
+- Put the labels in the text, never in a heading or title. Do not use the word "confirmatory" as a label; for the
+  primary analysis whose planned sample was reached, say it was the pre-specified primary analysis and state the
+  planned and achieved numbers from sample_check, showing the study had the size it planned to answer its question.
+  For an exploratory analysis, say "exploratory" in the text, and say why (not pre-specified as primary, added after
+  the results were seen, or the sample fell short of the plan).
+- Follow the reporting guideline in REPORTING GUIDELINE: report each of its Methods, Results and Discussion items
+  that the results support, and put "[Authors: ...]" for items only the authors can supply (setting, recruitment
+  dates, ethics, how variables were measured).
+- The report's aim is in REPORT: write to answer it.
 - If an analysis has a sample_check with a shortfall, state the planned and the achieved numbers from it in the
   Results, citing that analysis, and treat the shortfall as a limitation.
 - If an analysis has a protocol_departure, disclose it in Methods or Results in a sentence that cites that analysis:
@@ -317,8 +330,16 @@ Otherwise write the Results text for this analysis: one short paragraph, two at 
   at most.
 - Use ONLY numbers in RESULTS or TABLE, as shown or rounded from them. Do not calculate new numbers.
 - End every sentence that contains a number with [A:<id>], using the id in ANALYSIS.
-- If ANALYSIS.label is "exploratory", say "exploratory". If sample_check shows a shortfall, give the planned and
-  achieved numbers. If there is a protocol_departure, say so in a sentence that mentions the protocol and the
+- Labels, decided by code: "confirmatory" means the pre-specified primary analysis, and the completed study reached
+  the sample its protocol planned for it. "exploratory" means anything else: analyses not pre-specified as primary
+  in the protocol (pre-specified secondary analyses, and analyses added after the plan), and a primary analysis
+  whose achieved sample fell short of the plan ("downgraded" gives the reason).
+- Put the labels in the text, never in a heading or title. Do not use the word "confirmatory" as a label; for the
+  primary analysis whose planned sample was reached, say it was the pre-specified primary analysis and state the
+  planned and achieved numbers from sample_check, showing the study had the size it planned to answer its question.
+  For an exploratory analysis, say "exploratory" in the text, and say why (not pre-specified as primary, added after
+  the results were seen, or the sample fell short of the plan).
+- If sample_check shows a shortfall, give the planned and achieved numbers. If there is a protocol_departure, say so in a sentence that mentions the protocol and the
   primary analysis.
 - Whether each 95% CI includes its null value is in INTERVAL FACTS, computed by code. Rely on it. If the interval
   includes the null, do not call the result an association or a difference.
@@ -354,7 +375,31 @@ Reply with ONLY a JSON object:
             "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
             "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""
 
-TEMPLATES = {"curator": CURATOR, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+PLAN_ASSIST = """You are Saksi, helping the authors settle what this particular paper reports, before any analysis runs.
+You see the protocol, the data dictionary, the current plan (its aim, design, analyses with their roles and checks,
+and your open questions) and the conversation so far. A protocol often has several objectives; one paper may report
+some of them. Help the authors decide the paper's aim, its main question, the outcome and exposure definitions, the
+population and the analyses, in line with the protocol and good epidemiological practice.
+
+- Answer briefly and ask at most two clear questions at a time, each one the authors can answer in a sentence.
+- Never suggest choosing analyses because of results (none exist yet) or departing from the protocol without saying
+  that it is a departure that the paper must disclose.
+- When the authors' answers settle something, set "redraft" to precise instructions for the Analysis Agent, which
+  redrafts the plan from the protocol (for example: "This paper reports objectives 1 and 2 only; the main question
+  is objective 1, booking BMI and GDM; leave out objectives 3 to 5 as reported elsewhere"). Otherwise leave it empty.
+
+Reply with ONLY a JSON object: {"reply": "your answer, 1 to 4 sentences", "questions": ["..."], "redraft": "instructions or empty"}"""
+
+CHECKLIST = """You check a manuscript draft against a reporting guideline. For each ITEM, decide whether the draft reports
+it: "reported", "partly" (some of it), "missing", or "not_applicable" (it does not apply to this study or section).
+For "reported" or "partly", give a short verbatim quotation from the draft (copied exactly, a few words) where it is
+reported; a program checks that the quotation is in the draft. For "missing" or "partly", say in a few words what is
+needed and whether the authors must supply it ("[Authors]") or the results already contain it.
+
+Reply with ONLY a JSON object: {"items": [{"id": "M1", "status": "reported|partly|missing|not_applicable",
+"quote": "exact words or empty", "note": "what is missing, or empty"}]}"""
+
+TEMPLATES = {"curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 
