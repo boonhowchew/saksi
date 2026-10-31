@@ -133,6 +133,9 @@ section.advisor ul.sugg li.note { border-left-color: var(--rule); background: #F
 section.advisor ul.sugg li .btn { margin-left: .4rem; padding: .2rem .6rem; font-size: .82rem; }
 .reportbox { border: 1px solid var(--indigo); border-radius: 8px; padding: .4rem 1rem .8rem; background: #F7F8FC; }
 .reportbox h2 { margin-top: .4rem; }
+ol.qa li { margin: .5rem 0; }
+ol.qa .answer { margin: .25rem 0; padding: .3rem .6rem; background: var(--verdigris-wash); border-radius: 4px; }
+section.prep { border: 1px solid var(--rule); border-radius: 8px; padding: .3rem 1rem .8rem; }
 details.alldetails > summary { font: 600 1.05rem var(--sans); cursor: pointer; padding: .4rem 0; }
 .restext { border-left: 3px solid var(--verdigris); background: var(--verdigris-wash); padding: .5rem .8rem; margin: .6rem 0 .8rem; border-radius: 0 4px 4px 0; }
 .restext .manuscript-view { max-width: none; font-size: 1rem; }
@@ -654,14 +657,16 @@ async function materials() {
     : `<div class="file missing"><div class="head"><span class="kind">${label}</span><span>${missing}</span></div></div>`;
   const others = s.materials.filter((m) => m !== ds && m !== pr);
   const status = (m) => m.withdrawn ? `Removed by ${esc(name(m.withdrawn.by))}: ${esc(m.withdrawn.reason)}`
+    : ds?.prepared_from === m.sha256 ? "The original upload, kept unchanged; the prepared copy made from it is in use"
     : ["dataset", "protocol"].includes(m.kind) ? "Not used: a later upload replaced it" : "Supporting document";
   let rep = "";
-  const r = ds && s.curator_reports.filter((x) => x.material_sha256 === ds.sha256).at(-1);
+  const rawDs = ds?.prepared_from ? s.materials.find((m) => m.sha256 === ds.prepared_from) || ds : ds;
+  const r = rawDs && s.curator_reports.filter((x) => x.material_sha256 === rawDs.sha256).at(-1);
   if (r) {
     const full = await blobJSON(r.report_sha256);
     if (full) {
       const sev = { high: "bad", medium: "attn", low: "" };
-      rep = `<section><h2>Data Curator's report on ${esc(ds.filename)}</h2>
+      rep = `<section><h2>Data Curator's report on ${esc(rawDs.filename)}</h2>
         <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
         <p>${esc(full.summary)}</p>
         ${full.flags?.length ? `<details ${full.flags.some((f) => f.severity === "high") ? "open" : ""}><summary>${full.flags.length} things for the authors to check${full.flags.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
@@ -686,7 +691,46 @@ async function materials() {
       <button class="btn" data-label="Uploading">Upload</button></form></section>` : ""}
   ${others.length ? `<section><h2>Other files</h2><div class="tablewrap"><table><thead><tr><th>What</th><th>File</th><th>Status</th><th>Read by Saksi</th></tr></thead><tbody>
     ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="small">${status(m)}${canEdit && !m.withdrawn ? removeControl(m) : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
-  ${rep}`;
+  ${rep}
+  ${await preparationHtml(canEdit, rawDs, ds)}`;
+}
+
+async function preparationHtml(canEdit, raw, ds) {
+  const s = S.state;
+  if (!raw) return "";
+  const prop = s.preparations.filter((p) => p.source_sha256 === raw.sha256).at(-1);
+  const prep = ds?.preparation;
+  if (!prop && !prep && !canEdit) return "";
+  const stepDetail = (st) => ({ drop_columns: () => st.columns.join(", "), missing_codes: () => `${st.codes.join(", ")} in ${st.columns.join(", ") === "*" ? "every column" : st.columns.join(", ")}`,
+    valid_range: () => `${st.column}: keep ${st.min ?? "any"} to ${st.max ?? "any"}`, recode: () => `${st.column}: ${Object.entries(st.mapping).map(([a, b]) => `${a} → ${b}`).join(", ")}`,
+    derive_threshold: () => `${st.new} = ${st.column} ${st.op} ${st.value}`, derive_any: () => `${st.new} = any of ${st.columns.join(", ")}`,
+    drop_duplicates: () => st.columns?.length ? `by ${st.columns.join(", ")}` : "identical records", exclude_missing: () => `records with no ${st.column}` }[st.type] || (() => ""))();
+  let h = `<section class="prep"><h2 class="step"><span class="aibadge">AI</span>Preparing the data <span class="who">Saksi proposes how to clean the raw file and you choose; Saksi's own code applies your choice to a copy. The original is kept, and every step is recorded for the reviewer and the readers.</span></h2>`;
+  if (prep) {
+    h += `<div class="msg ok small"><strong>The prepared dataset is in use: ${esc(ds.filename)}</strong>. From ${esc(prep.source_filename)}: ${esc(prep.rows_before)} records and ${esc(prep.columns_before)} columns became ${esc(prep.rows_after)} records and ${esc(prep.columns_after)} columns. Applied by ${esc(name(ds.by))}, ${fmtTime(s.materials.find((m) => m.sha256 === ds.sha256)?.ts || "")}${prep.note ? `: “${esc(prep.note)}”` : ""}.</div>
+      <p class="small"><strong>What was done, in order</strong></p>
+      <ol class="small">${prep.log.map((x) => `<li><strong>${esc(x.title)}.</strong> ${esc(x.effect)}.${x.reason ? ` <span class="muted">Why: ${esc(x.reason)}</span>` : ""}</li>`).join("")}</ol>
+      ${prep.skipped?.length ? `<p class="small muted">Proposed but not applied, by the authors' choice: ${esc(prep.skipped.join(", "))}.</p>` : ""}
+      ${canEdit && s.plan && s.plan.seq < (s.materials.find((m) => m.sha256 === ds.sha256)?.seq || 0) ? `<p class="small">The plan was drafted from the original data. <button class="btn quiet" data-agent="propose_plan" data-args='${esc(JSON.stringify({ instructions: "Use the prepared dataset now in use, including any columns derived in its preparation." }))}' data-label="Redrafting the plan">Redraft the plan with the prepared data</button></p>` : ""}
+      ${canEdit ? `<details class="small"><summary>Go back to the original data</summary><form class="stack" data-form="withdraw"><input type="hidden" name="sha" value="${esc(ds.sha256)}">
+        <label><span>Why (kept in the record)</span><input type="text" name="reason" required></label><div><button class="btn quiet" data-label="Removing">Remove the prepared file</button></div></form></details>` : ""}`;
+  }
+  if (prop && canEdit && (!prep || prop.seq > prep.proposal_seq)) {
+    h += `<p class="small">${prep ? "<strong>Saksi's latest proposal</strong> (applying it makes a new prepared file from the original). " : ""}${esc(prop.summary)}
+      <span class="muted">Proposed by the ${esc(name(prop.by))} for ${esc(name(prop.requested_by))}${prop.instructions ? `, as asked: “${esc(prop.instructions)}”` : ""}.</span></p>
+      ${prop.steps.length ? `<form data-form="applyprep"><div class="tablewrap"><table><thead><tr><th>Apply</th><th>Step</th><th>Details</th><th>Why</th></tr></thead><tbody>
+        ${prop.steps.map((st) => `<tr><td class="inc"><input type="checkbox" name="step" value="${esc(st.id)}" checked aria-label="Apply ${esc(st.title)}"></td>
+          <td>${esc(st.title)}</td><td class="small">${esc(stepDetail(st))}</td><td class="small">${esc(st.reason)}</td></tr>`).join("")}</tbody></table></div>
+        <label class="small"><span>Note for the record (optional)</span><input type="text" name="note"></label>
+        <div style="margin-top:.5rem"><button class="btn" data-label="Preparing the data">Apply the ticked steps</button></div></form>` : `<p class="small">Saksi proposes no changes.</p>`}
+      ${prop.problems?.length ? `<p class="small muted">Left out of the proposal because they named columns not in the data: ${esc(prop.problems.join("; "))}.</p>` : ""}`;
+  }
+  if (canEdit) {
+    h += prop || prep ? `<form class="chatform" data-form="prepchat"><span class="aibadge">AI</span><input type="text" name="message" required autocomplete="off" aria-label="Instruction to Saksi about preparing the data"
+        placeholder="Tell Saksi what to change, for example: also derive BMI above 27 kg/m2 from B.BMI"><button class="btn" data-label="Saksi is preparing a new proposal">Send</button></form>`
+      : `<p class="small">Saksi has not looked at preparing these data yet. <button class="btn" data-agent="prepare_data" data-label="Saksi is preparing a proposal">Ask Saksi to prepare the data</button></p>`;
+  }
+  return h + `</section>`;
 }
 
 /* Plan */
@@ -757,7 +801,11 @@ function reportBox(p, canTalk) {
   return `<section class="reportbox"><h2 class="step">What this paper reports <span class="who">Settled with the authors before any analysis; the Writing Agent writes to it.</span></h2>
     <dl class="facts"><dt>Aim</dt><dd>${r.aim ? esc(r.aim) : `<span class="muted">Not stated yet. Tell Saksi below, or ask for a new draft.</span>`}</dd>
       <dt>Study design</dt><dd>${esc(DESIGN_NAMES[design])}: the paper is written and checked against the <strong>${esc(GUIDELINE[design])}</strong> reporting guideline.</dd></dl>
-    ${qs.length ? `<p class="small"><strong>Saksi's questions for you</strong></p><ol class="small">${qs.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>` : ""}
+    ${qs.length ? `<p class="small"><strong>Saksi's questions for you</strong> <span class="muted">Your answers are recorded under your name and used by Saksi from then on: in the plan, the data preparation, the analyses and the text.</span></p>
+      <ol class="small qa">${qs.map((q) => { const ans = S.state.answers.filter((a) => a.question === q);
+        return `<li>${esc(q)}${ans.map((a) => `<div class="answer"><strong>${esc(name(a.by))}:</strong> ${esc(a.answer)}</div>`).join("")}
+          ${isAuthor() && S.state.stage !== "FINAL" ? `<form class="chatform" data-form="answerq" data-q="${esc(q)}"><input type="text" name="answer" required autocomplete="off" aria-label="Your answer" placeholder="${ans.length ? "Add to the answer" : "Your answer"}"><button class="btn quiet" data-label="Saving">Answer</button></form>` : ""}</li>`; }).join("")}</ol>
+      ${canTalk && S.state.answers.some((a) => a.seq > p.seq) ? `<p class="small"><button class="btn" data-agent="propose_plan" data-args='${esc(JSON.stringify({ instructions: "Follow the authors' answers to Saksi's questions." }))}' data-label="Redrafting the plan">Redraft the plan with these answers</button></p>` : ""}` : ""}
     ${canTalk ? `<div class="chat">${(S.planChat || []).map((m, i) => `<p class="cm ${m.who}"><strong>${m.who === "you" ? "You" : "Saksi AI"}:</strong> ${esc(m.text)}
         ${m.pending ? `<button class="linkish" data-action="planredraft" data-i="${i}" data-label="Redrafting">Yes, redraft the plan this way</button>` : ""}</p>`).join("")}
       <form class="chatform" data-form="planchat"><span class="aibadge">AI</span><input type="text" name="message" required autocomplete="off" aria-label="Message to Saksi about this paper"
@@ -1680,7 +1728,7 @@ document.addEventListener("click", async (ev) => {
     }
     case "suggest": {
       const x = S.sugg.list[+t.dataset.i];
-      if (x.action.type === "table1") { const f = document.querySelector("form[data-form=t1change]"); f?.scrollIntoView({ block: "center" }); f?.querySelector("textarea")?.focus(); return; }
+      if (x.action.type === "table1" && !(x.action.variables || []).length) { const f = document.querySelector("form[data-form=t1change]"); f?.scrollIntoView({ block: "center" }); f?.querySelector("textarea")?.focus(); return; }
       return act(t, () => runProposal(x.action, x.title), "Done. The result is below, with its text.", "Saksi is working on it. An analysis can take a minute or two.");
     }
     case "savedesc": {
@@ -1776,10 +1824,19 @@ document.addEventListener("submit", async (ev) => {
       if (val("note")) form.append("note", val("note"));
       return act(btn, () => api(`/projects/${S.pid}/materials`, { method: "POST", form }), "Uploaded.");
     }
-    case "prepare": return act(btn, () => agent("prepare_plan", val("instructions") ? { instructions: val("instructions") } : {}),
-      "The plan is ready. Tick the analyses this paper includes, then confirm it.",
-      "The Data Curator is checking the data, then the Analysis Agent will draft the plan. This takes a few minutes; the page updates when it is done.")
-      .then(() => { if (S.state?.plan) { S.tab = "plan"; return render(); } });
+    case "prepare": return act(btn, async () => {
+        const r = await agent("prepare_plan", val("instructions") ? { instructions: val("instructions") } : {});
+        try { await agent("prepare_data"); } catch { /* the Data tab offers it again */ }
+        return r;
+      }, "Saksi checked the data, proposed how to prepare it, and drafted the plan. Start with the data preparation below, then the plan.",
+      "The Data Curator is checking the data; then Saksi proposes how to prepare it and drafts the plan. This takes a few minutes.")
+      .then(() => { if (S.state?.preparations?.length) { S.tab = "materials"; return render(); } if (S.state?.plan) { S.tab = "plan"; return render(); } });
+    case "applyprep": return act(btn, () => command("prepare_dataset", { step_ids: fd.getAll("step").map(String), note: val("note") }),
+      "The prepared dataset is now in use. The original is kept, and each step is recorded with what it did.");
+    case "prepchat": return act(btn, () => agent("prepare_data", { instructions: val("message") }),
+      "Saksi made a new proposal. Tick the steps you want, then apply them.", "Saksi is reading the Data Curator's findings and your instruction.");
+    case "answerq": return act(btn, () => command("answer_question", { question: f.dataset.q, answer: val("answer") }),
+      s.stage === "INGEST" ? "Your answer is recorded. Saksi uses it from now on; you can redraft the plan with it." : "Your answer is recorded under your name. Saksi uses it in the analyses and the text from now on.");
     case "withdraw": return act(btn, () => command("withdraw_material", { sha256: val("sha"), reason: val("reason") }), "The file was removed. Its name, fingerprint and your reason stay in the record.");
     case "planconfirm": {
       const p = s.plan, changed = [];

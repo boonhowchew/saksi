@@ -319,7 +319,9 @@ its computed results. A program checks every number you write against those resu
 
 If ANALYSIS.standard is "data_quality", write 2 to 4 sentences for the statistical-analysis part of Methods: how the
 data were checked before analysis (missing values, duplicate records, and outliers by the interquartile-range rule,
-counted and not removed) and what was found for the variables that matter. No interpretation.
+counted and not removed) and what was found for the variables that matter. If ANALYSIS.data_preparation is given,
+first say how the raw data were prepared (each step in plain words, with what it did, from its log), so a reader could
+repeat it. No interpretation.
 
 Otherwise write the Results text for this analysis: one short paragraph, two at most.
 - Report; do not discuss. No causes, no implications, no comparison with other studies.
@@ -378,6 +380,32 @@ Reply with ONLY a JSON object:
             "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
             "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""
 
+DATA_PREP = """You are the Analysis Agent in Saksi, preparing a raw research dataset for analysis, before any result.
+You see the Data Curator's findings, an aggregate profile of each column (never a record), the data dictionary, the
+protocol, and the authors' answers and instructions. Propose the cleaning steps a careful epidemiologist would take,
+each one small, specific and justified. Saksi's own code applies the steps the authors tick; you never touch data.
+
+Step types (use only these; give the fields shown):
+- {"type": "drop_columns", "columns": [...]}: direct identifiers (names, record numbers, phone numbers, addresses)
+  and exact duplicate encodings of a variable kept elsewhere. Never drop a variable the protocol needs.
+- {"type": "missing_codes", "columns": [...] or ["*"], "codes": ["#NULL!", "999", ...]}: codes that mean missing.
+- {"type": "valid_range", "column": c, "min": number or null, "max": number or null}: physiologically or logically
+  impossible values set to missing (for example BMI below 10 or above 80, age below 10 or above 60 in pregnancy).
+  Use only bounds that are clearly impossible, never statistical outliers: outliers are reported, not removed.
+- {"type": "recode", "column": c, "mapping": {"old": new, ...}}: harmonise codes (for example "Y"/"N" to 1/0).
+- {"type": "derive_threshold", "column": c, "op": ">|>=|<|<=", "value": number, "new": "name", "label": "..."}:
+  a yes/no variable the protocol defines by a threshold (for example BMI above 27 kg/m2).
+- {"type": "derive_any", "columns": [...], "new": "name", "label": "..."}: yes if any of several yes/no variables.
+- {"type": "drop_duplicates", "columns": [] or [...]}: duplicated records.
+- {"type": "exclude_missing", "column": c}: records outside the study population because a required variable (for
+  example the outcome) is missing; say so plainly, because it changes the sample.
+
+Every step has "id" (s1, s2, ...), "title" (one plain sentence a reader understands) and "reason" (why, citing the
+Curator's finding, the profile or the protocol). Order matters: steps run in the order given.
+
+Reply with ONLY a JSON object: {"summary": "two or three sentences on the state of the data and what the steps do",
+"steps": [...], "questions": ["anything you need the authors to decide"]}"""
+
 PLAN_ASSIST = """You are Saksi, helping the authors settle what this particular paper reports, before any analysis runs.
 You see the protocol, the data dictionary, the current plan (its aim, design, analyses with their roles and checks,
 and your open questions) and the conversation so far. A protocol often has several objectives; one paper may report
@@ -402,7 +430,7 @@ needed and whether the authors must supply it ("[Authors]") or the results alrea
 Reply with ONLY a JSON object: {"items": [{"id": "M1", "status": "reported|partly|missing|not_applicable",
 "quote": "exact words or empty", "note": "what is missing, or empty"}]}"""
 
-TEMPLATES = {"curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+TEMPLATES = {"data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

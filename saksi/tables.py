@@ -77,11 +77,41 @@ def _label_note(a: dict[str, Any]) -> str:
     return f"Exploratory analysis ({a.get('basis') or 'pre-specified'})."
 
 
+NA_CODES = {"#NULL!", ".", "NA", "N/A", "nan", "NaN", "NULL"}
+_YES, _NO = {"1", "yes", "y", "true"}, {"0", "no", "n", "false"}
+
+
+def _clean_label(name: str) -> str:
+    """'Gestational diabetes yes/no' -> 'Gestational diabetes'."""
+    return re.sub(r"[\s,;:(]*\b(?:yes\s*/\s*no|y\s*/\s*n|1\s*/\s*0|0\s*/\s*1)\b\)?\s*$", "", name, flags=re.I).strip() or name
+
+
+def _codes(col: str, labels: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Value labels from the data dictionary's coding, for example '0=No, 1=Yes' or '1 = Malay; 2 = Chinese'."""
+    units = str((labels.get(col) or {}).get("units_or_coding") or "")
+    return {k.strip(): v.strip().rstrip(".") for k, v in re.findall(r"(-?\w+)\s*[=:]\s*([^,;=]+?)(?=\s*(?:[,;]|\s-?\w+\s*[=:]|$))", units)}
+
+
+def _is_binary(levels: list[str]) -> bool:
+    low = {str(x).strip().lower() for x in levels}
+    return bool(low) and low <= (_YES | _NO) and bool(low & _YES)
+
+
 def _table1(aid: str, a: dict[str, Any], t: dict[str, Any], labels: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    by, groups = t.get("stratify_by"), t.get("groups") or []
-    by_name = _name(by, labels) if by else ""
-    cols = ["Characteristic", f"Overall\n(n = {t.get('n_analysed')})"] + \
-        [f"{by_name}: {g['level']}\n(n = {g['n']})" for g in groups] + (["P value"] if groups else [])
+    by = t.get("stratify_by")
+    groups = [g for g in t.get("groups") or [] if str(g["level"]) not in NA_CODES]
+    by_name = _clean_label(_name(by, labels)) if by else ""
+    codes_by = _codes(by, labels) if by else {}
+
+    def group_head(level: str) -> str:
+        if level in codes_by and codes_by[level].lower() not in _YES | _NO:
+            return codes_by[level]
+        if _is_binary([g["level"] for g in groups]):
+            yes = str(level).strip().lower() in _YES
+            return by_name if yes else f"No {by_name[:1].lower()}{by_name[1:]}"
+        return f"{by_name}: {codes_by.get(level, level)}"
+    cols = ["Characteristic", f"Overall\n(n = {sum(g['n'] for g in groups) if groups else t.get('n_analysed')})"] + \
+        [f"{group_head(str(g['level']))}\n(n = {g['n']})" for g in groups] + (["P value"] if groups else [])
     tests: dict[str, str] = {}
 
     def mark(r: dict[str, Any]) -> str:
@@ -108,29 +138,38 @@ def _table1(aid: str, a: dict[str, Any], t: dict[str, Any], labels: dict[str, di
             continue
         v = r["variable"]
         if r.get("missing"):
-            missing.append(f"{_name(v, labels)} {r['missing']}")
+            missing.append(f"{_clean_label(_name(v, labels))} {r['missing']}")
         p = [_p(r.get("p_value"))] if groups else []
         m = {len(cols) - 1: mark(r)} if groups and r.get("p_value") is not None else {}
         if r.get("type") == "continuous":
             s = r.get("summary", "")
             rows.append({"cells": [f"{_name(v, labels, True)}, {s}", cont(r.get("overall"), s)]
                          + [cont((r.get("by_group") or {}).get(g["level"]), s) for g in groups] + p, "marks": m})
-        else:
-            rows.append({"cells": [f"{_name(v, labels)}, n (%)", ""] + [""] * len(groups) + p, "marks": m})
-            for c in r.get("categories") or []:
-                rows.append({"cells": [str(c["level"]), npct(c.get("overall"))]
-                             + [npct((c.get("by_group") or {}).get(g["level"])) for g in groups]
-                             + ([""] if groups else []), "indent": True})
-    notes = ["Values are mean (SD), median (IQR, as lower to upper quartile) or n (%), chosen for each variable "
-             "by a fixed rule from its distribution."]
+            continue
+        cats = [c for c in r.get("categories") or [] if str(c["level"]) not in NA_CODES]
+        if _is_binary([c["level"] for c in cats]):
+            # A yes/no characteristic is one row: the number (%) with it, as journals report it.
+            yes = next(c for c in cats if str(c["level"]).strip().lower() in _YES)
+            rows.append({"cells": [f"{_clean_label(_name(v, labels))}, n (%)", npct(yes.get("overall"))]
+                         + [npct((yes.get("by_group") or {}).get(g["level"])) for g in groups] + p, "marks": m})
+            continue
+        codes = _codes(v, labels)
+        rows.append({"cells": [f"{_clean_label(_name(v, labels))}, n (%)", ""] + [""] * len(groups) + p, "marks": m})
+        for c in cats:
+            rows.append({"cells": [codes.get(str(c["level"]), str(c["level"])), npct(c.get("overall"))]
+                         + [npct((c.get("by_group") or {}).get(g["level"])) for g in groups]
+                         + ([""] if groups else []), "indent": True})
+    notes = ["Values are n (%), mean (SD) or median (IQR, as lower to upper quartile), chosen for each variable by a "
+             "fixed rule from its distribution; for a yes/no characteristic, the number (%) with it."]
     notes += [f"{letter} {test}." for test, letter in tests.items()]
     if missing:
         notes.append("Missing values: " + "; ".join(missing) + ".")
     if t.get("n_excluded"):
-        notes.append(f"{t['n_excluded']} records without {by_name} are not shown.")
+        notes.append(f"{t['n_excluded']} records without {by_name.lower()} are not shown.")
     return {"analysis_id": aid, "kind": "table1",
-            "title": "Characteristics of the participants" + (f", by {by_name}" if by else ""),
-            "columns": cols, "rows": rows, "footnotes": notes}
+            "title": "Characteristics of the participants" + (f", by {by_name.lower()}" if by else ""),
+            "columns": cols, "rows": rows, "footnotes": notes,
+            "stale_missing_codes": any(str(g["level"]) in NA_CODES for g in t.get("groups") or [])}
 
 
 MAX_ROWS, MAX_COLS = 80, 12

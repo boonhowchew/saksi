@@ -44,6 +44,17 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
         add("table1", None, "Build Table 1",
             "Every Results section opens with the characteristics of the participants, usually by the outcome.",
             {"type": "table1"})
+    t1 = next((k for k, a in cur.items() if a.get("standard") == "table1"), None)
+    if t1:
+        spec = cur[t1]["spec"].get("table1") or (s.plan_locked or {}).get("table1") or {}
+        out1 = blobs.get_json(cur[t1]["outputs_sha256"])
+        from .tables import NA_CODES
+        if any(str(g.get("level")) in NA_CODES for g in out1.get("groups") or []) or any(
+                str(c.get("level")) in NA_CODES for r in out1.get("rows") or [] for c in r.get("categories") or []):
+            add("t1codes", t1, "Missing-value codes counted as a group in Table 1",
+                "Codes such as #NULL! are missing values, not a category. Rebuilding Table 1 reads them as missing.",
+                {"type": "table1", "analysis_id": t1, "stratify_by": spec.get("stratify_by"),
+                 "variables": spec.get("variables") or [], "instruction": "Rebuilt so that missing-value codes are read as missing"})
     quality = next((blobs.get_json(a["outputs_sha256"]) for a in cur.values() if a.get("standard") == "data_quality"), None)
     missing = {c["column"]: c.get("missing_pct") or 0 for c in (quality or {}).get("columns", [])}
     for t in build(s, blobs, with_duplicates=True):

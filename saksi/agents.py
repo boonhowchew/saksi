@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, PLAN_ASSIST, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, PLAN_ASSIST, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -32,6 +32,8 @@ from .figures import required_figure
 from .tracing import interval_facts, trace
 from . import standard
 from .workflow import SYSTEM, Project, State, WorkflowError, current, included_order
+from .workflow import answers_text, preparation_in_use
+from . import cleaning
 from .workflow import summarise_checks as summarise
 from . import tables as tables_mod
 from . import guidelines
@@ -50,6 +52,7 @@ TASKS = {
     "describe": {"reasoning_effort": "low", "max_tokens": 3000},
     "assist": {"reasoning_effort": "low", "max_tokens": 2500},
     "checklist": {"reasoning_effort": "low", "max_tokens": 6000},
+    "prep": {"reasoning_effort": "medium", "max_tokens": 8000},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -137,6 +140,18 @@ class Agents:
             if r.get("material_sha256") == ds["sha256"]:
                 rep = self.project.blobs.get_json(r["report_sha256"])
                 return {"profile": rep["profile"], "dictionary": rep.get("dictionary")}
+        if ds.get("prepared_from"):
+            # A prepared dataset: the Curator's dictionary of the original, for the columns kept, plus derived columns.
+            prof = profile(read_table(self._bytes(ds), ds["filename"]))
+            names = {c["name"] for c in prof["columns"]}
+            base = next((self.project.blobs.get_json(r["report_sha256"]) for r in reversed(s.curator_reports)
+                         if r.get("material_sha256") == ds["prepared_from"]), {})
+            dic = [d for d in base.get("dictionary") or [] if d.get("column") in names]
+            for st in ds["preparation"]["steps"]:
+                if st.get("new") in names:
+                    dic.append({"column": st["new"], "label": st.get("label") or st["new"], "type": "binary",
+                                "units_or_coding": "0=No, 1=Yes", "role": "derived", "note": st["title"]})
+            return {"profile": prof, "dictionary": dic or None}
         return {"profile": profile(read_table(self._bytes(ds), ds["filename"])), "dictionary": None}
 
     def _chat(self, task: str, system: str, user: str, json_mode: bool, purpose: str):
@@ -229,6 +244,7 @@ class Agents:
         d = self._dictionary(s)
         user = (f"PROTOCOL:\n{protocol}\n\nDATA DICTIONARY:\n{json.dumps(d['dictionary'], separators=(',', ':'))}\n\n"
                 f"DATASET PROFILE (aggregate only):\n{json.dumps(d['profile'], separators=(',', ':'))}"
+                + f"\n\nTHE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}"
                 + (f"\n\nTHE AUTHORS' INSTRUCTIONS FOR THIS PLAN (follow them; the protocol still governs what "
                    f"each analysis is):\n{instructions.strip()}" if instructions and instructions.strip() else ""))
         try:
@@ -256,6 +272,38 @@ class Agents:
         return self.project.propose_plan(ANALYST_ID, analyses, protocol_ref=pm["sha256"],
                                          call=call, requested_by=requested_by, note=note,
                                          table1=_table1_in_data(out.get("table1"), cols), report=out.get("report"))
+
+    def prepare_data(self, requested_by: str, instructions: str | None = None) -> State:
+        """Propose how to clean the uploaded dataset, from the Curator's findings. The authors tick the steps; Saksi's
+        own code applies them (Project.prepare_dataset)."""
+        s = self.project.state()
+        ds = next((m for m in reversed(s.materials) if m["kind"] == "dataset" and not m.get("withdrawn")
+                   and not m.get("prepared_from")), None)
+        if ds is None:
+            raise WorkflowError("upload the dataset first")
+        rep = next((self.project.blobs.get_json(r["report_sha256"]) for r in reversed(s.curator_reports)
+                    if r.get("material_sha256") == ds["sha256"]), None)
+        if rep is None:
+            s = self.curate(requested_by, ds["sha256"])
+            rep = self.project.blobs.get_json(s.curator_reports[-1]["report_sha256"])
+        try:
+            protocol, _ = self._protocol_text(s)
+        except Exception:
+            protocol = ""
+        user = (f"DATA CURATOR'S FINDINGS:\n{json.dumps({'summary': rep.get('summary'), 'flags': rep.get('flags')}, indent=1)[:30000]}\n\n"
+                f"DATASET PROFILE (aggregate only):\n{json.dumps(rep['profile'], separators=(',', ':'))[:60000]}\n\n"
+                f"DATA DICTIONARY:\n{json.dumps(rep.get('dictionary'), separators=(',', ':'))[:30000]}\n\n"
+                f"PROTOCOL:\n{protocol[:40000]}\n\nTHE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}"
+                + (f"\n\nTHE AUTHORS' INSTRUCTIONS: {instructions}" if instructions else ""))
+        out, call, _ = self._json_call(ANALYST_ID, "prep", DATA_PREP, user, "prepare_data")
+        steps, problems = cleaning.validate(out.get("steps") or [], [c["name"] for c in rep["profile"]["columns"]])
+        summary = str(out.get("summary") or "")[:1500]
+        qs = [str(q)[:400] for q in out.get("questions") or []][:5]
+        if qs:
+            summary += "" if not summary else " "
+            summary += "Questions for the authors: " + " ".join(qs)
+        return self.project.propose_preparation(ANALYST_ID, ds["sha256"], steps, summary, problems,
+                                                requested_by=requested_by, call=call, instructions=instructions)
 
     def plan_assist(self, requested_by: str, message: str, history: list[dict[str, Any]] | None = None):
         """Saksi and the authors settle what this paper reports, before any analysis. Answers, asks, and when an
@@ -508,6 +556,7 @@ class Agents:
                      f"DATASET PROFILE (aggregate only{'; only the columns this analysis names' if all_names else ''}):\n"
                      f"{json.dumps(prof, indent=1)}"
                      + (f"\n\nALL COLUMN NAMES IN THE CSV:\n{json.dumps(all_names)}" if all_names else "")
+                     + (f"\n\nTHE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS (definitions to follow):\n{answers_text(s)}" if s.answers else "")
                      + (f"\n\n{context}" if context else ""))
         messages_user, task, attempts, failed_call_seqs = base_user, "code", [], []
         code, result, last_call = "", None, None
@@ -639,6 +688,8 @@ class Agents:
         info = {"id": analysis_id, "title": a["spec"].get("title"), "label": a["label"], "basis": a.get("basis"),
                 "kind": a.get("kind"), "standard": a.get("standard"), "sample_check": a.get("sample_check"),
                 "protocol_departure": a.get("protocol_deviation"), "downgraded": a.get("downgraded")}
+        if a.get("standard") == "data_quality":
+            info["data_preparation"] = preparation_in_use(s)
         user = (f"ANALYSIS:\n{json.dumps(info, indent=1)}\n\nRESULTS:\n{json.dumps(shown, indent=1)[:30000]}\n\n"
                 f"TABLE:\n{json.dumps({k: tbl[k] for k in ('title', 'columns', 'rows', 'footnotes')} if tbl else None)[:20000]}\n\n"
                 f"FIGURES:\n{json.dumps(figs, indent=1)}\n\n"
@@ -700,6 +751,9 @@ class Agents:
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
+                f"DATA PREPARATION (applied by Saksi's code before analysis; describe it in Methods):\n"
+                f"{json.dumps(preparation_in_use(s), indent=1)}\n\n"
+                f"THE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}\n\n"
                 f"REPORT (what this paper answers, confirmed with the plan):\n"
                 f"{json.dumps((s.plan_locked or {}).get('report'), indent=1)}\n\n"
                 f"REPORTING GUIDELINE: {guidelines.for_design(((s.plan_locked or {}).get('report') or {}).get('design'))['name']}\n"

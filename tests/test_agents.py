@@ -109,12 +109,14 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
+        purpose = ("prep" if "preparing a raw research dataset" in system
+                   else "review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
                    else "describe" if "reports ONE analysis" in system
                    else "assist" if "Saksi's analysis assistant" in system
                    else "plan_assist" if "settle what this particular paper reports" in system
                    else "checklist" if "against a reporting guideline" in system
+                   else "prep" if "preparing a raw research dataset" in system
                    else "write" if "Writing Agent" in system else "code")
         if purpose == "describe" and not self.script.get("describe"):
             reply = describe_reply                                   # a plain, number-free default
@@ -123,6 +125,8 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "prep" and not self.script.get("prep"):
+            reply = PREP_REPLY
         elif purpose == "checklist" and not self.script.get("checklist"):
             reply = checklist_reply
         else:
@@ -133,6 +137,18 @@ class ScriptedModel:
         content = reply if isinstance(reply, str) else __import__("json").dumps(reply)
         return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+
+
+PREP_REPLY = {"summary": "Two identifiers and a few implausible values.", "questions": [], "steps": [
+    {"id": "s1", "type": "drop_columns", "columns": ["patient_name"], "title": "Remove patient names",
+     "reason": "Direct identifier, flagged by the Data Curator"},
+    {"id": "s2", "type": "missing_codes", "columns": ["*"], "codes": ["#NULL!", "999"], "title": "Read #NULL! and 999 as missing",
+     "reason": "SPSS missing codes"},
+    {"id": "s3", "type": "valid_range", "column": "booking_bmi", "min": 10, "max": 80, "title": "BMI outside 10 to 80 set to missing",
+     "reason": "Physiologically impossible"},
+    {"id": "s4", "type": "derive_threshold", "column": "booking_bmi", "op": ">", "value": 27, "new": "bmi_over_27",
+     "label": "Booking BMI above 27 kg/m2", "title": "Derive BMI above 27", "reason": "The protocol's risk-factor threshold"},
+    {"id": "s5", "type": "drop_columns", "columns": ["no_such_column"], "title": "bad", "reason": "invented"}]}
 
 
 def checklist_reply(user):
@@ -869,3 +885,50 @@ def test_spss_missing_codes_are_missing_values_not_a_group():
     r = LocalExecutor().run(standard.code("table1", {"stratify_by": "gdm", "variables": ["age", "smoker"]}), csv, seed=1)
     assert [g["level"] for g in r.results["groups"]] == ["0", "1"]
     assert r.results["n_excluded"] == 1
+
+
+def test_saksi_prepares_the_data_and_the_authors_choose_the_steps(setup):
+    p, agents, model, ds_sha = setup
+    s = agents.prepare_data("bhc")
+    prop = s.preparations[-1]
+    assert [st["id"] for st in prop["steps"]] == ["s1", "s2", "s3", "s4"] and "no_such_column" in prop["problems"][0]
+    with pytest.raises(WorkflowError, match="tick at least one"):
+        p.prepare_dataset("bhc", [])
+    s = p.prepare_dataset("coauthor", ["s1", "s3", "s4"], note="Kept the 999 codes: none in these data")
+    ds = [m for m in s.materials if m["kind"] == "dataset"][-1]
+    prep = ds["preparation"]
+    assert ds["prepared_from"] == ds_sha and ds["by"] == "coauthor" and prep["skipped"] == ["s2"]
+    assert [x["id"] for x in prep["log"]] == ["s1", "s3", "s4"] and "removed 1 column" in prep["log"][0]["effect"]
+    assert prep["log"][2]["effect"].startswith("new column bmi_over_27:") and prep["columns_after"] == prep["columns_before"]
+    # The prepared file is what is analysed: the original is kept; the dictionary carries over, with the new column.
+    d = agents._dictionary(s)
+    names = {c["name"] for c in d["profile"]["columns"]}
+    assert "patient_name" not in names and "bmi_over_27" in names
+    assert any(x["column"] == "bmi_over_27" and x["role"] == "derived" for x in d["dictionary"])
+    from saksi.workflow import preparation_in_use
+    assert preparation_in_use(s)["applied_by"] == s.actors["coauthor"]["name"]
+
+
+def test_answers_to_saksis_questions_are_recorded_and_given_to_the_agents(setup):
+    p, agents, model, _ = setup
+    s = p.answer_question("coauthor", "Is BMI >27 a derived column?", "Yes: derive it from booking_bmi above 27 kg/m2.")
+    assert s.answers[-1]["by"] == "coauthor" and s.answers[-1]["answer"].startswith("Yes")
+    agents.prepare_data("bhc")
+    assert "derive it from booking_bmi above 27" in next(b for b in model.bodies if "preparing a raw research dataset"
+                                                         in b["messages"][0]["content"])["messages"][1]["content"]
+
+
+def test_table1_reports_yes_no_characteristics_on_one_row_with_clean_headings():
+    from saksi.tables import _table1
+    t = {"stratify_by": "gdm", "n_analysed": 10, "groups": [{"level": "0", "n": 6}, {"level": "1", "n": 4}],
+         "rows": [{"variable": "smoker", "type": "categorical", "p_value": 0.2, "test": "chi-square test",
+                   "categories": [{"level": "0", "overall": {"n": 7, "pct": 70.0}, "by_group": {"0": {"n": 5, "pct": 83.3}, "1": {"n": 2, "pct": 50.0}}},
+                                  {"level": "1", "overall": {"n": 3, "pct": 30.0}, "by_group": {"0": {"n": 1, "pct": 16.7}, "1": {"n": 2, "pct": 50.0}}}]},
+                  {"variable": "eth", "type": "categorical", "categories": [{"level": "1", "overall": {"n": 6, "pct": 60.0}, "by_group": {}},
+                                                                             {"level": "2", "overall": {"n": 4, "pct": 40.0}, "by_group": {}}]}]}
+    labels = {"gdm": {"label": "Gestational diabetes yes/no"}, "smoker": {"label": "Any smoking yes/no"},
+              "eth": {"label": "Ethnicity", "units_or_coding": "1 = Malay; 2 = Chinese"}}
+    out = _table1("s_table1", {}, t, labels)
+    assert out["columns"][2:4] == ["No gestational diabetes\n(n = 6)", "Gestational diabetes\n(n = 4)"]
+    assert out["rows"][0]["cells"][:4] == ["Any smoking, n (%)", "3 (30.0)", "1 (16.7)", "2 (50.0)"]   # one row
+    assert [r["cells"][0] for r in out["rows"][2:]] == ["Malay", "Chinese"]                         # value labels

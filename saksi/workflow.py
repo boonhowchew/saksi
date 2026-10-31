@@ -109,6 +109,8 @@ class State:
     briefings: list[dict[str, Any]] = field(default_factory=list)
     reviewed_versions: dict[int, int] = field(default_factory=dict)
     figures: list[dict[str, Any]] = field(default_factory=list)
+    answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
+    preparations: list[dict[str, Any]] = field(default_factory=list)     # data preparation proposals
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_decisions: dict[int, str] = field(default_factory=dict)
     attestations: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
@@ -151,7 +153,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures,
+            "figures": self.figures, "answers": self.answers, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -171,7 +173,7 @@ def apply(s: State, ev: Event) -> State:
         if "round" in p:
             s.round = p["round"]
     elif t == "material.uploaded":
-        s.materials.append(p | {"by": ev.actor_id, "seq": ev.seq})
+        s.materials.append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
     elif t == "material.withdrawn":
         for m in s.materials:
             if m["sha256"] == p["sha256"] and not m.get("withdrawn"):
@@ -208,6 +210,10 @@ def apply(s: State, ev: Event) -> State:
             s.analyses[p["analysis_id"]]["order_seq"] = old.get("order_seq", old["seq"])
         s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
         _number_figures(s)
+    elif t == "question.answered":
+        s.answers.append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
+    elif t == "data.preparation_proposed":
+        s.preparations.append(p | {"by": ev.actor_id, "seq": ev.seq})
     elif t == "checklist.assessed":
         if p["version"] in s.drafts:
             s.drafts[p["version"]]["checklist"] = p | {"seq": ev.seq}
@@ -362,7 +368,7 @@ class Project:
     # -- INGEST ------------------------------------------------------------
     def upload_material(self, by: str, kind: str, filename: str, sha256: str, size: int,
                         storage_ref: str | None = None, note: str | None = None,
-                        inspection: dict[str, Any] | None = None) -> State:
+                        inspection: dict[str, Any] | None = None, prepared: dict[str, Any] | None = None) -> State:
         s = self.state()
         self._require_role(s, by, "author")
         self._require_stage(s, "INGEST")
@@ -372,8 +378,74 @@ class Project:
             raise WorkflowError("sha256 must be 64 lowercase hex characters")
         self._emit(by, "material.uploaded", {"kind": kind, "filename": filename, "sha256": sha256,
                                              "bytes": size, "storage_ref": storage_ref, "note": note,
-                                             "inspection": inspection})
+                                             "inspection": inspection}
+                   | ({"prepared_from": prepared["source_sha256"], "preparation": prepared} if prepared else {}))
         return self.state()
+
+    # -- Saksi's questions and the authors' answers ---------------------------
+    def answer_question(self, by: str, question: str, answer: str) -> State:
+        """An author answers one of Saksi's questions about this paper. Recorded under their name and given to the
+        agents from then on (plan, data preparation, analysis, writing)."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
+        if not (question or "").strip() or not (answer or "").strip():
+            raise WorkflowError("give the question and your answer")
+        self._emit(by, "question.answered", {"question": question.strip()[:600], "answer": answer.strip()[:2000],
+                                              "stage": s.stage})
+        return self.state()
+
+    # -- Data preparation ------------------------------------------------------
+    def propose_preparation(self, by: str, source_sha256: str, steps: list[dict[str, Any]], summary: str,
+                            problems: list[str], requested_by: str, call: dict[str, Any] | None = None,
+                            instructions: str | None = None) -> State:
+        s = self.state()
+        a = self._require_role(s, by, "analyst")
+        self._require_stage(s, "INGEST")
+        self._requested_by(s, a, requested_by)
+        call_seq = self._log_call(by, call)
+        self._emit(by, "data.preparation_proposed", {"source_sha256": source_sha256, "steps": steps, "summary": summary,
+                                                      "problems": problems, "instructions": instructions,
+                                                      "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
+
+    def prepare_dataset(self, by: str, step_ids: list[str], note: str = "") -> State:
+        """Apply the steps an author chose from the latest proposal, by Saksi's own code, to the original upload.
+        The prepared file is stored beside the original (which is kept) and is the one analysed from then on."""
+        from .cleaning import apply, validate
+        from .inspection import inspect_material
+        from .profiling import read_table
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "INGEST")
+        if not s.preparations:
+            raise WorkflowError("there is no proposal to apply; ask Saksi to prepare the data first")
+        prop = s.preparations[-1]
+        src = next((m for m in s.materials if m["sha256"] == prop["source_sha256"] and not m.get("withdrawn")), None)
+        if src is None or not src.get("storage_ref") or not (self.root / src["storage_ref"]).exists():
+            raise WorkflowError("the dataset this proposal was made for is no longer available")
+        chosen = [st for st in prop["steps"] if st["id"] in set(step_ids)]
+        if not chosen:
+            raise WorkflowError("tick at least one step")
+        raw = (self.root / src["storage_ref"]).read_bytes()
+        df = read_table(raw, src["filename"])
+        steps, problems = validate(chosen, [str(c) for c in df.columns])
+        if problems:
+            raise WorkflowError("; ".join(problems))
+        out, log = apply(df, steps)
+        data = out.to_csv(index=False).encode()
+        sha = sha256_bytes(data)
+        (self.root / "materials").mkdir(parents=True, exist_ok=True)
+        (self.root / "materials" / sha).write_bytes(data)
+        stem = re.sub(r"\.[A-Za-z0-9]+$", "", src["filename"])
+        prepared = {"source_sha256": src["sha256"], "source_filename": src["filename"], "proposal_seq": prop["seq"],
+                    "steps": steps, "log": log, "skipped": [st["id"] for st in prop["steps"] if st["id"] not in set(step_ids)],
+                    "rows_before": int(len(df)), "columns_before": int(df.shape[1]),
+                    "rows_after": int(len(out)), "columns_after": int(out.shape[1]), "note": note}
+        return self.upload_material(by, "dataset", f"{stem}-prepared.csv", sha, len(data), storage_ref=f"materials/{sha}",
+                                    note=note or "Prepared by Saksi's code from the steps the authors chose",
+                                    inspection=inspect_material("dataset", f"{stem}-prepared.csv", data), prepared=prepared)
 
     def withdraw_material(self, by: str, sha256: str, reason: str) -> State:
         """Remove a wrongly uploaded file before the plan is locked. The stored copy is deleted;
@@ -1011,6 +1083,21 @@ def _diff_stats(old: str, new: str) -> dict[str, int]:
             "words_after": len(new.split())}
 
 
+def preparation_in_use(s: State) -> dict[str, Any] | None:
+    """How the dataset in use was prepared from the original upload, and by whom; None if it is the original."""
+    ds = next((m for m in reversed(s.materials) if m["kind"] == "dataset" and not m.get("withdrawn")), None)
+    if not ds or not ds.get("preparation"):
+        return None
+    who = (s.actors.get(ds["by"]) or {}).get("name") or ds["by"]
+    return {**ds["preparation"], "applied_by": who, "dataset": ds["filename"]}
+
+
+def answers_text(s: State) -> str:
+    """The authors' answers to Saksi's questions, for the agents."""
+    rows = [f"- Q: {a['question']}\n  A ({(s.actors.get(a['by']) or {}).get('name') or a['by']}): {a['answer']}" for a in s.answers]
+    return "\n".join(rows) or "(none yet)"
+
+
 def current(s: State) -> dict[str, dict[str, Any]]:
     """The analyses that count: those that ran, minus any an author had redone (kept in the record)."""
     return {k: v for k, v in s.analyses.items()
@@ -1062,7 +1149,8 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications",
+    "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",
     "review.item_added": "review_comments", "review.item_verdict": "review_verdicts",
