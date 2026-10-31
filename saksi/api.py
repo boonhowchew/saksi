@@ -46,6 +46,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "assist": ("assist", {"message", "analysis_id"}, "author"),
     "plan_assist": ("plan_assist", {"message", "history"}, "author"),
     "prepare_data": ("prepare_data", {"instructions"}, "author"),
+    "suggest_answers": ("suggest_answers", set(), "author"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", set(), "author"),
@@ -63,7 +64,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "withdraw_material": ("withdraw_material", {"sha256", "reason"}),
     "withdraw_analysis": ("withdraw_analysis", {"analysis_id", "reason"}),
     "edit_description": ("edit_description", {"analysis_id", "text", "heading"}),
-    "answer_question": ("answer_question", {"question", "answer"}),
+    "answer_question": ("answer_question", {"question", "answer", "accepted_suggestion"}),
     "prepare_dataset": ("prepare_dataset", {"step_ids", "note"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
     "propose_plan": ("propose_plan", {"analyses", "protocol_ref", "note", "table1", "report"}),
@@ -290,6 +291,19 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         return Response(to_docx(ts, None if number else f"{s.title}: tables"),
                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.get("/projects/{pid}/materials/{digest}")
+    def get_material(pid: str, digest: str, who: str = Depends(actor)):
+        """An uploaded or prepared file, for the study's authors only (never the reviewer)."""
+        p = existing(pid)
+        s = p.state()
+        if "author" not in s.actors[who]["roles"]:
+            raise HTTPException(403, "only the authors can download the study's files")
+        m = next((m for m in s.materials if m["sha256"] == digest and not m.get("withdrawn")), None)
+        if m is None or not m.get("storage_ref") or not (p.root / m["storage_ref"]).exists():
+            raise HTTPException(404, "no such file")
+        return Response((p.root / m["storage_ref"]).read_bytes(), media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{Path(m["filename"]).name}"'})
 
     @app.get("/projects/{pid}/blobs/{digest}")
     def get_blob(pid: str, digest: str, who: str = Depends(actor)):

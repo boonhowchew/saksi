@@ -110,6 +110,7 @@ class State:
     reviewed_versions: dict[int, int] = field(default_factory=dict)
     figures: list[dict[str, Any]] = field(default_factory=list)
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
+    suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     preparations: list[dict[str, Any]] = field(default_factory=list)     # data preparation proposals
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_decisions: dict[int, str] = field(default_factory=dict)
@@ -153,7 +154,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures, "answers": self.answers, "preparations": self.preparations,
+            "figures": self.figures, "answers": self.answers, "suggested_answers": self.suggested_answers, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -212,6 +213,9 @@ def apply(s: State, ev: Event) -> State:
         _number_figures(s)
     elif t == "question.answered":
         s.answers.append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
+    elif t == "questions.suggested":
+        for x in p["suggestions"]:
+            s.suggested_answers[x["question"]] = x | {"seq": ev.seq}
     elif t == "data.preparation_proposed":
         s.preparations.append(p | {"by": ev.actor_id, "seq": ev.seq})
     elif t == "checklist.assessed":
@@ -371,9 +375,14 @@ class Project:
                         inspection: dict[str, Any] | None = None, prepared: dict[str, Any] | None = None) -> State:
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "INGEST")
         if kind not in MATERIAL_KINDS:
             raise WorkflowError(f"kind must be one of {sorted(MATERIAL_KINDS)}")
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
+        if kind in ("dataset", "protocol") and s.stage != "INGEST":
+            raise WorkflowError("the dataset and the protocol are fixed once every author has confirmed the plan, because "
+                                "the results depend on them; other materials (codebook, ethics approval, registration, "
+                                "other documents) can be added at any time")
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise WorkflowError("sha256 must be 64 lowercase hex characters")
         self._emit(by, "material.uploaded", {"kind": kind, "filename": filename, "sha256": sha256,
@@ -383,7 +392,18 @@ class Project:
         return self.state()
 
     # -- Saksi's questions and the authors' answers ---------------------------
-    def answer_question(self, by: str, question: str, answer: str) -> State:
+    def suggest_answers(self, by: str, suggestions: list[dict[str, Any]], requested_by: str,
+                        call: dict[str, Any] | None = None) -> State:
+        """Saksi's suggested answers to its own questions, for the authors to accept or change."""
+        s = self.state()
+        a = self._require_role(s, by, "analyst")
+        self._requested_by(s, a, requested_by)
+        call_seq = self._log_call(by, call)
+        self._emit(by, "questions.suggested", {"suggestions": suggestions, "requested_by": requested_by,
+                                                "llm_call_seq": call_seq})
+        return self.state()
+
+    def answer_question(self, by: str, question: str, answer: str, accepted_suggestion: bool = False) -> State:
         """An author answers one of Saksi's questions about this paper. Recorded under their name and given to the
         agents from then on (plan, data preparation, analysis, writing)."""
         s = self.state()
@@ -393,7 +413,7 @@ class Project:
         if not (question or "").strip() or not (answer or "").strip():
             raise WorkflowError("give the question and your answer")
         self._emit(by, "question.answered", {"question": question.strip()[:600], "answer": answer.strip()[:2000],
-                                              "stage": s.stage})
+                                              "stage": s.stage, "accepted_suggestion": bool(accepted_suggestion)})
         return self.state()
 
     # -- Data preparation ------------------------------------------------------
@@ -434,6 +454,8 @@ class Project:
         if problems:
             raise WorkflowError("; ".join(problems))
         out, log = apply(df, steps)
+        from .cleaning import compare
+        comparison = compare(df, out)
         data = out.to_csv(index=False).encode()
         sha = sha256_bytes(data)
         (self.root / "materials").mkdir(parents=True, exist_ok=True)
@@ -442,17 +464,20 @@ class Project:
         prepared = {"source_sha256": src["sha256"], "source_filename": src["filename"], "proposal_seq": prop["seq"],
                     "steps": steps, "log": log, "skipped": [st["id"] for st in prop["steps"] if st["id"] not in set(step_ids)],
                     "rows_before": int(len(df)), "columns_before": int(df.shape[1]),
-                    "rows_after": int(len(out)), "columns_after": int(out.shape[1]), "note": note}
+                    "rows_after": int(len(out)), "columns_after": int(out.shape[1]), "note": note,
+                    "comparison": comparison}
         return self.upload_material(by, "dataset", f"{stem}-prepared.csv", sha, len(data), storage_ref=f"materials/{sha}",
                                     note=note or "Prepared by Saksi's code from the steps the authors chose",
                                     inspection=inspect_material("dataset", f"{stem}-prepared.csv", data), prepared=prepared)
 
     def withdraw_material(self, by: str, sha256: str, reason: str) -> State:
-        """Remove a wrongly uploaded file before the plan is locked. The stored copy is deleted;
-        the record keeps its name, hash and the reason."""
+        """Remove an uploaded file, at any stage before the paper is final. The stored copy is deleted; the record keeps
+        its name, hash, who removed it and why. Removing the dataset or protocol after the plan is confirmed is recorded
+        as such: the results stay in the record, but they can no longer be re-run or checked against the file."""
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "INGEST")
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
         hits = [m for m in s.materials if m["sha256"] == sha256 and not m.get("withdrawn")]
         if not hits:
             raise WorkflowError("no file with that hash is in this project")
@@ -467,7 +492,9 @@ class Project:
                     deleted = True
         self._emit(by, "material.withdrawn", {"sha256": sha256, "kind": hits[-1]["kind"],
                                               "filename": hits[-1]["filename"], "reason": reason.strip(),
-                                              "stored_copy_deleted": deleted})
+                                              "stored_copy_deleted": deleted,
+                                              "after_plan_locked": s.plan_locked is not None
+                                              and hits[-1]["kind"] in ("dataset", "protocol")})
         return self.state()
 
     def record_curator_report(self, by: str, report: dict[str, Any], call: dict[str, Any] | None,
@@ -1092,6 +1119,18 @@ def preparation_in_use(s: State) -> dict[str, Any] | None:
     return {**ds["preparation"], "applied_by": who, "dataset": ds["filename"]}
 
 
+def open_questions(s: State) -> list[str]:
+    """Saksi's questions about this paper: the plan's own, then what each included analysis left unresolved
+    (the same wording the page shows)."""
+    p = s.plan or {}
+    qs = list(((p.get("report") or {}).get("questions")) or [])
+    for i in p.get("order") or []:
+        a = p["analyses"][i]
+        if a.get("included", True) is not False:
+            qs += [f"{a.get('title') or i}: {u}" for u in a.get("unresolved") or []]
+    return qs
+
+
 def answers_text(s: State) -> str:
     """The authors' answers to Saksi's questions, for the agents."""
     rows = [f"- Q: {a['question']}\n  A ({(s.actors.get(a['by']) or {}).get('name') or a['by']}): {a['answer']}" for a in s.answers]
@@ -1149,7 +1188,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",

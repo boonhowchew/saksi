@@ -134,6 +134,8 @@ section.advisor ul.sugg li .btn { margin-left: .4rem; padding: .2rem .6rem; font
 .reportbox { border: 1px solid var(--indigo); border-radius: 8px; padding: .4rem 1rem .8rem; background: #F7F8FC; }
 .reportbox h2 { margin-top: .4rem; }
 ol.qa li { margin: .5rem 0; }
+ol.qa .suggest { margin: .3rem 0; padding: .35rem .6rem; background: #EEF1F7; border-radius: 4px; }
+ol.qa .suggest .btn { margin-left: .4rem; padding: .2rem .7rem; font-size: .82rem; }
 ol.qa .answer { margin: .25rem 0; padding: .3rem .6rem; background: var(--verdigris-wash); border-radius: 4px; }
 section.prep { border: 1px solid var(--rule); border-radius: 8px; padding: .3rem 1rem .8rem; }
 details.alldetails > summary { font: 600 1.05rem var(--sans); cursor: pointer; padding: .4rem 0; }
@@ -518,6 +520,7 @@ async function render() {
     <aside class="rail" aria-label="Record">${rail()}</aside>
   </div>`;
   if (S.tab === "draft") maybeOpenDraft();
+  if (S.tab === "plan") maybeSuggestAnswers();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
   <div class="copyrow"><div class="secret">${esc(S.secret.token)}</div><button class="btn quiet" data-action="copy" data-text="${esc(S.secret.token)}">Copy</button></div></div>`;
@@ -636,7 +639,9 @@ function readText(m) {
   return i.characters != null ? `<span class="tag good">read</span> ${esc(i.characters.toLocaleString())} characters of text${i.pages ? ` from ${esc(i.pages)} pages` : ""}` : "";
 }
 function removeControl(m) {
+  const late = S.state.plan_locked && ["dataset", "protocol"].includes(m.kind);
   return `<details class="small"><summary>Remove this file</summary>
+    ${late ? `<p class="msg warn">The plan was confirmed with this ${esc(m.kind)}, and the results were computed from it. Removing it keeps the results in the record, but they can no longer be re-run or checked against the file. Remove it only if you must (for example, a data-sharing condition).</p>` : ""}
     <form class="row" data-form="withdraw" style="margin-top:.4rem"><input type="hidden" name="sha" value="${esc(m.sha256)}">
       <label style="flex:1 1 16rem"><span>Why? (kept in the record)</span><input type="text" name="reason" required placeholder="For example: uploaded the wrong file"></label>
       <button class="btn quiet" data-label="Removing">Remove file</button></form>
@@ -647,13 +652,14 @@ async function materials() {
   const cur = (kind) => live.filter((m) => m.kind === kind).at(-1);
   const ds = cur("dataset"), pr = cur("protocol");
   const canEdit = isAuthor() && s.stage === "INGEST";
+  const canFile = isAuthor() && s.stage !== "FINAL";      // supporting files any time; any file can be removed
   const card = (label, m, missing) => m ? `<div class="file ${m.inspection && (m.inspection.error || m.inspection.warning) ? "missing" : "ok"}">
       <div class="head"><span class="kind">${label}</span><span>${esc(m.filename)}</span><span class="tag good">in use</span>
         <span class="small muted">uploaded by ${esc(name(m.by))}</span></div>
       <div class="small">${readText(m)}</div>
       ${m.kind === "protocol" && m.inspection?.preview ? `<details class="small"><summary>The start of the text Saksi reads</summary><blockquote>${esc(m.inspection.preview)}…</blockquote>
         <p class="muted">Quotations in the plan are checked against this text. If it looks garbled, upload a Word or text version of the protocol.</p></details>` : ""}
-      ${canEdit ? removeControl(m) : ""}</div>`
+      ${canFile ? removeControl(m) : ""}${isAuthor() && m.kind === "dataset" ? ` <button class="linkish small" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</div>`
     : `<div class="file missing"><div class="head"><span class="kind">${label}</span><span>${missing}</span></div></div>`;
   const others = s.materials.filter((m) => m !== ds && m !== pr);
   const status = (m) => m.withdrawn ? `Removed by ${esc(name(m.withdrawn.by))}: ${esc(m.withdrawn.reason)}`
@@ -682,17 +688,32 @@ async function materials() {
     ${ds && pr && canEdit && (!s.plan || planFromRemovedProtocol()) ? prepareBox(false) : ""}
     ${ds && pr && canEdit && s.plan && !planFromRemovedProtocol() ? `<p class="small">The plan has been drafted: see the <button class="linkish" data-tab="plan">Plan</button> tab.</p>` : ""}
   </section>
-  ${canEdit ? `<section><h2>Add a file</h2>
-    <p class="small muted">A new dataset or protocol replaces the one in use; the earlier file stays listed below, unused, until you remove it.</p>
+  ${canFile ? `<section><h2>Add a file</h2>
+    <p class="small muted">${canEdit ? "A new dataset or protocol replaces the one in use; the earlier file stays listed below, unused, until you remove it." : "The dataset and protocol are fixed now that every author has confirmed the plan. Add any other material that helps the report (codebook, ethics approval, registration, a published protocol, other documents): Saksi reads it, and the Writing Agent uses it for Methods details."}</p>
     <form class="row" data-form="upload">
-      <label><span>What it is</span><select name="kind"><option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option><option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Trial or study registration</option><option value="other">Other</option></select></label>
+      <label><span>What it is</span><select name="kind">${canEdit ? `<option value="dataset">Dataset (CSV or Excel)</option><option value="protocol">Protocol (PDF, Word or text)</option>` : ""}<option value="codebook">Codebook</option><option value="ethics_approval">Ethics approval</option><option value="registration">Trial or study registration</option><option value="other">Other</option></select></label>
       <label><span>File</span><input type="file" name="file" required></label>
       <label><span>Note (optional)</span><input type="text" name="note"></label>
       <button class="btn" data-label="Uploading">Upload</button></form></section>` : ""}
   ${others.length ? `<section><h2>Other files</h2><div class="tablewrap"><table><thead><tr><th>What</th><th>File</th><th>Status</th><th>Read by Saksi</th></tr></thead><tbody>
-    ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="small">${status(m)}${canEdit && !m.withdrawn ? removeControl(m) : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
+    ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="small">${status(m)}${canFile && !m.withdrawn ? removeControl(m) : ""}${isAuthor() && !m.withdrawn && m.kind === "dataset" ? ` <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
   ${rep}
   ${await preparationHtml(canEdit, rawDs, ds)}`;
+}
+
+function comparisonHtml(prep, raw, ds) {
+  const c = prep.comparison;
+  if (!c) return "";
+  const sum = (x) => !x ? "" : `${x.missing} missing, ${x.distinct} distinct${x.min != null ? `; ${num(x.min, 1)} to ${num(x.max, 1)}, mean ${num(x.mean, 2)}` : ""}`;
+  const shown = c.columns.filter((r) => r.status !== "unchanged");
+  const label = { removed: ["bad", "removed"], new: ["good", "new"], changed: ["attn", "changed"], unchanged: ["", "unchanged"] };
+  return `<details class="compare" open><summary><strong>Original and prepared data, compared</strong>: ${esc(c.rows_before)} → ${esc(c.rows_after)} records${c.rows_removed ? ` (${esc(c.rows_removed)} removed)` : ""};
+      ${esc(c.columns.filter((r) => r.status === "removed").length)} columns removed, ${esc(c.columns.filter((r) => r.status === "new").length)} new, ${esc(c.columns.filter((r) => r.status === "changed").length)} changed, ${esc(c.columns.filter((r) => r.status === "unchanged").length)} unchanged</summary>
+    <p class="small muted">Aggregate figures only, counted by code, so authors, the reviewer and readers can see what preparation changed without seeing a record.
+      ${isAuthor() ? `Authors can download <button class="linkish" data-action="downloadfile" data-sha="${esc(raw.sha256)}" data-name="${esc(raw.filename)}">the original</button> and <button class="linkish" data-action="downloadfile" data-sha="${esc(ds.sha256)}" data-name="${esc(ds.filename)}">the prepared file</button>.` : ""}</p>
+    <div class="tablewrap"><table><thead><tr><th>Column</th><th>What changed</th><th>Original</th><th>Prepared</th></tr></thead><tbody>
+    ${shown.map((r) => `<tr><td>${esc(r.column)}</td><td><span class="tag ${label[r.status][0]}">${label[r.status][1]}</span>${r.values_changed ? ` <span class="small">${esc(r.values_changed)} values</span>` : ""}</td>
+      <td class="small">${esc(sum(r.before))}</td><td class="small">${esc(sum(r.after))}</td></tr>`).join("") || `<tr><td colspan="4" class="small">No column changed.</td></tr>`}</tbody></table></div></details>`;
 }
 
 async function preparationHtml(canEdit, raw, ds) {
@@ -711,6 +732,7 @@ async function preparationHtml(canEdit, raw, ds) {
       <p class="small"><strong>What was done, in order</strong></p>
       <ol class="small">${prep.log.map((x) => `<li><strong>${esc(x.title)}.</strong> ${esc(x.effect)}.${x.reason ? ` <span class="muted">Why: ${esc(x.reason)}</span>` : ""}</li>`).join("")}</ol>
       ${prep.skipped?.length ? `<p class="small muted">Proposed but not applied, by the authors' choice: ${esc(prep.skipped.join(", "))}.</p>` : ""}
+      ${comparisonHtml(prep, raw, ds)}
       ${canEdit && s.plan && s.plan.seq < (s.materials.find((m) => m.sha256 === ds.sha256)?.seq || 0) ? `<p class="small">The plan was drafted from the original data. <button class="btn quiet" data-agent="propose_plan" data-args='${esc(JSON.stringify({ instructions: "Use the prepared dataset now in use, including any columns derived in its preparation." }))}' data-label="Redrafting the plan">Redraft the plan with the prepared data</button></p>` : ""}
       ${canEdit ? `<details class="small"><summary>Go back to the original data</summary><form class="stack" data-form="withdraw"><input type="hidden" name="sha" value="${esc(ds.sha256)}">
         <label><span>Why (kept in the record)</span><input type="text" name="reason" required></label><div><button class="btn quiet" data-label="Removing">Remove the prepared file</button></div></form></details>` : ""}`;
@@ -803,8 +825,11 @@ function reportBox(p, canTalk) {
       <dt>Study design</dt><dd>${esc(DESIGN_NAMES[design])}: the paper is written and checked against the <strong>${esc(GUIDELINE[design])}</strong> reporting guideline.</dd></dl>
     ${qs.length ? `<p class="small"><strong>Saksi's questions for you</strong> <span class="muted">Your answers are recorded under your name and used by Saksi from then on: in the plan, the data preparation, the analyses and the text.</span></p>
       <ol class="small qa">${qs.map((q) => { const ans = S.state.answers.filter((a) => a.question === q);
-        return `<li>${esc(q)}${ans.map((a) => `<div class="answer"><strong>${esc(name(a.by))}:</strong> ${esc(a.answer)}</div>`).join("")}
-          ${isAuthor() && S.state.stage !== "FINAL" ? `<form class="chatform" data-form="answerq" data-q="${esc(q)}"><input type="text" name="answer" required autocomplete="off" aria-label="Your answer" placeholder="${ans.length ? "Add to the answer" : "Your answer"}"><button class="btn quiet" data-label="Saving">Answer</button></form>` : ""}</li>`; }).join("")}</ol>
+        const sug = !ans.length && S.state.suggested_answers?.[q];
+        return `<li>${esc(q)}${ans.map((a) => `<div class="answer"><strong>${esc(name(a.by))}${a.accepted_suggestion ? " (accepting Saksi's suggestion)" : ""}:</strong> ${esc(a.answer)}</div>`).join("")}
+          ${sug ? `<div class="suggest"><span class="aibadge">AI</span><strong>Saksi suggests:</strong> ${esc(sug.answer)}${sug.basis ? ` <span class="muted">(${esc(sug.basis)})</span>` : ""}
+            ${isAuthor() && S.state.stage !== "FINAL" ? `<button class="btn quiet" data-action="acceptsug" data-q="${esc(q)}" data-label="Saving">Accept</button>` : ""}</div>` : ""}
+          ${isAuthor() && S.state.stage !== "FINAL" ? `<form class="chatform" data-form="answerq" data-q="${esc(q)}"><input type="text" name="answer" required autocomplete="off" aria-label="Your answer" value="${sug ? esc(sug.answer) : ""}" placeholder="${ans.length ? "Add to the answer" : "Your answer"}"><button class="btn quiet" data-label="Saving">${sug ? "Answer with my changes" : "Answer"}</button></form>` : ""}</li>`; }).join("")}</ol>
       ${canTalk && S.state.answers.some((a) => a.seq > p.seq) ? `<p class="small"><button class="btn" data-agent="propose_plan" data-args='${esc(JSON.stringify({ instructions: "Follow the authors' answers to Saksi's questions." }))}' data-label="Redrafting the plan">Redraft the plan with these answers</button></p>` : ""}` : ""}
     ${canTalk ? `<div class="chat">${(S.planChat || []).map((m, i) => `<p class="cm ${m.who}"><strong>${m.who === "you" ? "You" : "Saksi AI"}:</strong> ${esc(m.text)}
         ${m.pending ? `<button class="linkish" data-action="planredraft" data-i="${i}" data-label="Redrafting">Yes, redraft the plan this way</button>` : ""}</p>`).join("")}
@@ -1170,6 +1195,20 @@ async function runProposal(action, message) {
   }
   await describeMissing(r.state);
   return r;
+}
+
+function maybeSuggestAnswers() {
+  const s = S.state, p = s.plan;
+  if (!p || S.busy || !isAuthor() || s.stage === "FINAL") return;
+  const answered = new Set(s.answers.map((a) => a.question));
+  const qs = [...(p.report?.questions || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
+  const open = qs.filter((q) => !answered.has(q) && !s.suggested_answers?.[q]);
+  const key = `${S.pid}|${p.seq}|${open.length}`;
+  S.suggestTried = S.suggestTried || {};
+  if (!open.length || S.suggestTried[key]) return;
+  S.suggestTried[key] = true;
+  act(null, () => agent("suggest_answers"), "Saksi has proposed an answer to each question. Accept it, or change it and answer.",
+    "Saksi is working out answers to its questions from the protocol and the data.");
 }
 
 async function startGenerating() {
@@ -1714,6 +1753,11 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "acceptsug": {
+      const q = t.dataset.q, sug = S.state.suggested_answers[q];
+      return act(t, () => command("answer_question", { question: q, answer: sug.answer, accepted_suggestion: true }),
+        "Recorded under your name, as Saksi suggested. Saksi uses it from now on.");
+    }
     case "planredraft": {
       const m = S.planChat[+t.dataset.i], instructions = m.pending;
       m.pending = null;
@@ -1831,6 +1875,16 @@ document.addEventListener("submit", async (ev) => {
       }, "Saksi checked the data, proposed how to prepare it, and drafted the plan. Start with the data preparation below, then the plan.",
       "The Data Curator is checking the data; then Saksi proposes how to prepare it and drafts the plan. This takes a few minutes.")
       .then(() => { if (S.state?.preparations?.length) { S.tab = "materials"; return render(); } if (S.state?.plan) { S.tab = "plan"; return render(); } });
+    case "downloadfile": {
+      try {
+        const r = await fetch(`/projects/${S.pid}/materials/${t.dataset.sha}`, { headers: { "X-Saksi-Token": S.token } });
+        if (!r.ok) throw new Error(`The file could not be downloaded (the server answered ${r.status}).`);
+        const url = URL.createObjectURL(await r.blob());
+        const link = Object.assign(document.createElement("a"), { href: url, download: t.dataset.name });
+        document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { S.notice = { kind: "err", text: e.message }; render(); }
+      return;
+    }
     case "applyprep": return act(btn, () => command("prepare_dataset", { step_ids: fd.getAll("step").map(String), note: val("note") }),
       "The prepared dataset is now in use. The original is kept, and each step is recorded with what it did.");
     case "prepchat": return act(btn, () => agent("prepare_data", { instructions: val("message") }),

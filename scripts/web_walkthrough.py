@@ -79,7 +79,11 @@ with sync_playwright() as p:
     print("proposed steps:", page.locator("form[data-form=applyprep] tbody tr").count())
     click(page, "Apply the ticked steps"); shot(page, "03b-data-prepared")
     print("prepared:", page.locator("section.prep .msg.ok").inner_text()[:110])
-    page.get_by_role("tab", name="Plan").click(); shot(page, "03-plan-drafted")
+    page.get_by_role("tab", name="Plan").click()
+    page.wait_for_selector("ol.qa .suggest", timeout=60000)              # Saksi proposes answers by itself
+    page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
+    print("suggested:", page.locator("ol.qa .suggest").first.inner_text()[:90])
+    shot(page, "03-plan-drafted")
     # Settle what this paper reports with Saksi, then let it redraft the plan as agreed.
     print("aim:", page.locator(".reportbox dd").first.inner_text()[:80])
     page.fill("form[data-form=planchat] input[name=message]", "Yes, report discrimination too, as a secondary question.")

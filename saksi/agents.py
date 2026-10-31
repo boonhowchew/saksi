@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, PLAN_ASSIST, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -32,7 +32,7 @@ from .figures import required_figure
 from .tracing import interval_facts, trace
 from . import standard
 from .workflow import SYSTEM, Project, State, WorkflowError, current, included_order
-from .workflow import answers_text, preparation_in_use
+from .workflow import answers_text, open_questions, preparation_in_use
 from . import cleaning
 from .workflow import summarise_checks as summarise
 from . import tables as tables_mod
@@ -113,6 +113,10 @@ def material_bytes(project: Project, m: dict[str, Any]) -> bytes:
 
 
 def protocol_text(project: Project, s: State) -> tuple[str, dict[str, Any]]:
+    if s.plan_locked is not None and not any(m["kind"] == "protocol" and not m.get("withdrawn") for m in s.materials):
+        # Removed by the authors after the plan was confirmed: the confirmed plan keeps its checked quotations.
+        return ("(The protocol file was removed by the authors after the plan was confirmed. The confirmed plan below "
+                "holds the protocol's quotations, checked against it at the time.)", {"sha256": None, "filename": None})
     m = latest_material(s, "protocol")
     return extract_text(material_bytes(project, m), m["filename"])[:PROTOCOL_CHARS], m
 
@@ -304,6 +308,35 @@ class Agents:
             summary += "Questions for the authors: " + " ".join(qs)
         return self.project.propose_preparation(ANALYST_ID, ds["sha256"], steps, summary, problems,
                                                 requested_by=requested_by, call=call, instructions=instructions)
+
+    def suggest_answers(self, requested_by: str) -> State:
+        """Saksi proposes an answer to each of its open questions, for the authors to accept or change."""
+        s = self.project.state()
+        answered = {a["question"] for a in s.answers}
+        qs = [q for q in open_questions(s) if q not in answered and q not in s.suggested_answers]
+        if not qs:
+            return s
+        try:
+            protocol, _ = self._protocol_text(s)
+        except Exception:
+            protocol = ""
+        d = self._dictionary(s)
+        rep = next((self.project.blobs.get_json(r["report_sha256"]) for r in reversed(s.curator_reports)), {})
+        plan = {k: {f: a.get(f) for f in ("title", "objective", "outcome", "exposures", "covariates", "method", "unresolved")}
+                for k, a in (s.plan or {}).get("analyses", {}).items()}
+        user = (f"QUESTIONS:\n{json.dumps(qs, indent=1)}\n\nPROTOCOL:\n{protocol[:50000]}\n\n"
+                f"DATA DICTIONARY:\n{json.dumps(d.get('dictionary'), separators=(',', ':'))[:30000]}\n\n"
+                f"DATASET PROFILE (aggregate only):\n{json.dumps(d['profile'], separators=(',', ':'))[:40000]}\n\n"
+                f"DATA CURATOR'S FINDINGS:\n{json.dumps(rep.get('flags'), separators=(',', ':'))[:15000]}\n\n"
+                f"PLAN:\n{json.dumps(plan)[:20000]}\n\nANSWERS SO FAR:\n{answers_text(s)}")
+        obj, call, _ = self._json_call(ANALYST_ID, "prep", SUGGEST_ANSWERS, user, "suggest_answers")
+        got = {str(x.get("question")): x for x in obj.get("suggestions") or [] if isinstance(x, dict)}
+        out = [{"question": q, "answer": str(got[q].get("answer") or "")[:1500], "basis": str(got[q].get("basis") or "")[:300]}
+               for q in qs if q in got and str(got[q].get("answer") or "").strip()]
+        if not out:
+            self.project.record_model_call(ANALYST_ID, call)
+            raise AgentError("Saksi could not propose answers this time")
+        return self.project.suggest_answers(ANALYST_ID, out, requested_by=requested_by, call=call)
 
     def plan_assist(self, requested_by: str, message: str, history: list[dict[str, Any]] | None = None):
         """Saksi and the authors settle what this paper reports, before any analysis. Answers, asks, and when an
@@ -668,6 +701,21 @@ class Agents:
             proposal["action"].update({"stratify_by": act.get("stratify_by"), "variables": act.get("variables") or []})
         return self.project.state(), proposal
 
+    def _supporting_text(self, s: State) -> str:
+        parts, total = [], 0
+        for m in s.materials:
+            if m["kind"] in ("dataset", "protocol") or m.get("withdrawn") or not m.get("storage_ref"):
+                continue
+            try:
+                text = extract_text(material_bytes(self.project, m), m["filename"])[:8000]
+            except Exception:
+                continue
+            if total + len(text) > 30000:
+                break
+            total += len(text)
+            parts.append(f"[{m['kind'].replace('_', ' ')}: {m['filename']}]\n{text}")
+        return "\n\n".join(parts) or "(none)"
+
     # -- Text for each analysis -------------------------------------------------
     def describe(self, requested_by: str, analysis_id: str, instruction: str | None = None) -> State:
         """The Writing Agent writes the text that reports one analysis: Results text that points to its table
@@ -751,6 +799,8 @@ class Agents:
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
+                f"SUPPORTING MATERIALS THE AUTHORS UPLOADED (use them for Methods details such as ethics approval, "
+                f"registration, setting and definitions; never for results):\n{self._supporting_text(s)}\n\n"
                 f"DATA PREPARATION (applied by Saksi's code before analysis; describe it in Methods):\n"
                 f"{json.dumps(preparation_in_use(s), indent=1)}\n\n"
                 f"THE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}\n\n"

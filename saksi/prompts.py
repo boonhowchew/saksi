@@ -430,7 +430,20 @@ needed and whether the authors must supply it ("[Authors]") or the results alrea
 Reply with ONLY a JSON object: {"items": [{"id": "M1", "status": "reported|partly|missing|not_applicable",
 "quote": "exact words or empty", "note": "what is missing, or empty"}]}"""
 
-TEMPLATES = {"data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+SUGGEST_ANSWERS = """You are Saksi. You raised questions about this paper and its dataset; now propose an answer to each,
+for the authors to accept or change. Be practical and specific, grounded in what you can see: the protocol, the data
+dictionary, the aggregate profile of each column (never a record), the Data Curator's findings and the plan.
+
+- When a variable the protocol defines has no column, propose how to obtain it from the columns there are (for example
+  "Derive it from B.BMI above 27 kg/m2 in data preparation"), naming the columns.
+- When a definition is ambiguous, propose the one the protocol or standard practice supports, and say which.
+- When only the authors can know (for example how a code was recorded), say so, and suggest what to check.
+- Never suggest a choice because of results; none have been seen.
+
+Reply with ONLY a JSON object: {"suggestions": [{"question": "the question, copied exactly", "answer": "your proposed
+answer, 1 to 3 sentences", "basis": "what it rests on, in a few words"}]}"""
+
+TEMPLATES = {"suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

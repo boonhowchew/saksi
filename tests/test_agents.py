@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("prep" if "preparing a raw research dataset" in system
+        purpose = ("suggest" if "propose an answer to each" in system
+                   else "prep" if "preparing a raw research dataset" in system
                    else "review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
                    else "describe" if "reports ONE analysis" in system
@@ -125,6 +126,8 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "suggest" and not self.script.get("suggest"):
+            reply = suggest_reply
         elif purpose == "prep" and not self.script.get("prep"):
             reply = PREP_REPLY
         elif purpose == "checklist" and not self.script.get("checklist"):
@@ -149,6 +152,13 @@ PREP_REPLY = {"summary": "Two identifiers and a few implausible values.", "quest
     {"id": "s4", "type": "derive_threshold", "column": "booking_bmi", "op": ">", "value": 27, "new": "bmi_over_27",
      "label": "Booking BMI above 27 kg/m2", "title": "Derive BMI above 27", "reason": "The protocol's risk-factor threshold"},
     {"id": "s5", "type": "drop_columns", "columns": ["no_such_column"], "title": "bad", "reason": "invented"}]}
+
+
+def suggest_reply(user):
+    import json as _j
+    qs = _j.loads(user.split("QUESTIONS:\n", 1)[1].split("\n\nPROTOCOL:", 1)[0])
+    return _j.dumps({"suggestions": [{"question": q, "answer": "Yes: report it as a secondary question, with its 95% CI.",
+                                      "basis": "the protocol's secondary objective"} for q in qs]})
 
 
 def checklist_reply(user):
@@ -932,3 +942,41 @@ def test_table1_reports_yes_no_characteristics_on_one_row_with_clean_headings():
     assert out["columns"][2:4] == ["No gestational diabetes\n(n = 6)", "Gestational diabetes\n(n = 4)"]
     assert out["rows"][0]["cells"][:4] == ["Any smoking, n (%)", "3 (30.0)", "1 (16.7)", "2 (50.0)"]   # one row
     assert [r["cells"][0] for r in out["rows"][2:]] == ["Malay", "Chinese"]                         # value labels
+
+
+def test_saksi_suggests_answers_and_an_author_accepts_one(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    model.script["plan"] = [dict(PLAN_REPLY, report={"aim": "BMI and GDM", "design": "cohort", "questions": ["Report discrimination too?"]})]
+    s = agents.propose_plan("bhc")
+    from saksi.workflow import open_questions
+    assert "Report discrimination too?" in open_questions(s)
+    s = agents.suggest_answers("bhc")
+    assert s.suggested_answers["Report discrimination too?"]["answer"].startswith("Yes")
+    s = p.answer_question("coauthor", "Report discrimination too?", s.suggested_answers["Report discrimination too?"]["answer"],
+                          accepted_suggestion=True)
+    assert s.answers[-1]["accepted_suggestion"] is True and s.answers[-1]["by"] == "coauthor"
+    assert agents.suggest_answers("bhc").suggested_answers == s.suggested_answers         # nothing left to suggest
+
+
+def test_supporting_files_any_time_and_any_file_can_be_removed_with_the_change_recorded(setup):
+    p, agents, model, ds_sha = setup
+    s = _standard_run(p, agents, model)
+    with pytest.raises(WorkflowError, match="fixed once every author has confirmed the plan"):
+        upload(p, "dataset", "new.csv", b"a,b\n1,2\n")
+    s = p.upload_material("bhc", "ethics_approval", "ethics.txt", "e" * 64, 10)
+    assert s.materials[-1]["kind"] == "ethics_approval"
+    s = p.withdraw_material("coauthor", ds_sha, "A data-sharing condition requires it")
+    w = next(e for e in reversed(p.log.events()) if e.type == "material.withdrawn")
+    assert w.payload["after_plan_locked"] is True and w.actor_id == "coauthor"
+
+
+def test_preparation_compares_original_and_prepared_data(setup):
+    p, agents, model, _ = setup
+    agents.prepare_data("bhc")
+    s = p.prepare_dataset("bhc", ["s1", "s3", "s4"])
+    c = [m for m in s.materials if m["kind"] == "dataset"][-1]["preparation"]["comparison"]
+    by = {r["column"]: r for r in c["columns"]}
+    assert by["patient_name"]["status"] == "removed" and by["bmi_over_27"]["status"] == "new"
+    assert by["age"]["status"] == "unchanged" and c["rows_before"] == c["rows_after"] == 400
+    assert by["booking_bmi"]["before"]["missing"] == 12 and "mean" in by["booking_bmi"]["after"]

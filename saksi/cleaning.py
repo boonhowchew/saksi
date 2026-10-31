@@ -146,3 +146,32 @@ def apply(df: pd.DataFrame, steps: list[dict[str, Any]]) -> tuple[pd.DataFrame, 
         log.append({"id": st["id"], "type": t, "title": st["title"], "reason": st.get("reason", ""), "effect": effect,
                     "rows_after": int(len(df)), "columns_after": int(df.shape[1])})
     return df, log
+
+
+def _col_summary(x: pd.Series) -> dict[str, Any]:
+    out = {"missing": int(x.isna().sum()), "distinct": int(x.nunique())}
+    num = pd.to_numeric(x, errors="coerce")
+    if num.notna().sum() and num.notna().sum() >= 0.9 * x.notna().sum():
+        out.update({"min": float(num.min()), "max": float(num.max()), "mean": round(float(num.mean()), 3)})
+    return out
+
+
+def compare(before: pd.DataFrame, after: pd.DataFrame, limit: int = 400) -> dict[str, Any]:
+    """Original against prepared data, column by column, in aggregate only: what was removed, added or changed,
+    and how many values changed. Rows kept keep their original index, so values are compared record by record."""
+    rows = []
+    for c in list(dict.fromkeys(list(before.columns) + list(after.columns)))[:limit]:
+        if c not in after.columns:
+            rows.append({"column": str(c), "status": "removed", "before": _col_summary(before[c]), "after": None})
+        elif c not in before.columns:
+            rows.append({"column": str(c), "status": "new", "before": None, "after": _col_summary(after[c])})
+        else:
+            b = before[c].loc[after.index]
+            a = after[c]
+            nb, na_ = pd.to_numeric(b, errors="coerce"), pd.to_numeric(a, errors="coerce")
+            same = (nb == na_) | (b.astype(str).str.strip() == a.astype(str).str.strip()) | (b.isna() & a.isna())
+            changed = int((~same).sum())
+            rows.append({"column": str(c), "status": "changed" if changed else "unchanged",
+                         "values_changed": changed, "before": _col_summary(before[c]), "after": _col_summary(a)})
+    return {"rows_before": int(len(before)), "rows_after": int(len(after)), "rows_removed": int(len(before) - len(after)),
+            "columns": rows}
