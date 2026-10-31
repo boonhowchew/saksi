@@ -191,8 +191,11 @@ Rules:
 - Put the labels in the text, never in a heading or title. Do not use the word "confirmatory" as a label; for the
   primary analysis whose planned sample was reached, say it was the pre-specified primary analysis and state the
   planned and achieved numbers from sample_check, showing the study had the size it planned to answer its question.
-  For an exploratory analysis, say "exploratory" in the text, and say why (not pre-specified as primary, added after
-  the results were seen, or the sample fell short of the plan).
+  Say once, not repeatedly, which analyses were exploratory and why: in the statistical analysis part of Methods
+  (pre-specified primary; pre-specified secondary; added after the plan; primary but below its planned sample), citing
+  each, or in the sentence where each is first reported. Do not open paragraphs or sentences with "In an exploratory
+  analysis" again and again. What this means for interpretation (chance findings, multiplicity, hypotheses for
+  future studies) belongs once in the Discussion's limitations.
 - Follow the reporting guideline in REPORTING GUIDELINE: report each of its Methods, Results and Discussion items
   that the results support, and put "[Authors: ...]" for items only the authors can supply (setting, recruitment
   dates, ethics, how variables were measured).
@@ -356,8 +359,9 @@ Otherwise write the Results text for this analysis: one short paragraph, two at 
 - Put the labels in the text, never in a heading or title. Do not use the word "confirmatory" as a label; for the
   primary analysis whose planned sample was reached, say it was the pre-specified primary analysis and state the
   planned and achieved numbers from sample_check, showing the study had the size it planned to answer its question.
-  For an exploratory analysis, say "exploratory" in the text, and say why (not pre-specified as primary, added after
-  the results were seen, or the sample fell short of the plan).
+  For an exploratory analysis, say "exploratory" once, in the first sentence that reports it, with the reason (not
+  pre-specified as primary, added after the results were seen, or the sample fell short of the plan). Do not repeat
+  it in later sentences.
 - If sample_check shows a shortfall, give the planned and achieved numbers. If there is a protocol_departure, say so in a sentence that mentions the protocol and the
   primary analysis.
 - Whether each 95% CI includes its null value is in INTERVAL FACTS, computed by code. Rely on it. If the interval
@@ -384,9 +388,15 @@ Actions you can propose:
 - "table1": rebuild Table 1 with another grouping or other characteristics (give stratify_by and variables, using
   column names from the data dictionary).
 - "leave_out": leave an exploratory analysis added after the plan out of the paper (not a planned one).
+- "merge_into_table1": fold a table that describes the participants (their characteristics by group) into Table 1:
+  Table 1 gains the characteristics it lacks, and the separate table is left out of the paper. Use it whenever an
+  author asks to merge a table into Table 1, or a table repeats Table 1's comparison.
 - "remove_figure": leave a figure out of the paper and put its information in the text (give "figure", its number).
   The analysis and its numbers stay; only the figure goes.
 - "none": just answer.
+
+In "reply", say what will be done, in the future tense ("I will ..."); never say it is done: the page reports what
+actually happened once it has run.
 
 Integrity: refuse, and explain why, any request that would hide or reshape results because of what they show (for
 example leaving out an analysis because it was not significant, or redoing the primary analysis with other
@@ -394,7 +404,7 @@ covariates to change its estimate). Say so in "reply".
 
 Reply with ONLY a JSON object:
 {"reply": "your answer to the author, 1 to 4 sentences",
- "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|leave_out|remove_figure|none",
+ "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|merge_into_table1|leave_out|remove_figure|none",
             "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
             "figure": "figure number or null (remove_figure only)",
             "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""
@@ -499,6 +509,54 @@ answers bring to light. Keep the same severity scale (high, medium, low).
 Reply with ONLY a JSON object: {"summary": "two or three sentences on the state of the data now",
 "flags": [{"severity": "high|medium|low", "column": "column or empty", "issue": "...", "suggested_check": "...",
 "status": "open|resolved", "resolution": "how it was resolved, or empty"}]}"""
+
+# How a world-class biostatistician and an experienced academic writer work: shared by the agents that analyse and
+# write, so every analysis and every sentence meets the same standard.
+STATISTICAL_PRACTICE = """
+
+Statistical practice (as a senior biostatistician would apply it; SAMPL guidelines):
+- Estimation first: effect sizes with 95% confidence intervals; exact P values (three decimals, or <0.001), never
+  "NS", stars or "P < 0.05" alone. Do not split results into "significant" and "non-significant"; a wide interval
+  that includes no effect is inconclusive, not evidence of no effect.
+- Fit the method to the question, the outcome and the design: binary outcomes by logistic regression (or log-binomial
+  or Poisson with robust errors for risk ratios when the outcome is common); time to event by Cox regression with a
+  check of proportional hazards; counts by Poisson or negative binomial after checking overdispersion; continuous
+  outcomes by linear regression with residual checks; clustered or repeated data by mixed models, GEE or
+  cluster-robust errors; matched designs by conditional methods.
+- Choose confounders by causal reasoning set out before the analysis, not by stepwise selection or P values; do not
+  adjust for mediators or colliders; report crude and adjusted estimates side by side.
+- Keep continuous variables continuous unless there is a clinical reason; check linearity (for example splines).
+- Report missing data per variable; say what complete-case analysis assumes; use multiple imputation when data are
+  plausibly missing at random and more than a few percent are missing.
+- Check every model: events per parameter, collinearity, influential observations, fit, discrimination and
+  calibration; for prediction, distinguish apparent from internally validated performance.
+- Respect the plan's hierarchy of analyses; treat the rest as hypothesis-generating and mind multiplicity.
+- Precision follows the measurement: percentages to one decimal, means to one more decimal than the data, ratios to
+  two decimals. Every number comes from code, never from mental arithmetic."""
+
+ACADEMIC_WRITING = """
+
+Academic writing (as an experienced author and journal editor would write):
+- Results report; the Discussion interprets. No interpretation, speculation or literature in the Results.
+- Text and tables complement each other: the text gives the main finding, its direction, size and uncertainty, and
+  points to the table or figure once; it does not repeat cells.
+- One idea per paragraph, topic sentence first, ordered from the main question to the secondary ones.
+- Plain, precise English: past tense for what was done and found, present tense for what a table shows and for
+  established knowledge; active voice where it reads naturally.
+- No hype ("novel", "remarkable", "interestingly") and no piled hedges; associations are "associated with", never
+  "caused" or "led to", unless the design supports causal language.
+- Define each abbreviation once, at first use, and use it consistently; spell out numbers below 10 except with
+  units; never begin a sentence with a numeral.
+- Say each caveat once, in its proper place (Methods for how, Limitations for what it means), not in every paragraph."""
+
+_AGAIN = "\n\nAnswer in exactly the format given above."
+CODE = CODE + STATISTICAL_PRACTICE + _AGAIN
+WRITER = WRITER + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
+RESULT_TEXT = RESULT_TEXT + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
+ASSIST = ASSIST + STATISTICAL_PRACTICE + _AGAIN
+OUTLINE = OUTLINE + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
+PLAN = PLAN + STATISTICAL_PRACTICE + _AGAIN
+REWRITE = REWRITE + ACADEMIC_WRITING + _AGAIN
 
 TEMPLATES = {"outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,

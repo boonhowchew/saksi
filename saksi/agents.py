@@ -736,7 +736,8 @@ class Agents:
             supersedes=supersedes if ok else None, redo_reason=redo_reason if ok else None)
 
     # -- The assistant on the Analyses page ----------------------------------
-    ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "leave_out", "remove_figure", "none"}
+    ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "merge_into_table1", "leave_out",
+               "remove_figure", "none"}
 
     def assist(self, requested_by: str, message: str, analysis_id: str | None = None):
         """An author writes to the assistant about one result or the whole Results. The assistant answers and
@@ -782,6 +783,13 @@ class Agents:
                 kind, reply = "none", reply + " (Tell me which figure, by its number.)"
             else:
                 target = fig["analysis_id"]
+        merge = None
+        if kind == "merge_into_table1":
+            merge = self._merge_into_table1(s, cur, tables, target)
+            if merge is None:
+                kind, reply = "none", reply + " (I could not find a table describing the participants to fold into Table 1.)"
+            else:
+                target = merge["analysis_id"]
         if kind in {"variant", "redo", "rewrite_text", "leave_out"}:
             if target not in cur or cur[target].get("standard") and kind != "rewrite_text":
                 kind, reply = "none", reply + " (I could not find a result I can change that way.)"
@@ -789,11 +797,19 @@ class Agents:
                 kind, reply = "none", reply + " (A planned analysis is reported; only an exploratory one added after the plan can be left out.)"
         proposal = {"reply": reply or "Done.", "action": {"type": kind, "analysis_id": target if kind != "none" else None,
                                                           "instruction": str(act.get("instruction") or message)[:2000]}}
+        if merge is not None and kind == "merge_into_table1":
+            proposal["action"].update(merge)
         if fig is not None and kind == "remove_figure":
             proposal["action"].update({"figure_name": fig["name"], "figure_number": fig["number"]})
         if kind == "table1":
             proposal["action"].update({"stratify_by": act.get("stratify_by"), "variables": act.get("variables") or []})
         return self.project.state(), proposal
+
+    def _merge_into_table1(self, s: State, cur: dict[str, Any], tables: list[dict[str, Any]], target: str | None):
+        """What folding a characteristics table into Table 1 means: Table 1's grouping, its characteristics plus those
+        the other table adds (columns that exist in the data), and whether the other table can be left out."""
+        known = {d.get("column") for d in self._dictionary(s).get("dictionary") or []}
+        return tables_mod.merge_plan(s, self.project.blobs, target, known)
 
     def _supporting_text(self, s: State) -> str:
         parts, total = [], 0

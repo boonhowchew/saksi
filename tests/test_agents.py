@@ -451,7 +451,8 @@ def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
     return ("[Authors: introduction]\n\n## Methods\nA multivariable logistic regression was pre-specified.\n\n"
             "## Results\n"
             f"Of 400 records, none was duplicated and 12 lacked booking BMI [A:s_data_quality]. "
-            f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned [A:primary]. "
+            f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned, so the primary analysis is "
+            f"reported as exploratory [A:primary]. "
             f"Booking BMI was associated with GDM "
             f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
             f"{REFS}{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
@@ -1128,3 +1129,15 @@ def test_draft_cites_tables_first_in_results_and_in_number_order():
     from saksi import tables as T
     assert T.out_of_order("See Table 1. Then Table 4 [A:x]. Then Tables 2 and 3.") == ["Table 2", "Table 3"]
     assert T.out_of_order("Table 1, then Figure 1 and Table 2; Figures 2 to 3.") == []
+
+
+def test_fold_into_table1_needs_a_table_that_describes_groups(setup):
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    model.script["assist"] = [{"reply": "I will fold Table 2 into Table 1.",
+                               "action": {"type": "merge_into_table1", "analysis_id": "primary", "instruction": "merge"}}]
+    _, prop = agents.assist("bhc", "Merge Table 2 into Table 1")
+    assert prop["action"]["type"] == "none" and "could not find a table describing the participants" in prop["reply"]
+    assert "never say it is done" in model.bodies[-1]["messages"][0]["content"]
+    assert "Statistical practice" in model.bodies[-1]["messages"][0]["content"]

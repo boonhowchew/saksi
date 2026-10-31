@@ -26,7 +26,7 @@ def _variant_exists(s: Any, aid: str, prompt: str) -> bool:
 
 
 def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
-    from .tables import build
+    from .tables import build, merge_plan
     from .workflow import current
     cur = current(s)
     out: list[dict[str, Any]] = []
@@ -68,9 +68,8 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                 f"It describes the same {len(t1_n)} groups (n = {', '.join(map(str, t1_n))}) as Table 1, so the paper reports "
                 "the participants' characteristics twice. Journals expect one characteristics table: add any characteristic "
                 "it has that Table 1 lacks to Table 1, and leave this one out.",
-                {"type": "leave_out", "analysis_id": t["analysis_id"],
-                 "instruction": "Same comparison as Table 1, which reports the participants' characteristics"}
-                if a.get("basis") == "post hoc" else None)
+                ({"type": "merge_into_table1", "instruction": f"Fold Table {t['number']} into Table 1"}
+                 | (merge_plan(s, blobs, t["analysis_id"]) or {})))
     for t in built:
         if t.get("duplicate_of"):
             a = s.analyses.get(t["analysis_id"]) or {}

@@ -399,6 +399,8 @@ function describe(e) {
   const p = e.payload || {}, who = esc(name(e.actor_id));
   const forWhom = p.requested_by ? ` for ${esc(name(p.requested_by))}` : "";
   switch (e.type) {
+    case "figure.omitted": return `${who} left a figure out of the paper: “${esc(p.reason)}”`;
+    case "figure.restored": return `${who} put a figure back in the paper`;
     case "project.created": return `${who} started the project`;
     case "actor.registered": return p.kind === "agent" ? `${esc(p.name)} joined, running ${esc(p.model)}`
       : `${esc(p.name)} joined as ${esc((p.roles || []).filter((r) => r !== "corresponding_author").join(", ") || "author")}`;
@@ -1126,14 +1128,15 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
       ${canAsk && !a.superseded_by && a.status === "ok" && !a.standard ? `<button class="linkish small" data-action="openask" data-id="${esc(id)}" title="Ask the Analysis Agent to run a variant or redo this analysis"><span class="aibadge">AI</span>change</button>` : ""}
       <span class="tag ${a.status === "ok" ? "good" : "bad"}">${a.status === "ok" ? "ran" : "failed"}</span> <span class="muted small">${esc(id)}</span></h3>
     ${a.superseded_by ? `<p class="msg warn small">Replaced by ${esc(a.superseded_by)}; kept in the record. It is not part of the paper.</p>` : ""}
-    ${a.supersedes ? `<p class="msg small">${a.standard ? "Rebuilt" : "Redone"} at the request of ${esc(name(a.requested_by))}: “${esc(a.redo_reason)}”. It replaces ${esc(a.supersedes)}, which is kept below.${a.standard ? "" : " The label was fixed before any result and does not change."}</p>` : ""}
+    ${a.supersedes ? `<p class="msg small">${a.standard ? "Rebuilt" : "Redone"} at the request of ${esc(name(a.requested_by))}: “${esc(a.redo_reason)}”. It replaces ${esc(a.supersedes)}, whose code and outputs stay in the record (see the Record tab).${a.standard ? "" : " The label was fixed before any result and does not change."}</p>` : ""}
     ${a.spec?.based_on ? `<p class="small">A variant of <strong>${esc(a.spec.based_on.title)}</strong> (${esc(a.spec.based_on.analysis_id)}), asked for after its results were seen, so exploratory. The original is reported too.</p>` : ""}
     ${sampleBlock(a.sample_check)}
     ${departureHtml(a.protocol_deviation)}
     ${a.requested_by ? `<p class="small muted">${a.standard ? "Run" : "Requested"} by ${esc(name(a.requested_by))}${a.spec?.author_request ? `: “${esc(a.spec.author_request)}”` : ""}</p>` : ""}
     ${await descriptionHtml(id, a, tables, canAsk)}
     ${body}
-    ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id).map(figureHtml))).join("")}
+    ${(await Promise.all(s.figures.filter((f) => f.analysis_id === id && !f.omitted).map(figureHtml))).join("")}
+    ${s.figures.filter((f) => f.analysis_id === id && f.omitted).map((f) => `<p class="small muted histline">A figure (“${esc(f.caption.slice(0, 80))}${f.caption.length > 80 ? "…" : ""}”) was left out of the paper by ${esc(name(f.omitted.by))}: “${esc(f.omitted.reason)}”. ${isAuthor() && S.state.stage !== "FINAL" && S.state.plan_locked ? `<button class="linkish small" data-action="restorefig" data-aid="${esc(f.analysis_id)}" data-name="${esc(f.name)}" data-label="Putting it back">Put it back</button>` : ""}</p>`).join("")}
     ${ex.required_figure && !ex.required_figure_drawn ? `<p class="msg warn small">The rule for this analysis requires a ${esc(ex.required_figure.replaceAll("_", " "))}, but the analysis code did not draw one.${ex.figure_error ? " The figure code failed; see How it ran." : ""}</p>` : ""}
     <details><summary>How it ran</summary><dl class="facts">
       <dt>Code by</dt><dd>${esc(ex.code_by || "the Analysis Agent (" + (s.actors["agent:analyst"]?.model || "") + ")")}</dd>
@@ -1150,7 +1153,7 @@ async function analysisBlock(id, a, tables = [], canAsk = false) {
     ${canAsk && !a.superseded_by && !a.withdrawn && a.basis === "post hoc" ? `<details class="small"><summary>Leave this exploratory analysis out of the paper</summary>
       <form class="stack" data-form="withdrawanalysis" data-id="${esc(id)}"><label><span>Why (kept in the record and shown to the reviewer)</span><input type="text" name="reason" required placeholder="For example: superseded by Table 1"></label>
       <div><button class="btn quiet" data-label="Leaving it out">Leave it out</button></div></form></details>` : ""}
-    ${a.supersedes && s.analyses[a.supersedes] ? `<details class="replaced"><summary>The earlier run, ${esc(a.supersedes)}, replaced</summary>${await analysisBlock(a.supersedes, s.analyses[a.supersedes], [], false)}</details>` : ""}</div>`;
+    </div>`;
 }
 
 /* The generated Results section, with the AI beside every result */
@@ -1170,8 +1173,20 @@ async function rtext(id, a, tables, canRun) {
     ${edited.length ? `<p class="byline">Wording edited by ${esc(edited.join(", "))}.</p>` : ""}
     ${d.checks?.ok ? "" : `<p class="small"><span class="tag attn">${esc(d.checks?.untraced || 0)} number(s) in this text are not in the results</span></p>`}`;
 }
+// Earlier versions are not shown as tables and figures: one line each says what happened, who did it and why.
+// Their code, outputs and hashes stay in the record (Record tab), so a reviewer can still check them.
+function historyHtml(leftOut) {
+  const s = S.state;
+  const replaced = Object.entries(s.analyses).filter(([, a]) => a.superseded_by);
+  if (!replaced.length && !leftOut.length) return "";
+  const line = ([id, a]) => a.withdrawn
+    ? `<li>${esc(a.spec?.title || id)}: left out of the paper by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”.</li>`
+    : `<li>${esc(a.spec?.title || id)} (${esc(id)}): replaced by ${esc(a.superseded_by)}, ${a.standard ? "rebuilt" : "redone"} at the request of ${esc(name(s.analyses[a.superseded_by]?.requested_by))}: “${esc(s.analyses[a.superseded_by]?.redo_reason || "")}”.</li>`;
+  return `<details class="alldetails history"><summary>Earlier versions (${replaced.length + leftOut.length}): replaced or left out. Not part of the paper; their code and outputs stay in the record.</summary>
+    <ul class="small">${[...leftOut, ...replaced].sort((x, y) => y[1].seq - x[1].seq).map(line).join("")}</ul></details>`;
+}
 function changesHtml() {
-  const types = new Set(["analysis.completed", "analysis.described", "analysis.withdrawn", "analyses.accepted"]);
+  const types = new Set(["analysis.completed", "analysis.described", "analysis.withdrawn", "analyses.accepted", "figure.omitted", "figure.restored"]);
   const rows = S.events.filter((e) => types.has(e.type)).slice().reverse();
   if (!rows.length) return "";
   return `<details class="alldetails"><summary>Who did what to these results (${rows.length})</summary>
@@ -1229,12 +1244,25 @@ async function suggestionsNow() {
   return S.sugg.list;
 }
 const ACTION_LABEL = { variant: "Run it as a sensitivity analysis", redo: "Redo the analysis", rewrite_text: "Write the text",
-  table1: "Build Table 1", leave_out: "Leave it out", new_analysis: "Run it" };
+  table1: "Build Table 1", leave_out: "Leave it out", new_analysis: "Run it", merge_into_table1: "Fold it into Table 1" };
 function suggestionsHtml(list, canRun) {
   if (!list.length) return "";
   return `<section class="advisor"><h2 class="step"><span class="aibadge">AI</span>Saksi's suggestions <span class="who">The rules of epidemiology and biostatistics, applied by code to these results. Nothing runs until you choose.</span></h2>
     <ul class="sugg">${list.map((x, i) => `<li class="${x.kind}"><strong>${esc(x.title)}.</strong> ${esc(x.why)}
       ${canRun && x.action ? `<button class="btn quiet" data-action="suggest" data-i="${i}" data-label="Working">${esc(ACTION_LABEL[x.action.type] || "Do it")}</button>` : ""}</li>`).join("")}</ul></section>`;
+}
+// What actually happened, said after it has run (never before).
+function doneText(a) {
+  switch (a.type) {
+    case "merge_into_table1": return `Done: Table 1 now includes ${a.added?.length ? a.added.length + " more characteristic" + (a.added.length > 1 ? "s" : "") : "these characteristics"}${a.leave_out ? `, and Table ${a.table_number || ""} is left out of the paper (kept in the record)` : ""}.`.replace("Table  ", "Table ");
+    case "remove_figure": return `Done: Figure ${a.figure_number || ""} is left out, and its information is in the text.`;
+    case "variant": case "new_analysis": return "Done: the new analysis is below, labelled exploratory.";
+    case "redo": return "Done: the analysis was redone; the earlier run is in the record.";
+    case "rewrite_text": return "Done: the text was rewritten and its numbers checked.";
+    case "table1": return "Done: Table 1 was rebuilt.";
+    case "leave_out": return "Done: left out of the paper, with the reason recorded.";
+    default: return "";
+  }
 }
 async function runProposal(action, message) {
   const id = action.analysis_id, nextQ = () => "q" + (Object.values(S.state.analyses).filter((a) => a.request_id).length + 1);
@@ -1245,6 +1273,16 @@ async function runProposal(action, message) {
     case "redo": r = await agent("redo", { analysis_id: id, reason: action.instruction }); break;
     case "rewrite_text": return agent("describe", action.instruction ? { analysis_id: id, instruction: action.instruction } : { analysis_id: id });
     case "remove_figure": return omitFigure(id, action.figure_name, action.instruction || message);
+    case "merge_into_table1": {
+      // Table 1 gains what the other table adds; the other table leaves the paper (kept in the record).
+      const m = action;
+      if (!m.variables) return null;
+      r = await agent("change_table1", { table1: { stratify_by: m.stratify_by || null, variables: m.variables || [] },
+        reason: `Table ${m.table_number || ""} folded into Table 1 at the authors' request`.replace("Table  ", "Table ") });
+      if (m.leave_out) r = await command("withdraw_analysis", { analysis_id: m.analysis_id || id, reason: "Folded into Table 1, which now reports these characteristics" });
+      await describeMissing(r.state);
+      return refreshDraftAfterResultsChange(r);
+    }
     case "table1": r = await agent("change_table1", { table1: { stratify_by: action.stratify_by || null, variables: action.variables || [] }, reason: action.instruction || message }); break;
     case "leave_out": return command("withdraw_analysis", { analysis_id: id, reason: action.instruction || message });
     default: return null;
@@ -1446,8 +1484,7 @@ async function analyses() {
         <button class="btn" data-action="describeall" data-label="Writing the texts">Write the text for ${n === 1 ? "it" : "all " + n}</button></div>` : ""; })()}
     ${results ? `<details class="alldetails" id="details-all" ${S.detailsOpen ? "open" : ""}><summary>How each result was produced: data checks, code, provenance, diagnostics, earlier runs</summary>${sections.join("")}</details>` : sections.join("")}
     ${results ? changesHtml() : ""}
-    ${leftOut.length ? `<section><h2 class="step">Left out of the paper <span class="who">Exploratory analyses the authors asked for and then left out. Kept in the record; the reviewer is told.</span></h2>
-      ${(await Promise.all(leftOut.map(async ([id, a]) => `<details class="replaced"><summary>${esc(a.spec?.title || id)} (${esc(id)}): left out by ${esc(name(a.withdrawn.by))}: “${esc(a.withdrawn.reason)}”</summary>${await analysisBlock(id, a, [], false)}</details>`))).join("")}</section>` : ""}
+    ${historyHtml(leftOut)}
     ${canRun ? `<section><h2>Ask for an exploratory analysis</h2><p class="muted small">Anything not in the confirmed plan is labelled exploratory, permanently.</p>
       <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
         <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
@@ -1939,7 +1976,7 @@ document.addEventListener("click", async (ev) => {
     case "confirmai": {
       const m = S.chat[t.dataset.key][+t.dataset.i], p = m.pending;
       m.pending = null;
-      return act(t, async () => { const r = await runProposal(p.action, p.message); m.text += " Done."; return r; }, "Done. The earlier version is kept in the record.",
+      return act(t, async () => { const r = await runProposal(p.action, p.message); m.text += " " + doneText(p.action); return r; }, "Done. The earlier version is kept in the record.",
         "Saksi AI is working on it. This can take a minute or two.");
     }
     case "suggest": {
@@ -2132,11 +2169,12 @@ document.addEventListener("submit", async (ev) => {
         const r = await agent("assist", f.dataset.id ? { message: msg, analysis_id: f.dataset.id } : { message: msg });
         const p = r.assist || {}, a = p.action || {}, entry = { who: "ai", text: p.reply || "" };
         S.chat[key].push(entry);
-        if (["redo", "leave_out"].includes(a.type)) {
-          entry.pending = { action: a, message: msg, label: a.type === "redo" ? `redo ${a.analysis_id}` : `leave ${a.analysis_id} out of the paper` };
+        if (["redo", "leave_out", "merge_into_table1"].includes(a.type)) {
+          entry.pending = { action: a, message: msg, label: a.type === "redo" ? `redo ${a.analysis_id}`
+            : a.type === "merge_into_table1" ? `fold Table ${a.table_number || ""} into Table 1`.replace("  ", " ") : `leave ${a.analysis_id} out of the paper` };
           return r;
         }
-        if (a.type && a.type !== "none") { const r2 = await runProposal(a, msg); entry.text += " Done."; return r2 || r; }
+        if (a.type && a.type !== "none") { const r2 = await runProposal(a, msg); entry.text += " " + doneText(a); return r2 || r; }
         return r;
       }, null, "Saksi AI is working on it. If it runs an analysis, this can take a minute or two.");
     }

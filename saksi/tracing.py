@@ -6,7 +6,8 @@
 Deterministic, no model involved. For each sentence:
   * every number must match, at the precision written, a value produced by an
     analysis the sentence cites ([A:analysis_id]), or a dataset count;
-  * a sentence citing an exploratory analysis must say "exploratory".
+  * each exploratory analysis must be identified as exploratory once (in any sentence that cites it, for example in
+    Methods or where it is first reported); it is not repeated in every sentence (author's decision, 31 Oct).
 Anything that fails is reported; nothing is silently corrected.
 """
 
@@ -16,6 +17,8 @@ import math
 import re
 from typing import Any, Iterable
 
+EXPLORATORY_WORDS = re.compile(r"exploratory|post[- ]hoc|hypothesis[- ]generating|not pre-?specified|"
+                               r"sensitivity analys|secondary analys", re.I)
 CITE = re.compile(r"\[A:([A-Za-z0-9_.\-]+)\]")
 NUM = re.compile(r"(?<![\w.])(<\s*)?(-?\d+(?:,\d{3})*(?:\.\d+)?)(\s*%)?")
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])|\n+")
@@ -81,6 +84,8 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     say so (it must mention both "protocol" and "primary"). A minimal check; the reviewer judges the rest."""
     counts = [float(c) for c in dataset_counts]
     rows, untraced, unlabelled, unknown_refs = [], [], [], set()
+    named: set[str] = set()                     # exploratory analyses identified as such somewhere
+    first_sentence: dict[str, str] = {}
     stated: dict[str, set[float]] = {}
     disclosed: set[str] = set()
     for para in text.split("\n\n"):
@@ -108,9 +113,11 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
                 rows.append(row)
                 if not hit:
                     untraced.append(row)
-            exploratory = [r for r in refs if analyses.get(r, {}).get("label") == "exploratory"]
-            if exploratory and "exploratory" not in sent.lower() and "exploratory" not in para.lower():
-                unlabelled.append({"sentence": sent[:300], "analyses": exploratory})
+            for r in refs:
+                if analyses.get(r, {}).get("label") == "exploratory":
+                    first_sentence.setdefault(r, sent[:300])
+                    if EXPLORATORY_WORDS.search(sent):
+                        named.add(r)
     # Fail safe: a check that found nothing to check must not report a pass when
     # the body text plainly contains numbers.
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
@@ -118,6 +125,7 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     for pat in CONVENTIONAL:
         body = pat.sub("", body)
     nothing_checked = not rows and bool(re.search(r"\d", body))
+    unlabelled = [{"sentence": first_sentence[r], "analyses": [r]} for r in sorted(set(first_sentence) - named)]
     not_reported = sorted(set(required_refs) - set(CITE.findall(text)))
     shortfall_unreported = sorted(k for k, vals in (must_state or {}).items()
                                   if any(float(v) not in stated.get(k, set()) for v in vals))

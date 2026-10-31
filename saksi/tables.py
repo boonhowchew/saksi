@@ -76,10 +76,16 @@ ACRONYMS = {"bmi", "gdm", "hba1c", "hb", "sbp", "dbp", "bp", "ldl", "hdl", "egfr
 def _name(col: str, labels: dict[str, dict[str, Any]], continuous: bool = False) -> str:
     d = labels.get(col) or {}
     name = str(d.get("label") or _readable(col))
-    units = str(d.get("units_or_coding") or "")
-    if continuous and units and not re.search(r"\d\s*/\s*\d|=", units):
+    units = str(d.get("units_or_coding") or "").strip()
+    if continuous and _is_unit(units):
         name += f", {units}"
     return name
+
+
+def _is_unit(units: str) -> bool:
+    """A unit worth printing ('years', 'kg/m2', 'g/dL'), not a coding, range, count or a note to the authors."""
+    return bool(units) and len(units) <= 16 and not re.search(
+        r"\d\s*/\s*\d|=|\d\s*(?:-|–|to)\s*\d|unknown|confirm|unclear|\?|count|code|categor|scale|score|none|n/a|—", units, re.I)
 
 
 def _label_note(a: dict[str, Any]) -> str:
@@ -323,7 +329,7 @@ def _grouped(aid: str, a: dict[str, Any], out: dict[str, Any], est: list[dict[st
             continue
         rows.append({"cells": [f"{label}, {stat_label(entries)}"] + [""] * len(groups) + [p]})
         for lv in keys:
-            name = codes.get(lv) or (lv.capitalize() if lv.isupper() else lv)
+            name = codes.get(lv) or (lv.capitalize() if lv.isupper() and len(lv) > 4 else lv)
             rows.append({"cells": [name] + [cell(levels[lv].get(g)) for g in groups] + [""], "indent": True})
     has_p = any(r["cells"][-1] for r in rows)
     cols = ["Characteristic"] + [f"{g}\n(n = {sizes[g]:.0f})" if isinstance(sizes.get(g), (int, float)) else g for g in groups]
@@ -345,7 +351,7 @@ def _grouped(aid: str, a: dict[str, Any], out: dict[str, Any], est: list[dict[st
     title = f"Characteristics of the participants, by {by_name[:1].lower()}{by_name[1:]}" if by_name else \
         "Characteristics of the participants: " + ", ".join(groups[:-1]) + " and " + groups[-1]
     return {"analysis_id": aid, "kind": "results", "title": title, "columns": cols, "rows": rows,
-            "footnotes": notes, "grouped": {"groups": groups, "n": [sizes.get(g) for g in groups]}}
+            "footnotes": notes, "grouped": {"groups": groups, "n": [sizes.get(g) for g in groups], "columns": order}}
 
 
 def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -452,6 +458,26 @@ def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[
             t["number"] = n
             seen[key] = t
     return tables if with_duplicates else [t for t in tables if t["number"]]
+
+
+def merge_plan(s: Any, blobs: BlobStore, target: str | None, known: set[str] | None = None) -> dict[str, Any] | None:
+    """Folding a table that describes the participants by group into Table 1: Table 1's grouping, its
+    characteristics plus those the other table adds, and whether the other table can leave the paper."""
+    from .workflow import current
+    cur = current(s)
+    cands = [t for t in build(s, blobs, with_duplicates=True)
+             if t.get("grouped") and t["analysis_id"] in cur and not cur[t["analysis_id"]].get("standard")]
+    t = next((x for x in cands if x["analysis_id"] == target), None) or (cands[0] if len(cands) == 1 else None)
+    if t is None:
+        return None
+    if known is None and s.curator_reports:
+        known = {d.get("column") for d in blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("dictionary") or []}
+    t1 = next((v for v in cur.values() if v.get("standard") == "table1"), None)
+    spec1 = dict((t1 or {}).get("spec", {}).get("table1") or (s.plan_locked or {}).get("table1") or {})
+    have = list(spec1.get("variables") or [])
+    add = [c for c in t["grouped"]["columns"] if (not known or c in known) and c not in have and c != spec1.get("stratify_by")]
+    return {"analysis_id": t["analysis_id"], "table_number": t.get("number"), "stratify_by": spec1.get("stratify_by"),
+            "variables": have + add, "added": add, "leave_out": cur[t["analysis_id"]].get("basis") == "post hoc"}
 
 
 def listing(s: Any, blobs: BlobStore) -> str:

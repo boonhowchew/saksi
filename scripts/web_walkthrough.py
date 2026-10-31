@@ -165,7 +165,8 @@ with sync_playwright() as p:
     page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=120000); page.wait_for_timeout(300)
     print("figure back:", note(page)[:40], "|", page.locator("#results-view figure.fig").count(), "figures")
     assert page.locator("#results-view figure.fig").count() == nfig
-    assert page.locator("details.replaced").count() == 2, "both replaced runs are kept, collapsed"
+    assert page.locator("details.history li").count() == 2, "both replaced runs listed, one line each"
+    assert page.locator("details.replaced").count() == 0, "earlier versions are not shown as tables"
     shot(page, "05b-analyses-ai")
     click(page, "Accept these results")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")  # resume saved identity (author A)

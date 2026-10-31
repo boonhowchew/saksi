@@ -148,3 +148,11 @@ def test_sample_shortfall_must_be_stated():
     told = silent + " There were 18 GDM events, against 40 planned [A:primary]."
     r = trace(told, ANALYSES, outputs, must_state={"primary": [40]})
     assert r["ok"] and r["shortfall_not_reported"] == []
+
+
+def test_exploratory_is_said_once_not_in_every_sentence():
+    text = ("Among Malay women the OR was 1.21 [A:x_q1]. It was similar in other groups [A:x_q1].\n\n"
+            "## Methods\nThe analysis by ethnicity was exploratory [A:x_q1].")
+    assert trace(text, ANALYSES, OUTPUTS)["ok"]
+    r = trace("Among Malay women the OR was 1.21 [A:x_q1]. It was similar elsewhere [A:x_q1].", ANALYSES, OUTPUTS)
+    assert len(r["exploratory_not_labelled"]) == 1 and r["exploratory_not_labelled"][0]["analyses"] == ["x_q1"]
