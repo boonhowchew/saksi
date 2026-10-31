@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
+from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
 from .canonical import sha256_text
@@ -211,6 +211,12 @@ class Agents:
         except AgentError:
             protocol = "(no protocol uploaded yet)"
         protocol = protocol[:CURATE_PROTOCOL_CHARS]
+        # What has happened since: the Curator does not raise again what the authors have answered or prepared.
+        prep = ds.get("preparation")
+        if s.answers or prep:
+            protocol += ("\n\nTHE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS (treat these issues as settled):\n" + answers_text(s)
+                         + ("\n\nTHIS FILE WAS PREPARED FROM THE ORIGINAL UPLOAD BY THESE STEPS:\n"
+                            + "\n".join(f"- {x['title']}: {x['effect']}" for x in prep["log"]) if prep else ""))
         cols, seqs, out, call = prof["columns"], [], None, None
         if len(cols) <= CURATE_BATCH:                       # one call, as before
             user = (f"DATASET PROFILE (aggregate only):\n{json.dumps(prof, indent=1)}\n\nPROTOCOL:\n{protocol}")
@@ -308,6 +314,43 @@ class Agents:
             summary += "Questions for the authors: " + " ".join(qs)
         return self.project.propose_preparation(ANALYST_ID, ds["sha256"], steps, summary, problems,
                                                 requested_by=requested_by, call=call, instructions=instructions)
+
+    def outline(self, requested_by: str) -> State:
+        """What this paper reports and how, for the authors, with a Methods draft: from the protocol, the chosen
+        analyses, the authors' answers and the data preparation. Updated as these change."""
+        s = self.project.state()
+        if s.plan is None:
+            raise WorkflowError("there is no plan yet")
+        try:
+            protocol, _ = self._protocol_text(s)
+        except Exception:
+            protocol = ""
+        d = self._dictionary(s)
+        plan = s.plan_locked or s.plan
+        chosen = {k: {f: a.get(f) for f in ("title", "objective", "role", "kind", "outcome", "exposures", "covariates",
+                                            "method", "effect_measure", "missing_data", "sample_size_quote", "sample_size_target")}
+                  for k, a in plan["analyses"].items() if a.get("included", True) is not False}
+        left = {k: a.get("exclusion_reason") for k, a in plan["analyses"].items() if a.get("included", True) is False}
+        user = (f"PROTOCOL:\n{protocol[:60000]}\n\nTHE ANALYSES THIS PAPER REPORTS (chosen by the authors):\n"
+                f"{json.dumps(chosen, indent=1)[:25000]}\n\nPROTOCOL ANALYSES LEFT FOR OTHER PAPERS: {json.dumps(left)}\n\n"
+                f"TABLE 1: {json.dumps(plan.get('table1'))}\n\nTHE PLAN'S AIM AND DESIGN SO FAR: {json.dumps(plan.get('report'))}\n\n"
+                f"THE AUTHORS' ANSWERS TO SAKSI'S QUESTIONS:\n{answers_text(s)}\n\n"
+                f"DATA PREPARATION: {json.dumps(preparation_in_use(s))[:8000]}\n\n"
+                f"DATA DICTIONARY:\n{json.dumps(d.get('dictionary'), separators=(',', ':'))[:20000]}\n\n"
+                f"REPORTING GUIDELINE ITEMS FOR METHODS:\n"
+                f"{json.dumps([i for i in guidelines.item_list((plan.get('report') or {}).get('design')) if i['section'] == 'methods'])}")
+        obj, call, _ = self._json_call(WRITER_ID, "checklist", OUTLINE, user, "outline")
+        methods = str(obj.pop("methods", "") or "").strip()
+        clean = {"aim": str(obj.get("aim") or "")[:800], "questions": [str(q)[:400] for q in obj.get("questions") or []][:6],
+                 "design": obj.get("design") if obj.get("design") in standard.REPORT_DESIGNS else "other",
+                 "design_note": str(obj.get("design_note") or "")[:400], "population": str(obj.get("population") or "")[:800],
+                 "outcomes": [str(x)[:300] for x in obj.get("outcomes") or []][:8],
+                 "exposures": [str(x)[:300] for x in obj.get("exposures") or []][:20],
+                 "approach": str(obj.get("approach") or "")[:1500]}
+        if not methods:
+            self.project.record_model_call(WRITER_ID, call)
+            raise AgentError("the Writing Agent returned no Methods")
+        return self.project.record_outline(WRITER_ID, clean, methods, requested_by=requested_by, call=call)
 
     def suggest_answers(self, requested_by: str) -> State:
         """Saksi proposes an answer to each of its open questions, for the authors to accept or change."""
@@ -799,6 +842,8 @@ class Agents:
                 f"RESULTS (cite as [A:<key>]):\n{json.dumps(results, indent=1)}\n\n"
                 f"INTERVAL FACTS (computed by code):\n"
                 f"{json.dumps(interval_facts({k: v['results'] for k, v in results.items()}), indent=1)}\n\n"
+                f"METHODS DRAFTED WITH THE AUTHORS BEFORE THE ANALYSIS (use it as the basis of Methods; keep what the "
+                f"authors wrote):\n{self.project.blobs.get_text(s.outline['methods_sha256']) if s.outline else '(none)'}\n\n"
                 f"SUPPORTING MATERIALS THE AUTHORS UPLOADED (use them for Methods details such as ethics approval, "
                 f"registration, setting and definitions; never for results):\n{self._supporting_text(s)}\n\n"
                 f"DATA PREPARATION (applied by Saksi's code before analysis; describe it in Methods):\n"

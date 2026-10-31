@@ -81,7 +81,7 @@ REVIEW2 = {"primary_claim": "Unchanged.", "summary": "R1 is dealt with in the Di
 PLAN_OUT = {"analyses": [dict(PLAN_REPLY["analyses"][0], kind="multivariable"), AUC_PLAN], "table1": TABLE1,
             "report": {"aim": "Is booking BMI associated with gestational diabetes, independent of age, parity and previous GDM?",
                        "design": "cohort", "questions": ["Should this paper also report the discrimination of the model?"]}}
-model = ScriptedModel({"curate": [CURATOR_REPLY],
+model = ScriptedModel({"curate": [CURATOR_REPLY] * 6,      # the Curator updates its report as the work goes on
                        # the first plan, then the redraft agreed in the plan conversation
                        "plan": [PLAN_OUT, PLAN_OUT],
                        # the planned analyses; then, from the walk-through's AI boxes, a variant and a redo

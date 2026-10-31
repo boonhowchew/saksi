@@ -111,6 +111,7 @@ class State:
     figures: list[dict[str, Any]] = field(default_factory=list)
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
+    outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
     preparations: list[dict[str, Any]] = field(default_factory=list)     # data preparation proposals
     items: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_decisions: dict[int, str] = field(default_factory=dict)
@@ -154,7 +155,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures, "answers": self.answers, "suggested_answers": self.suggested_answers, "preparations": self.preparations,
+            "figures": self.figures, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -213,6 +214,13 @@ def apply(s: State, ev: Event) -> State:
         _number_figures(s)
     elif t == "question.answered":
         s.answers.append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
+    elif t == "plan.outlined":
+        s.outline = p["outline"] | {k: p.get(k) for k in ("methods_sha256", "plan_seq", "answers", "requested_by")} \
+            | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts, "edited_by": []}
+    elif t == "plan.outline_edited":
+        if s.outline:
+            s.outline = s.outline | {"methods_sha256": p["methods_sha256"], "seq": ev.seq,
+                                     "edited_by": s.outline.get("edited_by", []) + [ev.actor_id]}
     elif t == "questions.suggested":
         for x in p["suggestions"]:
             s.suggested_answers[x["question"]] = x | {"seq": ev.seq}
@@ -392,6 +400,31 @@ class Project:
         return self.state()
 
     # -- Saksi's questions and the authors' answers ---------------------------
+    def record_outline(self, by: str, outline: dict[str, Any], methods: str, requested_by: str,
+                       call: dict[str, Any] | None = None) -> State:
+        """The Writing Agent's account of what this paper reports and how, with a Methods draft."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        call_seq = self._log_call(by, call)
+        self._emit(by, "plan.outlined", {"outline": outline, "methods_sha256": self.blobs.put_text(methods),
+                                          "plan_seq": (s.plan or {}).get("seq"), "answers": len(s.answers),
+                                          "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
+
+    def edit_outline_methods(self, by: str, text: str) -> State:
+        """An author edits the Methods draft on the Plan page; recorded under their name."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        if not s.outline:
+            raise WorkflowError("there is no Methods draft yet")
+        if not (text or "").strip():
+            raise WorkflowError("the Methods cannot be empty")
+        if self.blobs.get_text(s.outline["methods_sha256"]) == text:
+            raise WorkflowError("nothing changed")
+        self._emit(by, "plan.outline_edited", {"methods_sha256": self.blobs.put_text(text)})
+        return self.state()
+
     def suggest_answers(self, by: str, suggestions: list[dict[str, Any]], requested_by: str,
                         call: dict[str, Any] | None = None) -> State:
         """Saksi's suggested answers to its own questions, for the authors to accept or change."""
@@ -501,7 +534,8 @@ class Project:
                               requested_by: str | None = None, material_sha256: str | None = None) -> State:
         s = self.state()
         a = self._require_role(s, by, "curator")
-        self._require_stage(s, "INGEST")
+        if s.stage == "FINAL":        # the report is kept up to date as the work goes on; it changes no result
+            raise WorkflowError("the paper is final")
         self._requested_by(s, a, requested_by)
         call_seq = self._log_call(by, call)
         self._emit(by, "curator.reported", {"report_sha256": self.blobs.put_json(report),
@@ -1188,7 +1222,8 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
     "draft.signed_off": "verification_decisions", "review.briefing": "review_briefings",

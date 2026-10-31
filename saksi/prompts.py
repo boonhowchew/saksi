@@ -443,7 +443,27 @@ dictionary, the aggregate profile of each column (never a record), the Data Cura
 Reply with ONLY a JSON object: {"suggestions": [{"question": "the question, copied exactly", "answer": "your proposed
 answer, 1 to 3 sentences", "basis": "what it rests on, in a few words"}]}"""
 
-TEMPLATES = {"suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+OUTLINE = """You are the Writing Agent in Saksi. Write, for the authors, what this paper is going to report and how: the
+research question and approach, and a draft of its Methods. Draw on the protocol, the analyses the authors chose for
+this paper (the plan), their answers to Saksi's questions, the data dictionary and profile (aggregate only), and how the
+data were prepared. Be specific to this study: names of the outcome and exposures with their definitions and the
+columns they come from, the setting and population as the protocol gives them, the planned sample size and what it was
+calculated for. Write in plain, precise scientific English. Put "[Authors: ...]" where only the authors can supply
+something (for example ethics approval number, recruitment dates). Never report or guess any result.
+
+Reply with ONLY a JSON object:
+{"aim": "the aim of this paper, one or two sentences",
+ "questions": ["each research question this paper answers, the main one first"],
+ "design": "cross_sectional|cohort|case_control|rct|diagnostic_accuracy|prediction_model|systematic_review|qualitative|other",
+ "design_note": "one sentence on why this design label fits the protocol",
+ "population": "who was studied, where and when, from the protocol",
+ "outcomes": ["outcome: definition (column)"], "exposures": ["exposure or predictor: definition (column)"],
+ "approach": "three to five sentences, in plain words, on how the data will be analysed to answer the questions",
+ "methods": "the Methods section in Markdown, with these subheadings in this order: ### Study design and setting,
+             ### Participants, ### Variables and definitions, ### Data preparation, ### Sample size,
+             ### Statistical analysis. 300 to 600 words."}"""
+
+TEMPLATES = {"outline": OUTLINE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

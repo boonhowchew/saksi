@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("suggest" if "propose an answer to each" in system
+        purpose = ("outline" if "what this paper is going to report" in system
+                   else "suggest" if "propose an answer to each" in system
                    else "prep" if "preparing a raw research dataset" in system
                    else "review" if "Reviewer Assistant" in system else "curate" if "Data Curator" in system
                    else "plan" if "structured analysis plan" in system
@@ -126,6 +127,8 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "outline" and not self.script.get("outline"):
+            reply = OUTLINE_REPLY
         elif purpose == "suggest" and not self.script.get("suggest"):
             reply = suggest_reply
         elif purpose == "prep" and not self.script.get("prep"):
@@ -152,6 +155,17 @@ PREP_REPLY = {"summary": "Two identifiers and a few implausible values.", "quest
     {"id": "s4", "type": "derive_threshold", "column": "booking_bmi", "op": ">", "value": 27, "new": "bmi_over_27",
      "label": "Booking BMI above 27 kg/m2", "title": "Derive BMI above 27", "reason": "The protocol's risk-factor threshold"},
     {"id": "s5", "type": "drop_columns", "columns": ["no_such_column"], "title": "bad", "reason": "invented"}]}
+
+
+OUTLINE_REPLY = {
+    "aim": "To estimate the association between booking BMI and gestational diabetes, and how well a model with booking BMI discriminates women who develop it.",
+    "questions": ["Is booking BMI associated with GDM, independent of age, parity and previous GDM?",
+                  "How well does the model discriminate women with and without GDM?"],
+    "design": "cohort", "design_note": "Women were followed from booking to the diagnosis of GDM.",
+    "population": "Pregnant women booking at six public health clinics [Authors: dates].",
+    "outcomes": ["Gestational diabetes: diagnosed by OGTT (gdm)"], "exposures": ["Booking BMI, kg/m2 (booking_bmi)"],
+    "approach": "Data checks and Table 1 first; then a multivariable logistic regression with model diagnostics; then discrimination by the AUC.",
+    "methods": "### Study design and setting\nA cohort study [Authors: setting and dates].\n\n### Participants\nPregnant women at booking.\n\n### Variables and definitions\nGDM by OGTT; booking BMI in kg/m2.\n\n### Data preparation\nIdentifiers were removed.\n\n### Sample size\n400 women give 80% power.\n\n### Statistical analysis\nLogistic regression with diagnostics."}
 
 
 def suggest_reply(user):
@@ -980,3 +994,20 @@ def test_preparation_compares_original_and_prepared_data(setup):
     assert by["patient_name"]["status"] == "removed" and by["bmi_over_27"]["status"] == "new"
     assert by["age"]["status"] == "unchanged" and c["rows_before"] == c["rows_after"] == 400
     assert by["booking_bmi"]["before"]["missing"] == 12 and "mean" in by["booking_bmi"]["after"]
+
+
+def test_outline_of_what_the_paper_reports_with_a_methods_draft(setup):
+    p, agents, model, _ = setup
+    agents.curate("bhc")
+    s = agents.propose_plan("bhc")
+    s = agents.outline("bhc")
+    o = s.outline
+    assert o["design"] == "cohort" and len(o["questions"]) == 2 and o["plan_seq"] == s.plan["seq"]
+    assert "### Statistical analysis" in p.blobs.get_text(o["methods_sha256"])
+    s = p.edit_outline_methods("coauthor", "### Statistical analysis\n\nLogistic regression, with diagnostics and the AUC.")
+    assert s.outline["edited_by"] == ["coauthor"]
+    # The Curator's report can be brought up to date later, with the authors' answers in view.
+    p.answer_question("bhc", "Is B.BMI coded 1/2?", "Yes, 1 = 27 or less, 2 = above 27.")
+    model.script["curate"] = [CURATOR_REPLY]
+    s = agents.curate("bhc")
+    assert "THE AUTHORS' ANSWERS" in next(b for b in reversed(model.bodies) if "Data Curator" in b["messages"][0]["content"])["messages"][1]["content"]

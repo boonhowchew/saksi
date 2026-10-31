@@ -133,6 +133,11 @@ section.advisor ul.sugg li.note { border-left-color: var(--rule); background: #F
 section.advisor ul.sugg li .btn { margin-left: .4rem; padding: .2rem .6rem; font-size: .82rem; }
 .reportbox { border: 1px solid var(--indigo); border-radius: 8px; padding: .4rem 1rem .8rem; background: #F7F8FC; }
 .reportbox h2 { margin-top: .4rem; }
+.reportbox ol.tight { margin: 0; padding-left: 1.2rem; }
+details.methods { margin: .8rem 0; border-top: 1px solid var(--rule); padding-top: .5rem; }
+.methodsdraft { max-width: none; font-size: 1rem; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: .4rem .9rem; }
+.methodsdraft h4 { font: 600 1rem var(--serif); margin: .8rem 0 .2rem; }
+.methodsdraft[contenteditable="true"]:focus { outline: 2px solid var(--indigo); }
 ol.qa li { margin: .5rem 0; }
 ol.qa .suggest { margin: .3rem 0; padding: .35rem .6rem; background: #EEF1F7; border-radius: 4px; }
 ol.qa .suggest .btn { margin-left: .4rem; padding: .2rem .7rem; font-size: .82rem; }
@@ -521,6 +526,8 @@ async function render() {
   </div>`;
   if (S.tab === "draft") maybeOpenDraft();
   if (S.tab === "plan") maybeSuggestAnswers();
+  if (S.tab === "materials") maybeUpdateCurator();
+  maybeStartAnalysis();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
   <div class="copyrow"><div class="secret">${esc(S.secret.token)}</div><button class="btn quiet" data-action="copy" data-text="${esc(S.secret.token)}">Copy</button></div></div>`;
@@ -563,7 +570,7 @@ async function panelBody(tab) {
     switch (tab) {
       case "people": return people();
       case "materials": return await materials();
-      case "plan": return plan();
+      case "plan": return await plan();
       case "analyses": return await analyses();
       case "draft": return await draft();
       case "review": return await review();
@@ -667,12 +674,13 @@ async function materials() {
     : ["dataset", "protocol"].includes(m.kind) ? "Not used: a later upload replaced it" : "Supporting document";
   let rep = "";
   const rawDs = ds?.prepared_from ? s.materials.find((m) => m.sha256 === ds.prepared_from) || ds : ds;
-  const r = rawDs && s.curator_reports.filter((x) => x.material_sha256 === rawDs.sha256).at(-1);
+  const r = (ds && s.curator_reports.filter((x) => x.material_sha256 === ds.sha256).at(-1)) || (rawDs && s.curator_reports.filter((x) => x.material_sha256 === rawDs.sha256).at(-1));
+  const repFile = r ? (s.materials.find((m) => m.sha256 === r.material_sha256)?.filename || "") : "";
   if (r) {
     const full = await blobJSON(r.report_sha256);
     if (full) {
       const sev = { high: "bad", medium: "attn", low: "" };
-      rep = `<section><h2>Data Curator's report on ${esc(rawDs.filename)}</h2>
+      rep = `<section><h2>Data Curator's report on ${esc(repFile)}</h2>
         <p class="muted small">From an aggregate profile of ${esc(full.profile?.rows)} rows and ${esc(full.columns ?? full.profile?.columns?.length)} columns${(full.prompts || []).length > 1 ? ", checked in batches of columns" : ""}. The Curator never saw a record. Requested by ${esc(name(r.requested_by))}.</p>
         <p>${esc(full.summary)}</p>
         ${full.flags?.length ? `<details ${full.flags.some((f) => f.severity === "high") ? "open" : ""}><summary>${full.flags.length} things for the authors to check${full.flags.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
@@ -756,7 +764,7 @@ async function preparationHtml(canEdit, raw, ds) {
 }
 
 /* Plan */
-function plan() {
+async function plan() {
   const s = S.state, p = s.plan;
   const live = s.materials.filter((m) => !m.withdrawn);
   const ready = live.some((m) => m.kind === "dataset") && live.some((m) => m.kind === "protocol");
@@ -774,7 +782,7 @@ function plan() {
   const nConf = inc.filter((a) => a.label === "confirmatory").length;
   const confirmedBy = s.authors.filter((a) => s.plan_confirmed_by.includes(a));
   const ticks = (a) => (a.design?.conditions || []).map((c) => `<span class="${c.met ? "y" : "n"}" title="${esc(c.label)}: ${c.met ? "yes" : "no"}">${c.met ? "✓" : "✗"}</span>`).join("");
-  return `${reportBox(p, canAct && !locked)}<section>
+  return `${await reportBox(p, canAct && !locked)}${canAct && !locked && !s.plan_confirmed_by.includes(S.you) ? settledBox(p) : ""}<section>
     <p><strong>${items.length} ${items.length === 1 ? "analysis" : "analyses"} from the protocol</strong>: ${nConf} can answer the paper's question as planned (confirmatory, if the completed study reaches the sample its protocol planned), ${inc.length - nConf} cannot (exploratory)${items.length - inc.length ? `, ${items.length - inc.length} left out of this paper` : ""}.
       ${p.by.startsWith("agent:") ? `Drafted by the ${esc(name(p.by))}` : `Revised by ${esc(name(p.by))}`}${p.note ? `: ${esc(p.note)}` : "."}</p>
     <p class="small">${p.table1 ? `<strong>Table 1</strong> describes ${esc(p.table1.variables.length)} characteristics${p.table1.stratify_by ? `, by ${esc(p.table1.stratify_by)}` : ""}: ${esc(p.table1.variables.join(", "))}.` : `No Table 1 was proposed; ask for a new draft, or add it under “Correct the details myself”.`}
@@ -816,13 +824,45 @@ const DESIGN_NAMES = { cross_sectional: "Cross-sectional study", cohort: "Cohort
 const GUIDELINE = { cross_sectional: "STROBE (cross-sectional)", cohort: "STROBE (cohort)", case_control: "STROBE (case-control)",
   rct: "CONSORT", diagnostic_accuracy: "STARD", prediction_model: "TRIPOD+AI", systematic_review: "PRISMA 2020",
   qualitative: "SRQR / COREQ", other: "STROBE (general)" };
-function reportBox(p, canTalk) {
-  const r = p.report || {}, design = r.design || "other";
-  const unresolved = p.order.flatMap((id) => (p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`)));
-  const qs = [...(r.questions || []), ...unresolved];
+function openQs(p) {
+  return [...(p.report?.questions || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
+}
+function preparationLine() {
+  const ds = S.state.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
+  if (!ds) return "";
+  return `<dt>Data</dt><dd>${esc(ds.filename)}${ds.preparation ? `, prepared from ${esc(ds.preparation.source_filename)} by ${ds.preparation.log.length} recorded steps (see <button class="linkish" data-tab="materials">Data</button>)` : ""}${ds.inspection?.rows ? `: ${esc(ds.inspection.rows)} records, ${esc(ds.inspection.columns)} columns` : ""}.</dd>`;
+}
+async function methodsDraft(o) {
+  const text = await blob(o.methods_sha256) || "";
+  const can = isAuthor() && S.state.stage !== "FINAL";
+  const html = parseBlocks(text).map((b) => b.type === "h" ? `<h4>${esc(b.text)}</h4>` : `<p>${inlineMd(b.md, [], false)}</p>`).join("");
+  return `<details class="methods" open><summary><strong>Methods, drafted before the analysis</strong> <span class="small muted">The draft's Methods start from this. ${can ? "Click to edit; your changes are saved under your name." : ""}</span></summary>
+    <div class="manuscript-view methodsdraft" ${can ? `contenteditable="true" spellcheck="true" data-methods="1"` : ""}>${html}</div>
+    ${can ? `<div class="editbar" id="eb-methods" hidden><button class="btn" data-action="savemethods" data-label="Saving">Save my changes</button><button class="btn quiet" data-action="canceldesc">Cancel</button></div>` : ""}</details>`;
+}
+function settledBox(p) {
+  const answered = new Set(S.state.answers.map((a) => a.question));
+  const open = openQs(p).filter((q) => !answered.has(q));
+  if (open.length) return "";
+  return `<div class="bigaction"><p><strong>Saksi has nothing more to ask.</strong> The aim, design and analyses are settled with you. Confirm the plan and Saksi goes straight on to the analysis${S.state.authors.length > 1 ? " once every author has confirmed" : ""}.</p>
+    <button class="btn" data-action="confirmplan">Confirm the plan and start the analysis</button></div>`;
+}
+async function reportBox(p, canTalk) {
+  const o = S.state.outline;
+  const r = { ...(p.report || {}), ...(o ? { aim: o.aim || p.report?.aim, design: o.design || p.report?.design } : {}) }, design = r.design || "other";
+  const qs = openQs(p);
   return `<section class="reportbox"><h2 class="step">What this paper reports <span class="who">Settled with the authors before any analysis; the Writing Agent writes to it.</span></h2>
-    <dl class="facts"><dt>Aim</dt><dd>${r.aim ? esc(r.aim) : `<span class="muted">Not stated yet. Tell Saksi below, or ask for a new draft.</span>`}</dd>
-      <dt>Study design</dt><dd>${esc(DESIGN_NAMES[design])}: the paper is written and checked against the <strong>${esc(GUIDELINE[design])}</strong> reporting guideline.</dd></dl>
+    ${o ? `<p class="small muted">Drafted by the Writing Agent from the protocol, the analyses you chose, your answers and the data preparation, ${fmtTime(o.ts)}${o.edited_by?.length ? `; Methods edited by ${esc([...new Set(o.edited_by.map(name))].join(", "))}` : ""}.
+      ${isAuthor() && S.state.stage !== "FINAL" ? `<button class="linkish" data-agent="outline" data-label="The Writing Agent is updating it">Update it now</button>` : ""}</p>` : `<p class="small muted">${isAuthor() ? "Saksi is drafting this from the protocol and the analyses you chose." : ""}</p>`}
+    <dl class="facts"><dt>Aim</dt><dd>${r.aim ? esc(r.aim) : `<span class="muted">Not stated yet.</span>`}</dd>
+      ${o?.questions?.length ? `<dt>Research questions</dt><dd><ol class="tight">${o.questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ol></dd>` : ""}
+      <dt>Study design</dt><dd>${esc(DESIGN_NAMES[design])}${o?.design_note ? `: ${esc(o.design_note.replace(/[.\s]+$/, ""))}` : ""}. Written and checked against the <strong>${esc(GUIDELINE[design])}</strong> reporting guideline.</dd>
+      ${o?.population ? `<dt>Population</dt><dd>${esc(o.population)}</dd>` : ""}
+      ${o?.outcomes?.length ? `<dt>Outcomes</dt><dd>${o.outcomes.map(esc).join("<br>")}</dd>` : ""}
+      ${o?.exposures?.length ? `<dt>Exposures and predictors</dt><dd>${o.exposures.map(esc).join("<br>")}</dd>` : ""}
+      ${o?.approach ? `<dt>Approach</dt><dd>${esc(o.approach)}</dd>` : ""}
+      ${preparationLine()}</dl>
+    ${o ? await methodsDraft(o) : ""}
     ${qs.length ? `<p class="small"><strong>Saksi's questions for you</strong> <span class="muted">Your answers are recorded under your name and used by Saksi from then on: in the plan, the data preparation, the analyses and the text.</span></p>
       <ol class="small qa">${qs.map((q) => { const ans = S.state.answers.filter((a) => a.question === q);
         const sug = !ans.length && S.state.suggested_answers?.[q];
@@ -1197,9 +1237,47 @@ async function runProposal(action, message) {
   return r;
 }
 
+function maybeStartAnalysis() {
+  const s = S.state;
+  if (!s || S.busy || !isAuthor() || s.stage !== "ANALYSIS" || Object.keys(s.analyses).length) return;
+  S.autoGen = S.autoGen || {};
+  if (S.autoGen[S.pid]) return;
+  S.autoGen[S.pid] = true;
+  setTimeout(() => startGenerating(), 0);
+}
+function maybeUpdateCurator() {
+  const s = S.state;
+  if (S.busy || !isAuthor() || s.stage === "FINAL") return;
+  const ds = s.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
+  if (!ds) return;
+  const reports = s.curator_reports;
+  const last = reports.filter((r) => r.material_sha256 === ds.sha256).at(-1) || (ds.prepared_from ? reports.filter((r) => r.material_sha256 === ds.prepared_from).at(-1) : null);
+  if (!last) return;
+  const pr = s.materials.filter((m) => m.kind === "protocol" && !m.withdrawn).at(-1);
+  const newer = Math.max(pr?.seq || 0, ds.seq || 0, ...s.answers.map((a) => a.seq));
+  const key = `${S.pid}|${newer}`;
+  S.curatorTried = S.curatorTried || {};
+  if (last.seq > newer || S.curatorTried[key]) return;
+  S.curatorTried[key] = true;
+  act(null, () => agent("curate", { material_sha256: ds.sha256 }), "The Data Curator's report is up to date with the protocol, the data in use and your answers.",
+    "The Data Curator is updating its report: the protocol, the data in use or your answers have changed since it was written.");
+}
 function maybeSuggestAnswers() {
   const s = S.state, p = s.plan;
   if (!p || S.busy || !isAuthor() || s.stage === "FINAL") return;
+  // Then the outline of what this paper reports, kept up to date unless an author has edited its Methods.
+  const o = s.outline;
+  if (!o || (!o.edited_by?.length && (o.plan_seq !== p.seq || o.answers !== s.answers.length))) {
+    const okey = `${S.pid}|o|${p.seq}|${s.answers.length}`;
+    S.outlineTried = S.outlineTried || {};
+    const answered0 = new Set(s.answers.map((a) => a.question));
+    const waitingForSuggestions = openQs(p).some((q) => !answered0.has(q) && !s.suggested_answers?.[q]) && !(S.suggestTried || {})[`${S.pid}|${p.seq}|${openQs(p).filter((q) => !answered0.has(q) && !s.suggested_answers?.[q]).length}`];
+    if (!waitingForSuggestions && !S.outlineTried[okey]) {
+      S.outlineTried[okey] = true;
+      return act(null, () => agent("outline"), "Saksi has written what this paper reports and a draft of its Methods.",
+        "The Writing Agent is drafting what this paper reports, and its Methods, from the protocol, your choices and answers.");
+    }
+  }
   const answered = new Set(s.answers.map((a) => a.question));
   const qs = [...(p.report?.questions || []), ...p.order.flatMap((id) => p.analyses[id].included === false ? [] : (p.analyses[id].unresolved || []).map((u) => `${p.analyses[id].title || id}: ${u}`))];
   const open = qs.filter((q) => !answered.has(q) && !s.suggested_answers?.[q]);
@@ -1753,6 +1831,12 @@ document.addEventListener("click", async (ev) => {
     }
     case "editplan": S.planEdit = true; S.notice = null; await render(); $("#panel")?.scrollIntoView({ block: "start" }); return;
     case "canceledit": S.planEdit = false; return render();
+    case "savemethods": {
+      const box = document.querySelector("[data-methods]");
+      const text = [...box.children].map((el) => el.tagName === "H4" ? `### ${el.innerText.trim()}` : serialiseBlock(el)).filter(Boolean).join("\n\n");
+      return act(t, () => command("edit_outline_methods", { text }), "Your changes to the Methods were saved under your name.");
+    }
+    case "confirmplan": { document.querySelector("form[data-form=planconfirm]")?.requestSubmit(); return; }
     case "acceptsug": {
       const q = t.dataset.q, sug = S.state.suggested_answers[q];
       return act(t, () => command("answer_question", { question: q, answer: sug.answer, accepted_suggestion: true }),
@@ -1800,6 +1884,7 @@ document.addEventListener("click", async (ev) => {
 
 document.addEventListener("toggle", (ev) => { if (ev.target.id === "details-all") S.detailsOpen = ev.target.open; }, true);
 document.addEventListener("input", (ev) => {
+  if (ev.target.closest?.("[data-methods]")) { const b = document.getElementById("eb-methods"); if (b) b.hidden = false; return; }
   const el = ev.target.closest?.("[data-desc],[data-head]");
   if (!el) return;
   const id = el.dataset.desc || el.dataset.head, bar = document.getElementById("eb-" + id);
@@ -1904,13 +1989,18 @@ document.addEventListener("submit", async (ev) => {
         return { ...a, included: inc, exclusion_reason: inc ? null : why };
       });
       if (missing) { S.notice = { kind: "err", text: `Say why “${missing}” is left out: the draft will report it.` }; $("#status").innerHTML = noticeHtml(); return; }
+      const o = s.outline, report = { ...(p.report || {}) };
+      if (o && (o.aim !== report.aim || o.design !== report.design)) {
+        report.aim = o.aim; report.design = o.design;
+        changed.push("set the aim and design from Saksi's outline");
+      }
       if (!changed.length) {
         if (s.plan_confirmed_by.includes(S.you)) { S.notice = { kind: "ok", text: "Nothing changed." }; $("#status").innerHTML = noticeHtml(); return; }
         await act(btn, () => command("confirm_plan", { plan_sha256: p.sha }), "You confirmed the plan.");
         return startGenerating();
       }
       await act(btn, async () => {
-        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, report: p.report, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
+        const r = await command("propose_plan", { analyses, protocol_ref: p.protocol_ref, table1: p.table1, report, note: `Chose the analyses for this paper: ${changed.join("; ")}.` });
         return command("confirm_plan", { plan_sha256: r.state.plan.sha });
       }, `Your choice was saved as a revised plan, and you confirmed it.${s.authors.length > 1 ? " Your co-authors now confirm the new version." : ""}`);
       return startGenerating();
