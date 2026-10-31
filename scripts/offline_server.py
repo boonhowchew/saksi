@@ -55,9 +55,11 @@ As pre-specified in the protocol, a multivariable logistic regression was fitted
 ## Results
 Table 1 describes the {t1['n_analysed']} women by GDM status; those with GDM were slightly older and more often had previous GDM [A:s_table1.r1].
 
-Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3) [A:primary]. Because the achieved sample fell short of the plan, this pre-specified primary analysis is reported as exploratory. Table 2 and Figure 1 give the adjusted estimates. Booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. Previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
+Table 2 and Figure 1 give the adjusted estimates of the primary model, reported as exploratory because the achieved sample fell short of the plan (below). In this exploratory analysis, booking BMI was associated with GDM with an adjusted odds ratio of {f('booking_bmi')} per unit [A:primary]. In the same exploratory model, previous GDM had an adjusted odds ratio of {f('previous_gdm')} [A:primary].
 
 The exploratory model had {diag['assumptions']['events_per_parameter']} outcome events per predictor parameter, fewer than usually recommended, so its estimates may be unstable [A:primary]. Its C-statistic was {diag['fit']['c_statistic']:.2f} and its apparent calibration slope (Figure 2) {cal['slope']:.2f}, as expected on the data the model was fitted to; performance in new women needs validation [A:primary]. The largest variance inflation factor was {vif_max:.2f}, so collinearity was not a concern [A:primary].
+
+Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM events (Figure 3), so this pre-specified primary analysis is reported as exploratory [A:primary].
 
 In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (the same as in Table 2) [A:x_q1].
 

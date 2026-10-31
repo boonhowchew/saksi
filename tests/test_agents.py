@@ -1091,3 +1091,40 @@ def test_draft_methods_get_the_software_used(setup):
     s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
     sw = _software(s)
     assert sw.get("python") and "statsmodels" in sw
+
+
+def test_group_comparison_laid_out_as_a_journal_characteristics_table():
+    from saksi import tables
+    E = [{"name": "Sample size Non-GDM", "measure": "Count", "estimate": 531.0},
+         {"name": "Sample size GDM", "measure": "Count", "estimate": 312.0}]
+    for v, a, b, p in [("M.Age", (30.50, 30.08, 30.91), (31.51, 30.98, 32.03), 0.003),
+                       ("Hb", (11.20, 11.12, 11.28), (11.20, 11.08, 11.32), 0.979)]:
+        E += [{"name": f"{v} mean [Non-GDM]", "measure": "Mean", "estimate": a[0], "ci_lower": a[1], "ci_upper": a[2], "p_value": p},
+              {"name": f"{v} mean [GDM]", "measure": "Mean", "estimate": b[0], "ci_lower": b[1], "ci_upper": b[2], "p_value": p}]
+    for v, a, b, p in [("Work.YN=1", (.74, .70, .78), (.71, .66, .76), .288),
+                       ("Highest.Edu=DEGREE", (.38, .34, .42), (.36, .30, .41), .057),
+                       ("Highest.Edu=DIPLOMA", (.30, .26, .34), (.33, .28, .38), .057)]:
+        E += [{"name": f"{v} proportion [Non-GDM]", "measure": "Proportion", "estimate": a[0], "ci_lower": a[1], "ci_upper": a[2], "p_value": p},
+              {"name": f"{v} proportion [GDM]", "measure": "Proportion", "estimate": b[0], "ci_lower": b[1], "ci_upper": b[2], "p_value": p}]
+    labels = tables._labels([{"column": "M.Age", "label": "Maternal age", "units_or_coding": "years"},
+                             {"column": "Work.YN", "label": "Working yes/no", "units_or_coding": "0=No, 1=Yes"},
+                             {"column": "Highest.Edu", "label": "Highest education"},
+                             {"column": "GDM", "label": "Gestational diabetes yes/no"}])
+    a = {"spec": {"title": "Analyse and generate a participant demographic charateristic table. Stratify this to "
+                           "Non-GDM and GDM columns.", "outcome": {"column": "GDM"}}}
+    t = tables._results("q3", a, {"estimates": E}, labels)
+    assert t["title"] == "Characteristics of the participants, by gestational diabetes"
+    assert t["columns"] == ["Characteristic", "Non-GDM\n(n = 531)", "GDM\n(n = 312)", "P value"]
+    rows = [r["cells"] for r in t["rows"]]
+    assert rows[0] == ["Maternal age, years, mean (95% CI)", "30.5 (30.1 to 30.9)", "31.5 (31.0 to 32.0)", "0.003"]
+    assert rows[2] == ["Working, % (95% CI)", "74.0 (70.0 to 78.0)", "71.0 (66.0 to 76.0)", "0.288"]   # one row
+    assert rows[3] == ["Highest education, % (95% CI)", "", "", "0.057"] and t["rows"][4]["indent"]
+    assert rows[4][0] == "Degree" and rows[4][3] == ""                              # P value once per variable
+    assert not any("[" in r[0] or "=" in r[0] for r in rows)
+    assert tables.is_instruction(a["spec"]["title"]) and not tables.is_instruction("Booking BMI and GDM")
+
+
+def test_draft_cites_tables_first_in_results_and_in_number_order():
+    from saksi import tables as T
+    assert T.out_of_order("See Table 1. Then Table 4 [A:x]. Then Tables 2 and 3.") == ["Table 2", "Table 3"]
+    assert T.out_of_order("Table 1, then Figure 1 and Table 2; Figures 2 to 3.") == []

@@ -57,7 +57,21 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                  "variables": spec.get("variables") or [], "instruction": "Rebuilt so that missing-value codes are read as missing"})
     quality = next((blobs.get_json(a["outputs_sha256"]) for a in cur.values() if a.get("standard") == "data_quality"), None)
     missing = {c["column"]: c.get("missing_pct") or 0 for c in (quality or {}).get("columns", [])}
-    for t in build(s, blobs, with_duplicates=True):
+    built = build(s, blobs, with_duplicates=True)
+    t1_table = next((t for t in built if t.get("kind") == "table1"), None)
+    t1_n = sorted(int(x) for c in (t1_table or {}).get("columns", [])[2:] for x in re.findall(r"n = (\d+)", c))
+    for t in built:
+        g = t.get("grouped")
+        if t1_table and g and t1_n and sorted(int(n) for n in g["n"] if isinstance(n, (int, float))) == t1_n:
+            a = s.analyses.get(t["analysis_id"]) or {}
+            add(f"t1same:{t['analysis_id']}", t["analysis_id"], f"Table {t['number']} compares the same groups as Table 1",
+                f"It describes the same {len(t1_n)} groups (n = {', '.join(map(str, t1_n))}) as Table 1, so the paper reports "
+                "the participants' characteristics twice. Journals expect one characteristics table: add any characteristic "
+                "it has that Table 1 lacks to Table 1, and leave this one out.",
+                {"type": "leave_out", "analysis_id": t["analysis_id"],
+                 "instruction": "Same comparison as Table 1, which reports the participants' characteristics"}
+                if a.get("basis") == "post hoc" else None)
+    for t in built:
         if t.get("duplicate_of"):
             a = s.analyses.get(t["analysis_id"]) or {}
             add(f"dup:{t['analysis_id']}", t["analysis_id"], f"Same results as Table {t['duplicate_of']['number']}",
@@ -71,6 +85,11 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
         out_ = blobs.get_json(a["outputs_sha256"])
         title = a["spec"].get("title") or aid
         est = out_.get("estimates") or []
+        if a.get("description") and not (a["description"].get("heading") or "").strip():
+            add(f"head:{aid}", aid, f"No journal heading for “{title}”",
+                "Its subheading and table title come from the request as typed. The Writing Agent writes a short "
+                "journal heading when it rewrites the text.",
+                {"type": "rewrite_text", "analysis_id": aid, "instruction": "Keep the text; give it a short journal heading."})
         if not a.get("description"):
             add(f"text:{aid}", aid, f"Write the text for “{title}”",
                 "Each result needs a passage that reports it.", {"type": "rewrite_text", "analysis_id": aid, "instruction": ""})

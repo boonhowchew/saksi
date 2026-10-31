@@ -61,9 +61,21 @@ def _labels(dictionary: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]
     return {d["column"]: d for d in dictionary or [] if isinstance(d, dict) and d.get("column")}
 
 
+def _readable(col: str) -> str:
+    """A column name with no dictionary label, made readable: 'previous_gdm' -> 'Previous GDM'."""
+    words = re.split(r"[_.\s]+", str(col).strip())
+    out = [w.upper() if w.lower() in ACRONYMS else w for w in words if w]
+    text = " ".join(out) or str(col)
+    return text[:1].upper() + text[1:]
+
+
+ACRONYMS = {"bmi", "gdm", "hba1c", "hb", "sbp", "dbp", "bp", "ldl", "hdl", "egfr", "ogtt", "fbs", "fpg", "id", "hiv",
+            "icu", "auc", "dm", "t2dm", "ckd", "ses", "ga", "crp", "alt", "ast", "tg", "tc"}
+
+
 def _name(col: str, labels: dict[str, dict[str, Any]], continuous: bool = False) -> str:
     d = labels.get(col) or {}
-    name = str(d.get("label") or col)
+    name = str(d.get("label") or _readable(col))
     units = str(d.get("units_or_coding") or "")
     if continuous and units and not re.search(r"\d\s*/\s*\d|=", units):
         name += f", {units}"
@@ -209,6 +221,133 @@ def _common_notes(a: dict[str, Any], out: dict[str, Any]) -> list[str]:
     return notes
 
 
+# Results that describe groups side by side ("Age mean [GDM]", "Smoking=1 proportion [No GDM]", "Sample size GDM")
+# are laid out the way journals print a characteristics table: groups as columns with their n, one row per
+# characteristic (a yes/no one as a single row, categories indented under their variable), one P value per row.
+_GROUPED = re.compile(r"^(?P<var>.+?)(?:[\s_]+(?P<stat>mean|median|proportion|percent(?:age)?|prevalence|rate|count|n|sd))?"
+                      r"\s*[\[(](?P<group>[^\])]+)[\])]\s*$", re.I)
+_SIZE = re.compile(r"^(?:sample\s+size|group\s+size|number(?:\s+of\s+participants)?|n|count|total)\b[\s:,=_-]*(?:in\s+)?(?P<group>.*)$", re.I)
+_INSTRUCTION = re.compile(r"^\s*(?:please\s+)?(?:analy[sz]e|generate|create|make|produce|compute|calculate|run|show|do|add|"
+                          r"perform|build|stratify|compare|estimate|fit|redo|repeat|plot|draw|test|check|tabulate|describe|"
+                          r"summari[sz]e|give|report|present|prepare|construct|i\s+want|can\s+you|could\s+you)\b", re.I)
+
+
+def _dp(v: Any) -> int:
+    return 1 if isinstance(v, (int, float)) and abs(v) >= 10 else 2
+
+
+def is_instruction(title: str) -> bool:
+    """A request typed by an author ("Analyse and generate ...") is not a table title."""
+    return bool(_INSTRUCTION.match(title or ""))
+
+
+def _title_from_request(title: str) -> str:
+    first = re.split(r"(?<=[.!?])\s+", (title or "").strip())[0].rstrip(".!? ")
+    first = re.sub(r"^(?:(?:please|and|then|also)\s+|(?:analy[sz]e|generate|create|make|produce|compute|calculate|run|show|"
+                   r"do|add|perform|build|compare|estimate|fit|plot|draw|tabulate|describe|summari[sz]e|give|report|present|"
+                   r"prepare|construct)\s+(?:and\s+)?|(?:a|an|the)\s+)+", "", first, flags=re.I).strip()
+    return (first[:1].upper() + first[1:]) if first else "Results"
+
+
+def _grouped(aid: str, a: dict[str, Any], out: dict[str, Any], est: list[dict[str, Any]],
+             labels: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    groups: list[str] = []
+    sizes: dict[str, Any] = {}
+    data: dict[str, dict[str, dict[str, Any]]] = {}     # column -> level ("" for continuous) -> group -> entry
+    order: list[str] = []
+    for e in est:
+        name = str(e["name"]).strip()
+        m = _GROUPED.match(name)
+        var = (m["var"] if m else name).strip()
+        sm = _SIZE.match(var) if m else _SIZE.match(name)
+        if sm and isinstance(e.get("estimate"), (int, float)) and (m or sm["group"].strip()):
+            g = (m["group"] if m else sm["group"]).strip()
+            sizes[g] = e["estimate"]
+            if g not in groups:
+                groups.append(g)
+            continue
+        if not m:
+            return None
+        g = m["group"].strip()
+        stat = (m["stat"] or str(e.get("measure") or "")).lower()
+        col, _, level = var.partition("=")
+        col, level = col.strip(), level.strip()
+        kind = ("pct" if re.search(r"proportion|percent|prevalence|%", stat) else "median" if "median" in stat
+                else "n" if re.fullmatch(r"count|n|number", stat.strip()) else "mean")
+        if g not in groups:
+            groups.append(g)
+        if col not in data:
+            data[col], _ = {}, order.append(col)
+        data[col].setdefault(level, {})[g] = e | {"_kind": kind}
+    if len(groups) < 2 or len(data) < 2 or len(groups) > MAX_COLS - 2:
+        return None
+
+    def cell(e: dict[str, Any] | None) -> str:
+        if not e or not isinstance(e.get("estimate"), (int, float)):
+            return ""
+        v, lo, hi, k = e["estimate"], e.get("ci_lower"), e.get("ci_upper"), e["_kind"]
+        scale = 100 if k == "pct" and v <= 1 and (hi is None or hi <= 1) else 1
+        if k == "n":
+            return f"{v:.0f}"
+        d = 1 if k == "pct" else _dp(v)
+        ci = f" ({lo * scale:.{d}f} to {hi * scale:.{d}f})" if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else ""
+        if e.get("sd") is not None and not ci:
+            ci = f" ({_x(e['sd'], d)})"
+        return f"{v * scale:.{d}f}{ci}"
+
+    def stat_label(entries: list[dict[str, Any]]) -> str:
+        e = entries[0]
+        has_ci = any(x.get("ci_lower") is not None for x in entries)
+        base = {"pct": "%", "median": "median", "n": "n", "mean": "mean"}[e["_kind"]]
+        return f"{base} (95% CI)" if has_ci and base != "n" else (f"{base} (SD)" if any(x.get("sd") is not None for x in entries) else base)
+
+    def pval(levels: dict[str, dict[str, Any]]) -> str:
+        for per in levels.values():
+            for x in per.values():
+                if x.get("p_value") is not None:
+                    return _p(x["p_value"])
+        return ""
+
+    rows, kinds = [], set()
+    for col in order:
+        levels = data[col]
+        entries = [x for per in levels.values() for x in per.values()]
+        kinds.add(stat_label(entries))
+        label = _clean_label(_name(col, labels, continuous=entries[0]["_kind"] in ("mean", "median")))
+        codes = _codes(col, labels)
+        p = pval(levels)
+        keys = list(levels)
+        if keys == [""] or (len(keys) == 1 and keys[0].lower() in _YES):
+            per = levels[keys[0]]
+            rows.append({"cells": [f"{label}, {stat_label(entries)}"] + [cell(per.get(g)) for g in groups] + [p]})
+            continue
+        rows.append({"cells": [f"{label}, {stat_label(entries)}"] + [""] * len(groups) + [p]})
+        for lv in keys:
+            name = codes.get(lv) or (lv.capitalize() if lv.isupper() else lv)
+            rows.append({"cells": [name] + [cell(levels[lv].get(g)) for g in groups] + [""], "indent": True})
+    has_p = any(r["cells"][-1] for r in rows)
+    cols = ["Characteristic"] + [f"{g}\n(n = {sizes[g]:.0f})" if isinstance(sizes.get(g), (int, float)) else g for g in groups]
+    if has_p:
+        cols.append("P value")
+    else:
+        for r in rows:
+            r["cells"] = r["cells"][:-1]
+    said = [("percentage" + k[1:]) if k.startswith("%") else k for k in sorted(kinds)]
+    notes = ["Values are " + (", ".join(said[:-1]) + " or " + said[-1] if len(said) > 1 else said[0]) + ", as computed by the analysis code."]
+    model = (out.get("model") or {}).get("formula_or_description")
+    if model and has_p:
+        notes.append(f"P values: {model}.")
+    notes.append("CI, confidence interval.")
+    spec = a.get("spec") or {}
+    oc = spec.get("outcome") if isinstance(spec.get("outcome"), dict) else {}
+    by = spec.get("stratify_by") or oc.get("column")
+    by_name = _clean_label(_name(by, labels)) if by else ""
+    title = f"Characteristics of the participants, by {by_name[:1].lower()}{by_name[1:]}" if by_name else \
+        "Characteristics of the participants: " + ", ".join(groups[:-1]) + " and " + groups[-1]
+    return {"analysis_id": aid, "kind": "results", "title": title, "columns": cols, "rows": rows,
+            "footnotes": notes, "grouped": {"groups": groups, "n": [sizes.get(g) for g in groups]}}
+
+
 def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     laid = _code_table(out.get("table"))
     if laid:
@@ -218,6 +357,9 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
     est = [e for e in out.get("estimates") or [] if isinstance(e, dict) and e.get("name") is not None]
     if not est:
         return None
+    wide = _grouped(aid, a, out, est, labels)
+    if wide:
+        return wide
     measures = list(dict.fromkeys(str(e.get("measure") or "Estimate") for e in est))
     terms = list(dict.fromkeys(str(e["name"]) for e in est))
     by = {(str(e["name"]), str(e.get("measure") or "Estimate")): e for e in est}
@@ -232,9 +374,12 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
             return ["", ""]
         lo, hi = e.get("ci_lower"), e.get("ci_upper")
         ci = f" ({_x(lo)} to {_x(hi)})" if lo is not None and hi is not None else ""
-        return [f"{_x(e.get('estimate'))}{ci}", _p(e.get("p_value"))]
+        v = e.get("estimate")
+        if isinstance(v, float) and v.is_integer() and not ci and re.fullmatch(r"(?i)\s*(count|n|number|sample size|events?)\s*", str(e.get("measure") or "")):
+            v = int(v)
+        return [f"{_x(v)}{ci}", _p(e.get("p_value"))]
 
-    rows = [{"cells": [labels.get(t, {}).get("label") or t] + [x for m in measures for x in cell(by.get((t, m)))]}
+    rows = [{"cells": [_clean_label(_name(t, labels))] + [x for m in measures for x in cell(by.get((t, m)))]}
             for t in terms]
     # Drop P-value columns that are empty throughout (for example an AUC).
     keep = [i for i in range(len(cols)) if cols[i] != "P value" or any(r["cells"][i] for r in rows)]
@@ -269,7 +414,8 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
                 f"largest variance inflation factor {_x(max(vif.values()))}" if vif else ""]
         notes.append("Model diagnostics: " + "; ".join(b for b in bits if b) + ".")
     notes.append("; ".join(f"{k}, {v}" for k, v in sorted(abbr.items())) + ".")
-    return {"analysis_id": aid, "kind": "results", "title": str(a["spec"].get("title") or aid),
+    title = str(a["spec"].get("title") or aid)
+    return {"analysis_id": aid, "kind": "results", "title": _title_from_request(title) if is_instruction(title) else title,
             "columns": cols, "rows": rows, "footnotes": notes}
 
 
@@ -289,8 +435,10 @@ def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[
         heading = ((a.get("description") or {}).get("heading") or "").strip()
         if t and heading and not a.get("standard") and not t.get("laid_out_by"):
             t["title"] = heading
-        elif t and heading and t.get("laid_out_by") and a.get("basis") == "post hoc":
+        elif t and heading and t.get("laid_out_by") and (a.get("basis") == "post hoc" or is_instruction(t["title"])):
             t["title"] = heading           # an author's request is not a table title
+        elif t and t.get("laid_out_by") and is_instruction(t["title"]):
+            t["title"] = _title_from_request(t["title"])
         if t:
             tables.append(t | {"label": a.get("label")})
     seen: dict[str, dict[str, Any]] = {}
@@ -498,6 +646,30 @@ def resolve(text: str, aid: str, tables: list[dict[str, Any]], figures: list[dic
 
 
 _REF = re.compile(r"\b(Tables?|Fig(?:ure)?s?\.?)\s+(\d+(?:\s*(?:,|and|to|-|–)\s*\d+)*)", re.I)
+
+
+def first_mentions(text: str) -> list[tuple[str, int]]:
+    """Tables and figures in the order the text first refers to them."""
+    seen: list[tuple[str, int]] = []
+    for m in _REF.finditer(text or ""):
+        kind = "table" if m.group(1).lower().startswith("tab") else "figure"
+        nums = [int(x) for x in re.findall(r"\d+", m.group(2))]
+        for a, b in re.findall(r"(\d+)\s*(?:to|-|–)\s*(\d+)", m.group(2)):
+            nums += list(range(int(a), int(b) + 1))
+        for n in sorted(set(nums)):
+            if (kind, n) not in seen:
+                seen.append((kind, n))
+    return seen
+
+
+def out_of_order(text: str) -> list[str]:
+    """Tables or figures first referred to before a lower-numbered one (journals number them in order of mention)."""
+    bad, top = [], {"table": 0, "figure": 0}
+    for kind, n in first_mentions(text):
+        if n < top[kind]:
+            bad.append(f"{kind.capitalize()} {n}")
+        top[kind] = max(top[kind], n)
+    return bad
 
 
 def references(text: str) -> dict[str, set[int]]:

@@ -1411,7 +1411,7 @@ function askBox(id, a) {
 
 async function analyses() {
   const s = S.state;
-  const canRun = isAuthor() && s.stage === "ANALYSIS";
+  const canRun = isAuthor() && ["ANALYSIS", "AUTHOR_REVISION", "RESPONSE"].includes(s.stage);
   const pending = s.plan_locked ? pendingSteps() : [];
   const tables = await tablesNow();
   const byStep = {};
@@ -1452,7 +1452,9 @@ async function analyses() {
       <form class="stack" data-form="explore"><input type="hidden" name="request_id" value="${esc(nextQ)}">
         <label><span>What should be analysed?</span><textarea name="prompt" required placeholder="For example: the primary model stratified by ethnicity"></textarea></label>
         <div><button class="btn" data-label="Running the exploratory analysis">Run exploratory analysis</button></div></form></section>
-      ${!pending.length && Object.keys(s.analyses).length ? `<section><h2>Accept the results</h2>
+      ${s.stage !== "ANALYSIS" && s.draft_version && resultsChangedSince(s.draft_version) ? `<div class="bigaction"><p><strong>The Results have changed since draft version ${s.draft_version}</strong> (${esc(resultsChangedSince(s.draft_version))}).</p>
+        <button class="btn" data-agent="write_draft" data-label="The Writing Agent is rewriting the draft from the current Results">Rewrite the draft from these Results</button></div>` : ""}
+      ${s.stage === "ANALYSIS" && !pending.length && Object.keys(s.analyses).length ? `<section><h2>Accept the results</h2>
         <p>Accepted by: ${esc(s.analyses_accepted_by.map(name).join(", ") || "nobody yet")}. Accepting binds to exactly this set of results (<span class="hash">${short(s.analysis_set_sha256)}</span>); a new analysis needs fresh acceptance.</p>
         ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
 }
@@ -1520,13 +1522,30 @@ function refsIn(t) {
   }
   return out;
 }
+// What has changed in the Results since a draft version was written (null if nothing).
+function resultsChangedSince(v) {
+  const s = S.state, d = s.drafts?.[String(v)];
+  if (!d || !(s.results_seq > d.seq) || s.stage === "FINAL") return null;
+  const why = [];
+  const runs = Object.values(s.analyses).filter((a) => a.seq > d.seq && a.status === "ok").length;
+  if (runs) why.push(`${runs} new or redone analys${runs > 1 ? "es" : "is"}`);
+  const out = s.figures.filter((f) => f.omitted?.seq > d.seq).length;
+  if (out) why.push(`${out} figure${out > 1 ? "s" : ""} left out`);
+  const texts = Object.values(s.analyses).filter((a) => (a.description?.seq || 0) > d.seq).length;
+  if (texts) why.push(`${texts} text${texts > 1 ? "s" : ""} rewritten or edited`);
+  return why.join(", ") || "results changed";
+}
 async function renderCanvas(text, marks, tables, figures, editing) {
   const blocks = parseBlocks(text), placed = { table: new Set(), figure: new Set() };
   const tmap = new Map(tables.map((t) => [t.number, t])), fmap = new Map(figures.map((f) => [f.number, f]));
+  // In the Results only, and always in number order: a paragraph that first refers to Table 3 brings Tables 2 and 3
+  // (if 2 is not placed yet), so the paper never runs Table 1, Table 4.
   const objects = async (refs) => {
     let h = "";
-    for (const n of [...new Set(refs.table)].sort((a, b) => a - b)) if (tmap.has(n) && !placed.table.has(n)) { placed.table.add(n); h += pubTableHtml(tmap.get(n), { editable: editing }); }
-    for (const n of [...new Set(refs.figure)].sort((a, b) => a - b)) if (fmap.has(n) && !placed.figure.has(n)) { placed.figure.add(n); h += await figureHtml(fmap.get(n)); }
+    const tn = [...new Set(refs.table)].filter((n) => tmap.has(n) && !placed.table.has(n)), fn = [...new Set(refs.figure)].filter((n) => fmap.has(n) && !placed.figure.has(n));
+    const upto = (nums, map, done) => nums.length ? [...map.keys()].filter((k) => k <= Math.max(...nums) && !done.has(k)).sort((a, b) => a - b) : [];
+    for (const n of upto(tn, tmap, placed.table)) { placed.table.add(n); h += pubTableHtml(tmap.get(n), { editable: editing }); }
+    for (const n of upto(fn, fmap, placed.figure)) { placed.figure.add(n); h += await figureHtml(fmap.get(n)); }
     return h;
   };
   const rest = async () => {
@@ -1547,7 +1566,7 @@ async function renderCanvas(text, marks, tables, figures, editing) {
     const ce = editing ? ` contenteditable="true" spellcheck="true"` : "";
     out += b.type === "li" ? `<ul><li class="blk" data-k="li"${ce}>${inlineMd(b.md, marks, editing)}</li></ul>`
                            : `<p class="blk" data-k="p"${ce}>${inlineMd(b.md, marks, editing)}</p>`;
-    out += await objects(refsIn(b.md));
+    if (inResults) out += await objects(refsIn(b.md));
   }
   if (!restDone) out += await rest();
   return out;
@@ -1644,6 +1663,11 @@ async function draft() {
     ${full?.exploratory_not_labelled?.length ? `<details open><summary>Exploratory results not called exploratory</summary><ul class="small">${full.exploratory_not_labelled.map((u) => `<li>${esc(u.sentence)}</li>`).join("")}</ul></details>` : ""}
     ${attempts.length > 1 ? `<p class="small muted">The Writing Agent's first attempt failed the check; it rewrote the draft once from the findings${attempts.at(-1).passed_check ? " and passed" : ", and what remains is for the authors"}.</p>` : ""}
     ${marks.length && !editing ? `<p class="small muted">Highlighted: passages the Reviewer Assistant asked about.</p>` : ""}
+    ${resultsChangedSince(v) ? `<div class="bigaction"><p><strong>The Results have changed since version ${v} was written</strong> (${esc(resultsChangedSince(v))}). The Writing Agent rewrites the draft from the current Results, keeping your wording wherever the results it reports have not changed.</p>
+      <button class="btn" data-agent="write_draft" data-label="The Writing Agent is rewriting the draft from the current Results">Rewrite the draft from the current Results</button></div>` : ""}
+    ${checks.references_out_of_order?.length || checks.referred_before_results?.length ? `<p class="msg warn small">${[
+      checks.referred_before_results?.length ? `Cited before the Results (journals cite tables and figures first in the Results): ${checks.referred_before_results.join(", ")}` : "",
+      checks.references_out_of_order?.length ? `First referred to before a lower-numbered one: ${checks.references_out_of_order.join(", ")}` : ""].filter(Boolean).map(esc).join(". ")}. Saksi places every table and figure in the Results, in number order.</p>` : ""}
     ${checks.tables_not_referred?.length || checks.figures_not_referred?.length || checks.references_unknown?.length ? `<p class="msg warn small">${[
       checks.tables_not_referred?.length ? `Not referred to in the text: ${checks.tables_not_referred.map((n) => "Table " + n).join(", ")}` : "",
       checks.figures_not_referred?.length ? `Not referred to in the text: ${checks.figures_not_referred.map((n) => "Figure " + n).join(", ")}` : "",

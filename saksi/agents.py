@@ -913,6 +913,12 @@ class Agents:
                 f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}\n\n"
                 f"TABLES (built by Saksi from RESULTS; refer to them only by these numbers):\n"
                 f"{tables_mod.listing(s, self.project.blobs)}")
+        if s.draft_version and s.drafts.get(s.draft_version):
+            d = s.drafts[s.draft_version]
+            cur_text = self.project.blobs.get_text(d["text_sha256"]) if d.get("text_sha256") and self.project.blobs.has(d["text_sha256"]) else ""
+            if cur_text:
+                user += (f"\n\nTHE CURRENT DRAFT (version {s.draft_version}; the results have changed since it was written):\n"
+                         f"{cur_text[:60000]}")
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.
         attempts, text, last_call = [], "", None
@@ -1061,6 +1067,12 @@ def _brief(findings: dict[str, Any]) -> str:
         lines.append(f"- FIGURE {n} NOT REFERRED TO: refer to it where its result is reported")
     for x in findings.get("references_unknown", []):
         lines.append(f"- {x.upper()} DOES NOT EXIST: use only the numbers in TABLES and FIGURES")
+    for x in findings.get("references_out_of_order", []):
+        lines.append(f"- {x.upper()} REFERRED TO BEFORE A LOWER-NUMBERED ONE: in Results, refer to tables and figures "
+                     "first in number order (reorder the paragraphs or the sentences)")
+    for x in findings.get("referred_before_results", []):
+        lines.append(f"- {x.upper()} CITED BEFORE THE RESULTS: Methods and earlier sections do not cite tables or "
+                     "figures by number; refer to it first in Results")
     for ref in findings.get("departure_not_disclosed", []):
         lines.append(f"- DEPARTURE FROM THE PROTOCOL NOT DISCLOSED for [A:{ref}]: in a sentence citing it, say that "
                      "its primary role differs from the protocol, and give the authors' reason from protocol_departure")

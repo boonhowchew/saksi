@@ -141,6 +141,12 @@ Contract (mandatory):
   every other cell is text that your code formats from values it computed (for example f"{m:.1f} ({sd:.1f})" or
   "1.07 (0.96 to 1.19)"). Never type a number by hand. Saksi typesets it as a journal table. Still return
   "estimates" for the main comparisons.
+- A description by group is always also returned as "table", laid out as journals print it: columns
+  "Characteristic", one per group headed "<group label>\n(n = <n>)", then "P value"; rows labelled with the data
+  dictionary's labels (never column names or codes), with the summary in the label ("Age, years, mean (SD)",
+  "Smoker, n (%)"); a yes/no characteristic is one row (those with it); a categorical one is a row with its P value
+  and its categories indented beneath ({"cells": [...], "indent": true}), labelled from the coding. Continuous:
+  mean (SD) or median (IQR); categorical: n (%). Name each estimate "<column> [<group>]".
 - A table describing the participants' characteristics by the outcome is Saksi's Table 1, built by Saksi's own
   code; if asked for one, still do it as asked, but add a note that Table 1 can be built on the Analyses page.
 - Return this shape:
@@ -237,7 +243,12 @@ Rules:
   the data the model was fitted to is "apparent": say so, and do not present it as evidence for new patients.
 - Saksi builds the tables and figures itself from the computed results (listed in TABLES and FIGURES) and places
   each one in the Results after the paragraph that first refers to it. Every table and every figure must be
-  referred to, by its number ("Table 2", "Figure 1"), and only those numbers may be used.
+  referred to, by its number ("Table 2", "Figure 1"), and only those numbers may be used. Refer to them first in
+  the Results, in number order: Table 1 before Table 2, Figure 1 before Figure 2. Methods do not cite tables or
+  figures by number.
+- If THE CURRENT DRAFT is given, it is the authors' working text: keep its wording, structure and the authors' edits
+  wherever the results it reports have not changed, and change only what the changed results require. Remove any
+  mention of a table or figure that is no longer listed.
 - For each table or figure, write the text that goes with it: point to it, then say in words what it shows that
   matters (the main finding, its direction and size, and its uncertainty), giving only the key estimates. Do not
   repeat the table or the figure in prose, cell by cell; the reader can see it. Text and table must not disagree.

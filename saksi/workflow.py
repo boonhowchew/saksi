@@ -47,6 +47,9 @@ from .events import Event, EventLog
 from .tracing import CITE, SENTENCE, trace
 from . import tables as tables_mod
 
+# Where the Analyses page is a worksheet: before the results are accepted, while the authors revise the draft, and
+# when they respond to review. Anything done there after a draft exists is new, so the draft is rewritten from it.
+WORKSHEET_STAGES = ("ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
 STAGES = ("INGEST", "ANALYSIS", "DRAFTING", "AUTHOR_REVISION", "REVIEW", "RESPONSE", "ATTESTATION", "FINAL")
 HUMAN_ROLES = {"author", "corresponding_author", "reviewer"}
 AGENT_ROLES = {"curator", "analyst", "writer", "reviewer_assist"}
@@ -109,6 +112,7 @@ class State:
     briefings: list[dict[str, Any]] = field(default_factory=list)
     reviewed_versions: dict[int, int] = field(default_factory=dict)
     figures: list[dict[str, Any]] = field(default_factory=list)
+    results_seq: int = 0                            # last event that changed the Results (runs, texts, figures)
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -155,7 +159,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "figures": self.figures, "results_seq": self.results_seq, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -165,6 +169,8 @@ def apply(s: State, ev: Event) -> State:
     """Pure reducer: fold one event into the state."""
     p, t = ev.payload, ev.type
     s.head_seq = ev.seq
+    if t in ("analysis.completed", "analysis.described", "analysis.withdrawn", "figure.omitted", "figure.restored"):
+        s.results_seq = ev.seq
     if t == "project.created":
         s.project_id, s.title, s.study_type = ev.project_id, p["title"], p["study_type"]
         s.max_rounds = p.get("max_rounds", DEFAULT_MAX_ROUNDS)
@@ -648,7 +654,7 @@ class Project:
     def request_analysis(self, by: str, request_id: str, prompt: str) -> State:
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "ANALYSIS", "RESPONSE")
+        self._require_stage(s, *WORKSHEET_STAGES)
         if not prompt.strip():
             raise WorkflowError("prompt is empty")
         self._emit(by, "analysis.requested", {"request_id": request_id, "prompt": prompt})
@@ -682,7 +688,7 @@ class Project:
             a = {"kind": "system"}
         else:
             a = self._require_role(s, by, "analyst")
-        self._require_stage(s, "ANALYSIS", "RESPONSE")
+        self._require_stage(s, *WORKSHEET_STAGES)
         self._requested_by(s, a, requested_by)
         if status not in {"ok", "error"}:
             raise WorkflowError("status must be 'ok' or 'error'")
@@ -760,7 +766,7 @@ class Project:
         the figure stays in the record and can be put back."""
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
+        self._require_stage(s, *WORKSHEET_STAGES)
         if not any(f["analysis_id"] == analysis_id and f["name"] == name and not f.get("omitted") for f in s.figures):
             raise WorkflowError("no such figure in the paper")
         if not (reason or "").strip():
@@ -773,7 +779,7 @@ class Project:
         self._require_role(s, by, "author")
         if not any(f["analysis_id"] == analysis_id and f["name"] == name and f.get("omitted") for f in s.figures):
             raise WorkflowError("that figure was not left out")
-        self._require_stage(s, "ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
+        self._require_stage(s, *WORKSHEET_STAGES)
         self._emit(by, "figure.restored", {"analysis_id": analysis_id, "name": name})
         return self.state()
 
@@ -782,7 +788,7 @@ class Project:
         with the reason, and the reviewer is told. Pre-specified analyses cannot be left out this way."""
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "ANALYSIS")
+        self._require_stage(s, *WORKSHEET_STAGES)
         a = s.analyses.get(analysis_id)
         if a is None or a.get("superseded_by") or a.get("withdrawn"):
             raise WorkflowError(f"{analysis_id!r} is not a current analysis")
@@ -819,7 +825,7 @@ class Project:
         their name and number-checked like any text; the earlier wording stays in the record."""
         s = self.state()
         self._require_role(s, by, "author")
-        self._require_stage(s, "ANALYSIS", "RESPONSE")
+        self._require_stage(s, *WORKSHEET_STAGES)
         a = current(s).get(analysis_id)
         if a is None:
             raise WorkflowError(f"{analysis_id!r} is not a current analysis")
@@ -909,7 +915,16 @@ class Project:
         r["figures_not_referred"] = sorted(set(figures) - refs["figure"])
         r["references_unknown"] = [f"Table {n}" for n in sorted(refs["table"] - set(tables))] + \
                                   [f"Figure {n}" for n in sorted(refs["figure"] - set(figures))]
-        r["ok"] = r["ok"] and not (r["tables_not_referred"] or r["figures_not_referred"] or r["references_unknown"])
+        # First referred to in the Results, in number order; Methods do not cite them.
+        plain = CITE.sub("", text)
+        parts = re.split(r"(?m)^##\s+Results\b.*$", plain, maxsplit=1)
+        before, results_part = (parts[0], parts[1]) if len(parts) == 2 else ("", plain)
+        results_part = re.split(r"(?m)^##\s+", results_part, maxsplit=1)[0]
+        r["references_out_of_order"] = tables_mod.out_of_order(results_part)
+        early = tables_mod.references(before)
+        r["referred_before_results"] = [f"Table {n}" for n in sorted(early["table"])] + [f"Figure {n}" for n in sorted(early["figure"])]
+        r["ok"] = r["ok"] and not (r["tables_not_referred"] or r["figures_not_referred"] or r["references_unknown"]
+                                   or r["references_out_of_order"] or r["referred_before_results"])
         return r
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],

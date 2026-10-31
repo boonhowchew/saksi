@@ -180,6 +180,14 @@ with sync_playwright() as p:
     print("draft:", page.locator(".msg.ok, .msg.warn").first.inner_text()[:120])
     print("draft check:", page.locator("#panel .msg").filter(has_text="Number check").first.inner_text()[:90])
     print("in place:", page.locator("#ms .pubtable").count(), "tables,", page.locator("#ms figure.fig").count(), "figures")
+    order = page.evaluate("""() => [...document.querySelectorAll('#ms h3, #ms h2, #ms .pubtable .ptitle, #ms figure figcaption strong')].map(e => e.innerText.split('.')[0].trim()).filter(Boolean)""")
+    print("draft order:", " > ".join(order)[:200])
+    # After acceptance the Analyses page is still the authors' worksheet: chat, editable text, suggestions.
+    page.get_by_role("tab", name="Analyses").click(); page.wait_for_timeout(400)
+    print("worksheet in revision:", page.locator("#results-view .chat").count(), "chat boxes,",
+          page.locator(".rtext[contenteditable=true]").count(), "editable texts")
+    assert page.locator("#results-view .chat").count() > 0
+    page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(400)
     print("checklist:", page.locator("h2", has_text="Reporting checklist").first.inner_text(), "|",
           page.locator("h2:has-text('Reporting checklist') + p").first.inner_text()[:60])
     assert page.locator("#results-view .tag.conf, #results-view .tag.expl").count() == 0 if page.locator("#results-view").count() else True

@@ -275,3 +275,14 @@ def test_authors_revise_the_plan_and_leaving_out_needs_a_reason(proj):
     with _pt.raises(WorkflowError, match="left out of this paper"):
         proj.complete_analysis("agent:analyst", "sub1", plan_analysis_id="sub1", spec={}, code_sha256="a" * 64,
                                outputs_sha256=None, execution={}, status="ok")
+
+
+def test_analyses_page_stays_a_worksheet_while_the_draft_is_revised(proj):
+    s = to_revision(proj)
+    v, seq = s.draft_version, s.results_seq
+    s = proj.complete_analysis("agent:analyst", "extra_after_draft", plan_analysis_id=None, spec={"title": "More"},
+                               code_sha256=SHA, outputs_sha256=SHA, execution={}, status="ok", requested_by="bhc")
+    assert s.stage == "AUTHOR_REVISION" and s.analyses["extra_after_draft"]["label"] == "exploratory"
+    assert s.results_seq > seq > 0 and s.results_seq > s.drafts[v]["seq"]          # the draft is now behind
+    s = proj.withdraw_analysis("bhc", "extra_after_draft", "Not needed after all.")
+    assert s.analyses["extra_after_draft"]["withdrawn"]["by"] == "bhc"
