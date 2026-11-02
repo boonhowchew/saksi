@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (LITERATURE_QUERIES, LITERATURE_SCREEN)
+from .prompts import (LITERATURE_QUERIES, LITERATURE_SCREEN, SIGNOFF_SUGGEST)
 from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, CURATOR_UPDATE, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
@@ -1005,6 +1005,18 @@ class Agents:
         return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
                                          requested_by=requested_by, attempts=attempts,
                                          instructions=str(instructions)[:6000] if instructions else None)
+
+    def suggest_signoff(self, requested_by: str) -> State:
+        """Suggest the claim and the least-defensible result for the current version, from its text."""
+        s = self.project.state()
+        v = s.draft_version
+        if not v:
+            raise WorkflowError("there is no draft yet")
+        text = self.project.blobs.get_text(s.drafts[v]["text_sha256"])
+        obj, call, _ = self._json_call(WRITER_ID, "checklist", SIGNOFF_SUGGEST, f"DRAFT (version {v}):\n{text[:60000]}",
+                                       "signoff_suggest")
+        return self.project.record_signoff_suggestion(WRITER_ID, v, str(obj.get("claim") or "").strip(),
+                                                      str(obj.get("least_comfortable") or "").strip(), requested_by, call)
 
     # -- Literature --------------------------------------------------------------
     def find_literature(self, requested_by: str, pmids: list[str] | None = None, doi: str | None = None,

@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("lit_q" if "PubMed search queries" in system else "lit_s" if "Screen these PubMed records" in system
+        purpose = ("so" if "An author is about to sign off" in system
+                   else "lit_q" if "PubMed search queries" in system else "lit_s" if "Screen these PubMed records" in system
                    else "curator_update" if "Bring your earlier report on this dataset up to date" in system
                    else "outline" if "what this paper is going to report" in system
                    else "suggest" if "propose an answer to each" in system
@@ -129,6 +130,9 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "so" and not self.script.get("so"):
+            reply = {"claim": "Booking BMI was associated with gestational diabetes in this cohort, an exploratory finding.",
+                     "least_comfortable": "The adjusted odds ratio for previous GDM, whose interval is very wide with few events."}
         elif purpose == "lit_q" and not self.script.get("lit_q"):
             reply = {"queries": ["diabetes, gestational[mh] AND body mass index[tiab]", "gestational diabetes risk factors Malaysia"]}
         elif purpose == "lit_s" and not self.script.get("lit_s"):
@@ -538,7 +542,7 @@ def test_writer_cannot_pass_by_dropping_an_analysis(setup):
 
 
 def test_unresolved_draft_goes_to_authors_who_can_fix_it(setup):
-    from tests.conftest import ANSWERS, RESTATE
+    from tests.conftest import ANSWERS, DISCLOSURE, RESTATE
     p, agents, model, _ = setup
     bmi = _to_drafting(p, agents, model)
     model.script["write"] = [_draft(bmi), _draft(bmi)]       # agent fails twice
@@ -555,7 +559,7 @@ def test_unresolved_draft_goes_to_authors_who_can_fix_it(setup):
     assert s.drafts[2]["checks"]["ok"] is True
     # The sign-off records the check of the exact version signed.
     p.open_draft("bhc", 2)
-    s = p.sign_off("bhc", 2, RESTATE, ANSWERS)
+    s = p.sign_off("bhc", 2, RESTATE, ANSWERS, DISCLOSURE)
     assert s.signoffs[2]["bhc"]["checks_at_signoff"]["ok"] is True
 
 
@@ -1293,3 +1297,45 @@ def test_pubmed_xml_is_read_into_records():
     assert r["title"] == "Gestational diabetes in six clinics" and r["year"] == "2022" and r["issue"] == "3"
     assert r["authors"] == [{"last": "Chew", "initials": "BH"}, {"collective": "GDM-RIDMAN group"}]
     assert r["doi"] == "10.1136/bmjopen-2021-052554" and "Previous GDM mattered." in r["abstract"]
+
+
+def test_signoff_suggested_from_the_draft_and_the_record_with_disclosure(setup):
+    from saksi.disclosure import contributions_statement, suggest
+    from saksi.workflow import SIGNOFF_QUESTIONS
+    from tests.conftest import ANSWERS, DISCLOSURE, RESTATE
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi, extra="", exploratory="An exploratory model gave a similar estimate [A:x_q1].")]
+    agents.write_draft("bhc")
+    s = agents.suggest_signoff("bhc")
+    assert s.signoff_suggestions[-1]["claim"].startswith("Booking BMI") and s.signoff_suggestions[-1]["by"] == "agent:writer"
+    sug = suggest(p, s.draft_version)
+    assert sug["claim"] and sug["least_comfortable"]
+    assert sug["answers"][SIGNOFF_QUESTIONS[1]].startswith("There is no confirmatory claim")
+    assert sug["answers"][SIGNOFF_QUESTIONS[2]].startswith("Yes")
+    assert sug["credit"]["bhc"].get("Methodology") in ("lead", "equal") and sug["credit"]["bhc"].get("Project administration") == "lead"
+    assert sug["verification"]["bhc"]["data"] == "confirmed" and sug["evidence"]["bhc"]["methods"]
+    p.open_draft("bhc", s.draft_version)
+    with pytest.raises(WorkflowError, match="CRediT"):
+        p.sign_off("bhc", s.draft_version, RESTATE, ANSWERS, {"verification": DISCLOSURE["verification"], "guarantorship": "strong"})
+    with pytest.raises(WorkflowError, match="record what you checked"):
+        p.sign_off("bhc", s.draft_version, RESTATE, ANSWERS, {"credit": {"Methodology": "lead"}, "guarantorship": "strong"})
+    with pytest.raises(WorkflowError, match="strong, partial or limited"):
+        p.sign_off("bhc", s.draft_version, RESTATE, ANSWERS, {**DISCLOSURE, "guarantorship": "total"})
+    s = p.sign_off("bhc", s.draft_version, sug["claim"], {**ANSWERS, **sug["answers"]}, DISCLOSURE,
+                   agreed={"claim": True, SIGNOFF_QUESTIONS[1]: True})
+    so = s.signoffs[s.draft_version]["bhc"]
+    assert so["disclosure"]["guarantorship"] == "strong" and so["agreed_with_suggestion"]["claim"] is True
+    st = contributions_statement(s)
+    assert st["authors"][0]["roles"].startswith("Conceptualization (lead)") and "muse-spark" in st["ai_use"]
+
+
+def test_co_authors_can_join_at_any_stage_and_join_the_remaining_decisions(proj):
+    from tests.conftest import sign_all, to_revision
+    s = to_revision(proj)
+    s = proj.register_human("bhc", {"actor_id": "late", "name": "Dr Late"}, "author")
+    assert "late" in s.authors and s.stage == "AUTHOR_REVISION"
+    ev = [e for e in proj.log.events() if e.type == "actor.registered" and e.payload["actor_id"] == "late"][0]
+    assert ev.payload["joined_at_stage"] == "AUTHOR_REVISION" and ev.payload["invited_by"] == "bhc"
+    s = sign_all(proj)                                   # the late author's sign-off is needed too
+    assert "late" in s.signoffs[s.draft_version]

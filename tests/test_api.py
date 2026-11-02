@@ -6,7 +6,7 @@ import json
 from fastapi.testclient import TestClient
 
 from saksi.api import create_app
-from tests.conftest import ANSWERS, AUTHOR_A, AUTHOR_B, RESTATE
+from tests.conftest import ANSWERS, AUTHOR_A, AUTHOR_B, DISCLOSURE, RESTATE
 
 
 def setup(tmp_path):
@@ -59,7 +59,7 @@ def test_upload_is_hashed_and_private(tmp_path):
 
 def test_refusal_is_409_with_reason(tmp_path):
     c, tok = setup(tmp_path)
-    r = cmd(c, tok, "sign_off", version=1, claim_restatement=RESTATE, answers=ANSWERS)
+    r = cmd(c, tok, "sign_off", version=1, claim_restatement=RESTATE, answers=ANSWERS, disclosure=DISCLOSURE)
     assert r.status_code == 409 and "not allowed in stage INGEST" in r.json()["detail"]
 
 
@@ -173,7 +173,7 @@ def test_review_loop_over_http(tmp_path, monkeypatch):
     st = agent("write_draft", h)
     assert st["stage"] == "AUTHOR_REVISION"
     cmd(c, tok, "open_draft", version=1)
-    st = cmd(c, tok, "sign_off", version=1, claim_restatement=RESTATE, answers=ANSWERS).json()["state"]
+    st = cmd(c, tok, "sign_off", version=1, claim_restatement=RESTATE, answers=ANSWERS, disclosure=DISCLOSURE).json()["state"]
     assert st["stage"] == "REVIEW"
 
     # Only the reviewer can ask the Reviewer Assistant; only authors can ask the authors' agents.
@@ -190,7 +190,7 @@ def test_review_loop_over_http(tmp_path, monkeypatch):
         text=draft.replace("The sample was small.", "The sample was small: 388 women were analysed [A:primary]."))
     cmd(c, tok, "respond", item_id="R1", response="revised")
     cmd(c, tok, "open_draft", version=2)
-    cmd(c, tok, "sign_off", version=2, claim_restatement=RESTATE, answers=ANSWERS)
+    cmd(c, tok, "sign_off", version=2, claim_restatement=RESTATE, answers=ANSWERS, disclosure=DISCLOSURE)
     st = cmd(c, tok, "submit_response").json()["state"]
     assert st["stage"] == "REVIEW" and st["round"] == 2
 

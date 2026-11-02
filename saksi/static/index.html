@@ -156,6 +156,13 @@ figure.fig.omitted img { opacity: .45; }
 .refcite { color: var(--accent, #23366f); }
 ol.reflist { padding-left: 1.6rem; font-size: .92rem; } ol.reflist.plain { list-style: none; padding-left: 0; }
 ol.reflist.plain li { padding-left: 1.6rem; text-indent: -1.6rem; }
+form.signoff .soitem { border: 1px solid var(--rule); border-radius: 8px; padding: .6rem .8rem; margin: .4rem 0; }
+.credit { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .4rem 1rem; }
+.credit label.inline { display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+.evidence { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: .6rem; }
+.guar { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; }
+.guar .g-strong { background: #e3f1ec; } .guar .g-partial { background: #fbf0dc; } .guar .g-limited { background: #f6e1e4; }
+.guar label.radio { border-radius: 8px; padding: .6rem; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -533,7 +540,7 @@ async function render() {
   if (S.tab === "draft") maybeOpenDraft();
   if (S.tab === "plan") maybeSuggestAnswers();
   if (S.tab === "materials") maybeUpdateCurator();
-  if (S.tab === "draft") maybeReviseForChecklist();
+  if (S.tab === "draft") { maybeReviseForChecklist(); maybeSuggestSignoff(); }
   maybeStartAnalysis();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
@@ -588,6 +595,27 @@ async function panelBody(tab) {
 }
 
 /* People */
+const JOIN_NOTE = {
+  INGEST: "confirms the plan, accepts the results, edits and signs off the manuscript.",
+  ANALYSIS: "accepts the results (the plan is already confirmed), edits and signs off the manuscript.",
+  DRAFTING: "edits and signs off the manuscript; the analyses can still be revisited on the Analyses page.",
+  AUTHOR_REVISION: "the current draft needs their sign-off too before it goes to review.",
+  REVIEW: "responds to the review with the other authors and signs off the revised version.",
+  RESPONSE: "signs off the revised version with the other authors.",
+  ATTESTATION: "attests the final version with the other authors.",
+};
+const STAGE_NAMES = { INGEST: "data and plan", ANALYSIS: "analysis", DRAFTING: "first draft", AUTHOR_REVISION: "authors revise",
+  REVIEW: "peer review", RESPONSE: "authors respond", ATTESTATION: "final sign-off", FINAL: "final" };
+function inviteForm(reviewerOnly = false) {
+  return `<form class="stack" data-form="addperson">
+        <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
+        ${reviewerOnly ? `<input type="hidden" name="role" value="reviewer">` : ""}
+        <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
+        <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
+        <div><button class="btn" data-label="Adding">Add${reviewerOnly ? " the reviewer" : ""} and show their token</button></div>
+        <p class="small muted">Saksi then shows a personal token for them, once. Send it to them privately, for example by email. They paste it on the Saksi sign-in page to join. The invitation is recorded with the time.</p>
+      </form>`;
+}
 const AGENT_JOBS = {
   curator: "Checks the dataset from an aggregate profile and drafts the data dictionary. Never sees a record.",
   analyst: "Drafts the analysis plan from the protocol and writes the analysis code.",
@@ -601,14 +629,16 @@ function people() {
   const reviewers = humans.filter(([, a]) => (a.roles || []).includes("reviewer"));
   const agentsList = all.filter(([, a]) => a.kind === "agent");
   const orcid = (a) => a.orcid ? `<a href="https://orcid.org/${esc(a.orcid)}" rel="noreferrer" target="_blank">${esc(a.orcid)}</a>` : "";
-  const row = ([id, a], role) => `<tr><td>${esc(a.name)}${id === S.you ? ' <span class="tag">you</span>' : ""}</td><td>${role}</td><td>${esc(a.affiliation || "")}</td><td>${orcid(a)}</td></tr>`;
+  const joined = (id) => { const e = S.events.find((x) => x.type === "actor.registered" && x.payload.actor_id === id);
+    return e ? `${fmtTime(e.ts)}${e.payload.invited_by ? ", invited by " + esc(name(e.payload.invited_by)) : ""}${e.payload.joined_at_stage ? ` (${esc(STAGE_NAMES[e.payload.joined_at_stage] || e.payload.joined_at_stage)})` : ""}` : ""; };
+  const row = ([id, a], role) => `<tr><td>${esc(a.name)}${id === S.you ? ' <span class="tag">you</span>' : ""}</td><td>${role}</td><td>${esc(a.affiliation || "")}</td><td>${orcid(a)}</td><td class="small muted">${joined(id)}</td></tr>`;
   const canAdd = has("corresponding_author") && s.stage !== "FINAL";
-  const authorsOpen = ["INGEST", "ANALYSIS"].includes(s.stage);
+  const authorsOpen = s.stage !== "FINAL";
   const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
-  return `<section><h2>Authors</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th></tr></thead><tbody>
+  return `<section><h2>Authors</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th><th>Joined</th></tr></thead><tbody>
       ${authors.map((x) => row(x, (x[1].roles || []).includes("corresponding_author") ? "Corresponding author" : "Co-author")).join("")}</tbody></table></div></section>
     <section><h2>Reviewer</h2>${reviewers.length
-      ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th></tr></thead><tbody>${reviewers.map((x) => row(x, "Reviewer")).join("")}</tbody></table></div>`
+      ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th>Role</th><th>Affiliation</th><th>ORCID iD</th><th>Joined</th></tr></thead><tbody>${reviewers.map((x) => row(x, "Reviewer")).join("")}</tbody></table></div>`
       : `<p>No reviewer yet. A reviewer can be added at any stage; the review starts once every author has signed off the draft.</p>`}</section>
     <section><h2>AI agents</h2><p class="small muted">They act only when a person asks. Every call, with the exact request and reply, is in the record.</p>
       <div class="tablewrap"><table><thead><tr><th>Agent</th><th>What it does</th><th>Model</th></tr></thead><tbody>
@@ -617,8 +647,7 @@ function people() {
       <form class="stack" data-form="addperson">
         <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
         <fieldset class="roles"><legend class="small muted">Role</legend>
-          ${authorsOpen ? `<label class="radio"><input type="radio" name="role" value="author" checked><span><strong>Co-author.</strong> Confirms the plan, accepts the results, edits and signs the manuscript.</span></label>`
-            : `<p class="small muted">Co-authors can only join before drafting starts, so that every author can check the analysis.</p>`}
+          <label class="radio"><input type="radio" name="role" value="author" checked><span><strong>Co-author.</strong> Can join at any stage. Takes part in every decision from then on: ${esc(JOIN_NOTE[s.stage] || "")} The record shows when they joined and who invited them.</span></label>
           <label class="radio"><input type="radio" name="role" value="reviewer" ${authorsOpen ? "" : "checked"}><span><strong>Reviewer.</strong> Reviews the manuscript once every author has signed it off. Independent of the authors.</span></label>
         </fieldset>
         <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
@@ -1531,6 +1560,64 @@ async function analyses() {
         ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
 }
 
+/* Sign-off: Saksi suggests from the record and the draft; the author agrees, changes or rejects, and discloses
+   their contribution (CRediT) and what they verified (HACprint 2.0 evidence areas). Everything is time-stamped. */
+async function signoffNow(v) {
+  const key = `${S.pid}|${S.state.head_seq}|${v}`;
+  if (S.so?.key !== key) { try { S.so = { key, ...(await api(`/projects/${S.pid}/signoff-suggestions?version=${v}`)) }; } catch { S.so = { key }; } }
+  return S.so;
+}
+function maybeSuggestSignoff() {
+  const s = S.state, v = s.draft_version;
+  if (S.busy || !isAuthor() || !["AUTHOR_REVISION", "RESPONSE"].includes(s.stage) || (s.signoffs[v] || {})[S.you]) return;
+  if ((s.signoff_suggestions || []).some((x) => x.version === v)) return;
+  // After the draft has been checked against its guideline (and revised, if it needed it), not before.
+  const d = s.drafts?.[String(v)], c = d?.checklist;
+  const pendingRevision = c && c.summary.missing + c.summary.partly && !String(d.instructions || "").startsWith("REPORTING GUIDELINE") && !(S.reviseTried || {})[`${S.pid}|${v}`];
+  if (d?.type === "draft.created" && (!c || pendingRevision)) return;
+  (S.soTried ||= {});
+  const key = `${S.pid}|${v}`;
+  if (S.soTried[key]) return;
+  S.soTried[key] = true;
+  act(null, () => agent("suggest_signoff"), "Saksi has suggested your sign-off answers below. Agree, or change them.",
+    "Saksi is reading the draft to suggest the sign-off answers.");
+}
+const EVIDENCE_LABEL = { confirmed: "Confirmed", partly: "Partly confirmed", not_confirmed: "Not confirmed", not_applicable: "Not applicable" };
+async function signoffForm(v) {
+  const so = await signoffNow(v), qs = S.state.signoff_questions;
+  const sug = { claim: so.claim || "", [qs[0]]: so.least_comfortable || "", ...(so.answers || {}) };
+  const item = (key, label, field) => `<div class="soitem"><label><span>${esc(label)}</span>
+      <textarea name="${field}" required data-sug="${esc(sug[key] || "")}">${esc(sug[key] || "")}</textarea></label>
+      ${sug[key] ? `<p class="small"><span class="aibadge">AI</span> Saksi's suggestion, from the draft and the record. <label class="inline"><input type="radio" name="agree-${field}" value="1" checked> I agree</label> <label class="inline"><input type="radio" name="agree-${field}" value="0"> I disagree, and have changed it</label></p>` : ""}</div>`;
+  const mine = (so.credit || {})[S.you] || {}, ev = (so.evidence || {})[S.you] || {}, ver = (so.verification || {})[S.you] || {};
+  return `<form class="stack signoff" data-form="signoff" style="max-width:none">
+    <p class="small muted">Saksi suggests each answer from the draft and the record; agree, or change it. Your answers, what you agreed with as suggested, and the time are recorded.</p>
+    ${item("claim", "The paper's main claim, as you would state it", "claim")}
+    ${qs.map((q, i) => item(q, q, "q" + i)).join("")}
+    <h3>Your contribution (CRediT)</h3>
+    <p class="small muted">The 14 CRediT roles. Saksi suggests the roles the record shows you did; choose the degree for each role that applies to you, and leave the rest blank.</p>
+    <div class="credit">${(so.credit_roles || []).map((r, i) => `<label class="inline"><span>${esc(r)}${mine[r] ? ' <span class="aibadge">AI</span>' : ""}</span>
+      <select name="credit-${i}" data-role="${esc(r)}"><option value="">Not my role</option>${["lead", "equal", "supporting"].map((d) => `<option value="${d}" ${mine[r] === d ? "selected" : ""}>${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select></label>`).join("")}</div>
+    <h3>What you verified</h3>
+    <p class="small muted">Record what you actually checked. The record's evidence is shown under each area.</p>
+    <div class="evidence">${(so.evidence_areas || []).map(([k, label, desc]) => `<div class="soitem"><strong>${esc(label)}</strong><p class="small muted">${esc(desc)}</p>
+      ${(ev[k] || []).length ? `<ul class="small">${ev[k].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      <select name="ev-${k}" required><option value="">Not recorded</option>${Object.entries(EVIDENCE_LABEL).map(([x, l]) => `<option value="${x}" ${ver[k] === x ? "selected" : ""}>${l}</option>`).join("")}</select></div>`).join("")}</div>
+    <h3>Verification and guarantorship</h3>
+    <p class="small muted">Can you understand, critically verify, approve and take responsibility for this version?</p>
+    <div class="guar">${[["strong", "Strong", "complete, informed oversight"], ["partial", "Partial", "some limitations remain"], ["limited", "Limited", "substantial verification or accountability limitations remain"]].map(([x, l, d]) => `<label class="radio g-${x}"><input type="radio" name="guarantorship" value="${x}" required><span><strong>${l}</strong>: ${d}</span></label>`).join("")}</div>
+    <div><button class="btn" data-label="Signing off">Sign off version ${v}</button></div></form>`;
+}
+async function contributionsHtml() {
+  const so = S.so?.statement ? S.so : await signoffNow(S.state.draft_version);
+  const st = so.statement;
+  if (!st || !st.authors?.length) return "";
+  return `<section class="contrib"><h3>Author contributions (CRediT)</h3>
+    <p>${st.authors.map((a) => `<strong>${esc(a.author)}</strong>: ${esc(a.roles)}.`).join(" ")}</p>
+    <h3>Use of AI</h3><p>${esc(st.ai_use)}</p>
+    <p class="small muted">From the authors' sign-offs on version ${esc(st.version)} and the record; for the manuscript's declarations.</p></section>`;
+}
+
 /* Draft */
 function renderManuscript(text, marks = []) {
   const inline = (t) => {
@@ -1839,11 +1926,10 @@ async function draft() {
     ${tables.length ? `<p class="small muted">The tables, in this version's wording, can also be <button class="linkish" data-action="tabledocx">downloaded as a Word file</button>.</p>` : ""}
   </section>
   <section><h2>Sign-offs for version ${v}</h2>
-    ${Object.keys(signed).length ? `<ul>${Object.entries(signed).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.claim_restatement)}”${x.checks_at_signoff ? ` <span class="tag ${x.checks_at_signoff.ok ? "good" : "attn"}">number check ${x.checks_at_signoff.ok ? "passed" : "had problems"} when signed</span>` : ""}</li>`).join("")}</ul>` : "<p>No sign-offs yet.</p>"}
-    ${canSign ? `<form class="stack" data-form="signoff"><p class="small muted">There is no approve button. Say what the paper claims, in your own words, and answer each question.</p>
-      <label><span>The primary claim, in your own words (at least 8 words)</span><textarea name="claim" required></textarea></label>
-      ${s.signoff_questions.map((q, i) => `<label><span>${esc(q)}</span><textarea name="q${i}" required></textarea></label>`).join("")}
-      <div><button class="btn" data-label="Signing off">Sign off version ${v}</button></div></form>` : ""}
+    ${Object.keys(signed).length ? `<ul>${Object.entries(signed).map(([a, x]) => `<li>${esc(name(a))}, ${fmtTime(x.ts)}: “${esc(x.claim_restatement)}”${x.checks_at_signoff ? ` <span class="tag ${x.checks_at_signoff.ok ? "good" : "attn"}">number check ${x.checks_at_signoff.ok ? "passed" : "had problems"} when signed</span>` : ""}
+      ${x.disclosure ? `<br><span class="small">${esc(Object.entries(x.disclosure.credit).map(([r, d]) => `${r} (${d})`).join("; "))}. Verification and guarantorship: <strong>${esc(x.disclosure.guarantorship)}</strong>.</span>` : ""}</li>`).join("")}</ul>` : "<p>No sign-offs yet.</p>"}
+    ${canSign ? await signoffForm(v) : ""}
+    ${await contributionsHtml()}
   </section>
   ${canEdit && !editing ? `<section><details><summary>Edit the text as plain text (Markdown) instead</summary><p class="small muted">For larger rewrites. Your edit becomes version ${v + 1}, is recorded under your name, and is number-checked again. Sign-offs are needed again for the new version.</p>
     <form class="stack" data-form="edit" style="max-width:none"><textarea class="manuscript" name="text">${esc(text)}</textarea>
@@ -1903,7 +1989,15 @@ async function review() {
 </div>`;
   }).join("");
   const att = s.attestations[v] || {};
-  return `${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
+  // The reviewer is invited here too, once the draft is ready for review.
+  const revs = Object.entries(s.actors).filter(([, a]) => (a.roles || []).includes("reviewer"));
+  const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
+  const inviteHere = has("corresponding_author") && ["AUTHOR_REVISION", "REVIEW", "RESPONSE"].includes(s.stage);
+  const reviewerBox = inviteHere ? `<section><h2>Reviewer</h2>
+    ${revs.length ? `<p>${revs.map(([id, a]) => `${esc(a.name)}${a.affiliation ? `, ${esc(a.affiliation)}` : ""}`).join("; ")}.</p>` : `<p>No reviewer yet. ${allSigned ? "Every author has signed off; invite the reviewer and send the draft for review." : "Invite the reviewer now; the review starts once every author has signed off."}</p>`}
+    ${s.stage === "AUTHOR_REVISION" && revs.length && allSigned ? `<p><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></p>` : ""}
+    <details ${revs.length ? "" : "open"}><summary>Invite ${revs.length ? "another" : "a"} reviewer</summary>${inviteForm(true)}</details></section>` : "";
+  return `${reviewerBox}${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
       <p class="muted small">Muse Spark Open, a different, open-weights model. Every briefing starts a fresh conversation. It never opens the data and never sees the authors' side. It suggests questions; you decide what to ask.</p>
       <button class="btn${latest && latest.round === s.round && latest.draft_version === v ? " quiet" : ""}" data-agent="brief_reviewer" data-label="The Reviewer Assistant is reading">${latest && latest.round === s.round && latest.draft_version === v ? "Ask for another briefing" : `Ask for a briefing on version ${v}`}</button></section>` : ""}
     ${brief}
@@ -2325,8 +2419,22 @@ document.addEventListener("submit", async (ev) => {
     case "explore": return act(btn, async () => { const r = await agent("run_request", { request_id: val("request_id"), prompt: val("prompt") }); await describeMissing(r.state); return r; }, "The exploratory analysis ran. It is labelled exploratory.",
       "The Analysis Agent is writing and running the code. This can take a minute or two.");
     case "signoff": {
-      const answers = {}; s.signoff_questions.forEach((q, i) => (answers[q] = val("q" + i)));
-      return act(btn, () => command("sign_off", { version: s.draft_version, claim_restatement: val("claim"), answers }), `You signed off version ${s.draft_version}.`);
+      const answers = {}, agreed = {};
+      s.signoff_questions.forEach((q, i) => (answers[q] = val("q" + i)));
+      for (const [field, key] of [["claim", "claim"], ...s.signoff_questions.map((q, i) => ["q" + i, q])]) {
+        const box = f.querySelector(`[name="${field}"]`), sug = box?.dataset.sug || "";
+        if (!sug) continue;
+        const said = f.querySelector(`[name="agree-${field}"]:checked`)?.value === "1";
+        const same = box.value.trim() === sug.trim();
+        if (!said && same) { S.notice = { kind: "err", text: "Where you disagree with Saksi's suggestion, change the text to say what you think." }; return render(); }
+        agreed[key] = said && same;
+      }
+      const credit = {};
+      f.querySelectorAll("select[data-role]").forEach((x) => { if (x.value) credit[x.dataset.role] = x.value; });
+      const verification = {};
+      f.querySelectorAll("select[name^=ev-]").forEach((x) => { verification[x.name.slice(3)] = x.value; });
+      const disclosure = { credit, verification, guarantorship: val("guarantorship") };
+      return act(btn, () => command("sign_off", { version: s.draft_version, claim_restatement: val("claim"), answers, disclosure, agreed }), `You signed off version ${s.draft_version}.`);
     }
     case "canvassave": {
       const base = await tablesNow(), v = s.draft_version;

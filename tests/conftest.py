@@ -24,6 +24,9 @@ AUTHOR_B = {"actor_id": "coauthor", "name": "Co Author", "affiliation": "UPM"}
 REVIEWER = {"actor_id": "rev1", "name": "Re Viewer", "affiliation": "Elsewhere"}
 SHA = "a" * 64
 ANSWERS = {q: "Checked against the outputs." for q in SIGNOFF_QUESTIONS}
+DISCLOSURE = {"credit": {"Conceptualization": "lead", "Writing – review & editing": "equal"},
+              "verification": {k: "confirmed" for k in ("sources", "facts", "data", "methods", "reasoning", "integrity")},
+              "guarantorship": "strong"}
 RESTATE = "Booking BMI was associated with higher odds of the outcome in this cohort."
 
 
@@ -68,5 +71,5 @@ def sign_all(p: Project):
         if a in s.signoffs.get(s.draft_version, {}):
             continue
         p.open_draft(a, s.draft_version)
-        s = p.sign_off(a, s.draft_version, RESTATE, ANSWERS)
+        s = p.sign_off(a, s.draft_version, RESTATE, ANSWERS, DISCLOSURE)
     return s

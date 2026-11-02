@@ -50,6 +50,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "outline": ("outline", set(), "author"),
     "update_curator_report": ("update_curator_report", set(), "author"),
     "find_literature": ("find_literature", {"pmids", "doi", "instructions"}, "author"),
+    "suggest_signoff": ("suggest_signoff", set(), "author"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", {"instructions"}, "author"),
@@ -82,7 +83,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "accept_analyses": ("accept_analyses", {"analysis_set_sha256"}),
     "edit_draft": ("edit_draft", {"base_version", "text", "summary", "table_edits"}),
     "open_draft": ("open_draft", {"version"}),
-    "sign_off": ("sign_off", {"version", "claim_restatement", "answers"}),
+    "sign_off": ("sign_off", {"version", "claim_restatement", "answers", "disclosure", "agreed"}),
     "start_review": ("start_review", set()),
     "add_item": ("add_item", {"item_id", "comment", "location", "assisted_by_seq", "from_point"}),
     "give_verdict": ("give_verdict", {"item_id", "verdict", "note"}),
@@ -297,6 +298,18 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
                   "cited": k in labels} for k, v in s.references.items()]
         return {"style": style, "styles": STYLES, "labels": labels, "list": reference_list(order, lib, style),
                 "items": items}
+
+    @app.get("/projects/{pid}/signoff-suggestions")
+    def get_signoff_suggestions(pid: str, version: int | None = None, who: str = Depends(actor)):
+        """What Saksi suggests at sign-off, from the record: answers code can establish, CRediT roles per author
+        from what each did, and the evidence for each verification area. The author decides."""
+        from .disclosure import contributions_statement, suggest
+        from .workflow import CREDIT_ROLES, EVIDENCE_AREAS
+        p = existing(pid)
+        out = suggest(p, version)
+        out.update({"credit_roles": list(CREDIT_ROLES), "evidence_areas": [list(x) for x in EVIDENCE_AREAS],
+                    "statement": contributions_statement(p.state())})
+        return out
 
     @app.get("/projects/{pid}/suggestions")
     def get_suggestions(pid: str, who: str = Depends(actor)):

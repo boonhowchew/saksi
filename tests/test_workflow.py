@@ -4,7 +4,7 @@
 import pytest
 
 from saksi.workflow import Project, WorkflowError, ledger
-from tests.conftest import ANSWERS, AUTHOR_A, RESTATE, SHA, run_planned, sign_all, to_analysis, to_revision
+from tests.conftest import ANSWERS, AUTHOR_A, DISCLOSURE, RESTATE, SHA, run_planned, sign_all, to_analysis, to_revision
 
 
 def test_full_lifecycle_two_rounds(proj):
@@ -108,17 +108,17 @@ def test_cannot_accept_until_planned_analyses_succeed(proj):
 def test_signoff_is_structured_and_version_bound(proj):
     s = to_revision(proj)
     with pytest.raises(WorkflowError, match="open this version"):
-        proj.sign_off("bhc", s.draft_version, RESTATE, ANSWERS)
+        proj.sign_off("bhc", s.draft_version, RESTATE, ANSWERS, DISCLOSURE)
     proj.open_draft("bhc", s.draft_version)
     with pytest.raises(WorkflowError, match="own words"):
-        proj.sign_off("bhc", s.draft_version, "Looks good.", ANSWERS)
+        proj.sign_off("bhc", s.draft_version, "Looks good.", ANSWERS, DISCLOSURE)
     with pytest.raises(WorkflowError, match="unanswered"):
-        proj.sign_off("bhc", s.draft_version, RESTATE, {})
-    proj.sign_off("bhc", s.draft_version, RESTATE, ANSWERS)
+        proj.sign_off("bhc", s.draft_version, RESTATE, {}, DISCLOSURE)
+    proj.sign_off("bhc", s.draft_version, RESTATE, ANSWERS, DISCLOSURE)
     # An edit by the co-author voids the sign-off: the stage stays put.
     s = proj.edit_draft("coauthor", s.draft_version, "Changed text.", "tweak")
     proj.open_draft("coauthor", s.draft_version)
-    s = proj.sign_off("coauthor", s.draft_version, RESTATE, ANSWERS)
+    s = proj.sign_off("coauthor", s.draft_version, RESTATE, ANSWERS, DISCLOSURE)
     assert s.stage == "AUTHOR_REVISION"
     s = sign_all(proj)
     assert s.stage == "REVIEW"
@@ -230,7 +230,7 @@ def test_identity_rules(proj):
 def test_refused_command_writes_nothing(proj):
     before = len(proj.log.events())
     with pytest.raises(WorkflowError):
-        proj.sign_off("bhc", 1, RESTATE, ANSWERS)
+        proj.sign_off("bhc", 1, RESTATE, ANSWERS, DISCLOSURE)
     assert len(proj.log.events()) == before
 
 

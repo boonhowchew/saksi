@@ -9,7 +9,7 @@ import pytest
 
 from saksi.agents import AgentError
 from saksi.workflow import WorkflowError, ledger
-from tests.conftest import ANSWERS, RESTATE, sign_all
+from tests.conftest import ANSWERS, DISCLOSURE, RESTATE, sign_all
 from tests.test_agents import _draft, _to_drafting, setup  # noqa: F401  (setup is a fixture)
 
 LIMITATION = "With few outcome events, the adjusted estimates are imprecise and the model may be overfitted."
@@ -34,7 +34,7 @@ def in_review(setup, monkeypatch):
                  summary=f"tidied spacing {SECRET}")
     for a in ("bhc", "coauthor"):
         p.open_draft(a, 2)
-        s = p.sign_off(a, 2, f"{RESTATE} {SECRET}", ANSWERS)
+        s = p.sign_off(a, 2, f"{RESTATE} {SECRET}", ANSWERS, DISCLOSURE)
     assert s.stage == "REVIEW" and s.round == 1
     return p, agents, model
 

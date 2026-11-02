@@ -553,6 +553,14 @@ Never keep a record for a claim its abstract does not support.
 
 Reply with ONLY a JSON object: {"references": [{"pmid": "...", "role": "...", "finding": "...", "quote": "..."}]}"""
 
+SIGNOFF_SUGGEST = """You are the Writing Agent in Saksi. An author is about to sign off this draft. Suggest, for them to agree
+with or change: (1) the paper's main claim in one or two plain sentences, exactly as the draft supports it, with its
+key estimate, and saying it is exploratory if the draft says so; (2) the result in the draft that is least easy to
+defend, and why (for example the widest interval, the fewest events, a model with poor diagnostics, a sensitivity
+analysis that disagreed), in two or three sentences. Never overstate; never add a number that is not in the draft.
+
+Reply with ONLY a JSON object: {"claim": "...", "least_comfortable": "..."}"""
+
 CURATOR_UPDATE = """You are the Data Curator in Saksi. Bring your earlier report on this dataset up to date. Since you wrote
 it, the protocol may have been uploaded, the authors may have answered questions, and the data may have been prepared
 (steps applied by code, with their effects). You see the earlier findings, the protocol, the answers, the preparation
@@ -614,7 +622,7 @@ OUTLINE = OUTLINE + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
 PLAN = PLAN + STATISTICAL_PRACTICE + _AGAIN
 REWRITE = REWRITE + ACADEMIC_WRITING + _AGAIN
 
-TEMPLATES = {"literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+TEMPLATES = {"signoff_suggest": SIGNOFF_SUGGEST, "literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

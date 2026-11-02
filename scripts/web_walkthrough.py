@@ -208,15 +208,35 @@ with sync_playwright() as p:
         page.get_by_role("button", name="downloaded as a Word file").click()
     print("tables docx bytes:", Path(dl.value.path()).stat().st_size)
     # sign off: A then B (switch identity via selector)
-    def signoff(pg):
+    def signoff(pg, disagree=False):
+        # Saksi suggests the answers and the CRediT roles; the author agrees or changes them, and discloses.
         pg.get_by_role("tab", name="Draft").click(); pg.wait_for_timeout(400)
-        pg.fill("form[data-form=signoff] textarea[name=claim]", "Booking BMI was not clearly associated with gestational diabetes after adjustment in this cohort.")
-        for i in range(3): pg.fill(f"form[data-form=signoff] textarea[name=q{i}]", "Checked against the results table and the number check.")
+        pg.wait_for_function("() => !S.busy", timeout=60000); pg.wait_for_timeout(400)
+        pg.wait_for_selector("form[data-form=signoff]")
+        f = "form[data-form=signoff]"
+        if disagree:
+            pg.fill(f"{f} textarea[name=claim]", "Booking BMI was not clearly associated with gestational diabetes after adjustment in this cohort.")
+            pg.check(f"{f} input[name=agree-claim][value='0']")
+        if not pg.locator(f"{f} textarea[name=claim]").input_value().strip():
+            pg.fill(f"{f} textarea[name=claim]", "Booking BMI was not clearly associated with gestational diabetes after adjustment in this cohort.")
+        for i in range(3):
+            box = pg.locator(f"{f} textarea[name=q{i}]")
+            if not box.input_value().strip():
+                box.fill("Checked against the results table and the number check.")
+        pg.select_option(f"{f} select[data-role='Validation']", "equal")
+        for k in ("sources", "facts", "data", "methods", "reasoning", "integrity"):
+            pg.select_option(f"{f} select[name=ev-{k}]", "confirmed")
+        pg.check(f"{f} input[name=guarantorship][value=strong]")
         click(pg, "Sign off version")
+    page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(300)
+    page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
+    print("suggested claim:", page.locator("form[data-form=signoff] textarea[name=claim]").input_value()[:80],
+          "| CRediT suggested:", page.locator("form[data-form=signoff] .credit .aibadge").count())
     signoff(page)
     page.select_option("select[data-change=switch]", "siti-aminah"); page.wait_for_timeout(600)
     print("switched to:", page.locator(".next strong").inner_text())
-    signoff(page)
+    signoff(page, disagree=True)
+    print("contributions:", page.locator(".contrib p").first.inner_text()[:140] if page.locator(".contrib p").count() else "none")
     print("stage:", page.locator(".progress .where strong").inner_text())
     # reviewer
     signout(page); signin(page, toks["rev1"])
@@ -240,6 +260,7 @@ with sync_playwright() as p:
     click(page, "Save as version")
     print("canvas save:", note(page)[:80])
     assert "No GDM" in page.locator("#ms .pubtable[data-aid='s_table1.r1']").inner_text()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
     page.get_by_role("tab", name="Review").click()
     page.fill("form[data-form=respond] input[name=note]", "Added a limitation to the Discussion.")
     click(page, "Respond"); signoff(page)

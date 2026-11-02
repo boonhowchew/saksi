@@ -63,9 +63,49 @@ SYSTEM = "system"
 # Structured sign-off (white paper §2.2: no bare "Approve" button).
 SIGNOFF_QUESTIONS = (
     "Which result in this draft would you be least comfortable defending, and why?",
-    "Is every confirmatory claim supported by a protocol-specified analysis?",
-    "Are all exploratory analyses described as exploratory in the text?",
+    "Is every claim about the pre-specified primary analysis supported by the analysis the protocol specified?",
+    "Are all exploratory analyses identified as exploratory in the text?",
 )
+# The author's self-disclosure at sign-off (CRediT, and verification evidence as in HACprint 2.0).
+CREDIT_ROLES = ("Conceptualization", "Data curation", "Formal analysis", "Funding acquisition", "Investigation",
+                "Methodology", "Project administration", "Resources", "Software", "Supervision", "Validation",
+                "Visualization", "Writing – original draft", "Writing – review & editing")
+CREDIT_DEGREES = ("lead", "equal", "supporting")
+EVIDENCE_AREAS = (
+    ("sources", "Sources and citations", "Primary sources, quotations, references and bibliographic details were "
+     "opened and checked against the claims made."),
+    ("facts", "Facts and concepts", "Factual statements, definitions, terminology and important claims were checked "
+     "for accuracy, context and internal consistency."),
+    ("data", "Data, calculations and results", "Data, calculations, statistical outputs, tables, figures and reported "
+     "results were checked against the underlying material."),
+    ("methods", "Methods, code and reproducibility", "Methods, prompts, code or computational steps were reviewed "
+     "enough to understand, rerun or otherwise validate the process."),
+    ("reasoning", "Reasoning and interpretation", "Inferences, limitations, conclusions and clinical or scholarly "
+     "implications were critically reviewed."),
+    ("integrity", "Integrity and final accountability", "Privacy, consent, originality, copyright and relevant policy "
+     "issues were considered; the author gives final approval and accepts responsibility."),
+)
+EVIDENCE_STATUS = ("confirmed", "partly", "not_confirmed", "not_applicable")
+GUARANTORSHIP = ("strong", "partial", "limited")
+
+
+def check_disclosure(d: dict[str, Any] | None) -> dict[str, Any]:
+    """An author's CRediT roles, verification evidence and guarantorship, validated."""
+    d = d or {}
+    credit = {str(k): str(v) for k, v in (d.get("credit") or {}).items()}
+    bad = [k for k, v in credit.items() if k not in CREDIT_ROLES or v not in CREDIT_DEGREES]
+    if not credit or bad:
+        raise WorkflowError("choose at least one CRediT role for your contribution, each as lead, equal or supporting"
+                            + (f" (not recognised: {', '.join(bad)})" if bad else ""))
+    ver = {str(k): str(v) for k, v in (d.get("verification") or {}).items()}
+    missing = [label for key, label, _ in EVIDENCE_AREAS if ver.get(key) not in EVIDENCE_STATUS]
+    if missing:
+        raise WorkflowError(f"record what you checked for: {', '.join(missing)}")
+    g = d.get("guarantorship")
+    if g not in GUARANTORSHIP:
+        raise WorkflowError("say whether your verification and guarantorship is strong, partial or limited")
+    return {"credit": credit, "verification": {k: ver[k] for k, _, _ in EVIDENCE_AREAS}, "guarantorship": g,
+            "note": str(d.get("note") or "")[:600]}
 MIN_RESTATEMENT_WORDS = 8
 DEFAULT_MAX_ROUNDS = 5
 
@@ -117,6 +157,7 @@ class State:
     value_labels: dict[str, dict[str, Any]] = field(default_factory=dict)   # column -> {codes, by, reason}
     references: dict[str, dict[str, Any]] = field(default_factory=dict)     # PMID -> record ref, role, finding
     reference_style: str = "vancouver"
+    signoff_suggestions: list[dict[str, Any]] = field(default_factory=list)
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -164,7 +205,7 @@ class State:
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
             "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "references": self.references,
-            "reference_style": self.reference_style, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "reference_style": self.reference_style, "signoff_suggestions": self.signoff_suggestions, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -270,6 +311,8 @@ def apply(s: State, ev: Event) -> State:
     elif t == "reference.removed":
         if p["pmid"] in s.references:
             s.references[p["pmid"]]["removed"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
+    elif t == "signoff.suggested":
+        s.signoff_suggestions.append(p | {"by": ev.actor_id, "seq": ev.seq})
     elif t == "settings.reference_style":
         s.reference_style = p["style"]
     elif t == "labels.set":
@@ -408,12 +451,13 @@ class Project:
             raise WorkflowError("role must be 'author' or 'reviewer'")
         if actor.get("actor_id") in s.actors:
             raise WorkflowError(f"{actor['actor_id']} is already registered")
-        if role == "author" and s.stage not in {"INGEST", "ANALYSIS"}:
-            raise WorkflowError("authors join before drafting starts, so every author can verify the analysis")
+        # Authors may join at any stage before the paper is final. They join the remaining decisions: every author
+        # must still confirm, accept, sign off and attest what is current, and the record shows when each joined.
         orcid = actor.get("orcid")
         if orcid and any(v.get("orcid") == orcid for v in s.actors.values()):
             raise WorkflowError(f"ORCID iD {orcid} already belongs to a registered actor")
-        self._emit(SYSTEM, "actor.registered", self._human_payload(actor, roles=[role]) | {"invited_by": by})
+        self._emit(SYSTEM, "actor.registered", self._human_payload(actor, roles=[role]) | {"invited_by": by,
+                                                                                         "joined_at_stage": s.stage})
         return self.state()
 
     # -- INGEST ------------------------------------------------------------
@@ -862,6 +906,21 @@ class Project:
                                             "llm_call_seq": call_seq})
         return self.state()
 
+    def record_signoff_suggestion(self, by: str, version: int, claim: str, least_comfortable: str,
+                                  requested_by: str, call: dict[str, Any] | None = None) -> State:
+        """The Writing Agent's suggested restatement of the main claim and the result least easy to defend, for the
+        authors to agree with, change or reject at sign-off."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        if version != s.draft_version:
+            raise WorkflowError("suggestions are for the current version")
+        call_seq = self._log_call(by, call)
+        self._emit(by, "signoff.suggested", {"version": version, "claim": claim[:1200],
+                                             "least_comfortable": least_comfortable[:1500],
+                                             "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
+
     def remove_reference(self, by: str, pmid: str, reason: str) -> State:
         s = self.state()
         self._require_role(s, by, "author")
@@ -1126,7 +1185,11 @@ class Project:
         self._emit(by, "draft.opened", {"version": version})
         return self.state()
 
-    def sign_off(self, by: str, version: int, claim_restatement: str, answers: dict[str, str]) -> State:
+    def sign_off(self, by: str, version: int, claim_restatement: str, answers: dict[str, str],
+                 disclosure: dict[str, Any] | None = None, agreed: dict[str, bool] | None = None) -> State:
+        """An author signs off the current version: the claim and the answers (Saksi may suggest them; the record
+        says which the author agreed with as suggested), and their self-disclosure: CRediT roles, what they
+        verified, and their guarantorship."""
         s = self.state()
         self._require_role(s, by, "author")
         self._require_stage(s, "AUTHOR_REVISION", "RESPONSE")
@@ -1140,9 +1203,11 @@ class Project:
         blank = [q for q in SIGNOFF_QUESTIONS if not answers.get(q, "").strip()]
         if blank:
             raise WorkflowError(f"{len(blank)} verification question(s) unanswered")
+        disclosure = check_disclosure(disclosure)
         self._emit(by, "draft.signed_off", {
             "version": version, "claim_restatement": claim_restatement,
-            "answers": {q: answers[q] for q in SIGNOFF_QUESTIONS},
+            "answers": {q: answers[q] for q in SIGNOFF_QUESTIONS}, "disclosure": disclosure,
+            "agreed_with_suggestion": {str(k): bool(v) for k, v in (agreed or {}).items()},
             "opened_at": opened,
             # What the author accepted: the number check of the exact version signed.
             "checks_at_signoff": s.drafts[version].get("checks"),
