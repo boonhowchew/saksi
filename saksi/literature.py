@@ -53,6 +53,12 @@ class PubMed:
         xml = self.get(EUTILS + "efetch.fcgi", {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"})
         return [r for r in (parse_article(a) for a in ET.fromstring(xml).iter("PubmedArticle")) if r]
 
+    def mesh_term(self, term: str) -> str | None:
+        """The MeSH descriptor a keyword matches, or None. Checked against NCBI's MeSH database."""
+        xml = self.get(EUTILS + "esearch.fcgi", {"db": "mesh", "term": f'"{term}"[MeSH Terms]', "retmax": 1})
+        n = ET.fromstring(xml).findtext("Count") or "0"
+        return term if int(n) > 0 else None
+
     def by_doi(self, doi: str) -> list[dict[str, Any]]:
         return self.fetch(self.search(f"{doi}[doi]", 1))
 

@@ -553,6 +553,28 @@ Never keep a record for a claim its abstract does not support.
 
 Reply with ONLY a JSON object: {"references": [{"pmid": "...", "role": "...", "finding": "...", "quote": "..."}]}"""
 
+FRONT_MATTER = """You are the Writing Agent in Saksi, writing the front matter of a manuscript from its current draft:
+the abstract, a suggested title and keywords. A program checks every number in the abstract against the results.
+
+Abstract: structured, as journals and the reporting guideline's abstract items expect, with these labelled parts, each
+starting on its own line in bold: "**Background:**", "**Methods:**" (design, setting, participants, main outcome
+and exposure, analysis), "**Results:**" (numbers analysed and with the outcome; the main estimates with 95% CIs,
+cited with [A:<id>] tags exactly as the draft cites them), "**Conclusions:**" (what the results support, proportionate
+to the evidence; say once if the findings are exploratory). Use only numbers that are in the draft, with their tags.
+No references, no abbreviations without definition, no new claims. Keep within WORD LIMIT words (tags not counted).
+
+Title: informative and specific, naming the main exposure, outcome, population and design (for example "... : a
+retrospective cohort study"), at most 25 words; no question, no claim beyond the results.
+
+Keywords: up to 5, each a Medical Subject Headings (MeSH) descriptor exactly as MeSH writes it (for example
+"Diabetes, Gestational", "Body Mass Index", "Risk Factors"), chosen so the paper is found in PubMed; not words
+already in the title where a better MeSH term exists.
+
+If AUTHORS' INSTRUCTION is given (for example a shorter abstract, a different emphasis, a new title), follow it within
+these rules.
+
+Reply with ONLY a JSON object: {"abstract": "...", "title": "...", "keywords": ["...", "..."]}"""
+
 SIGNOFF_SUGGEST = """You are the Writing Agent in Saksi. An author is about to sign off this draft. Suggest, for them to agree
 with or change: (1) the paper's main claim in one or two plain sentences, exactly as the draft supports it, with its
 key estimate, and saying it is exploratory if the draft says so; (2) the result in the draft that is least easy to
@@ -622,7 +644,7 @@ OUTLINE = OUTLINE + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
 PLAN = PLAN + STATISTICAL_PRACTICE + _AGAIN
 REWRITE = REWRITE + ACADEMIC_WRITING + _AGAIN
 
-TEMPLATES = {"signoff_suggest": SIGNOFF_SUGGEST, "literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+TEMPLATES = {"front_matter": FRONT_MATTER, "signoff_suggest": SIGNOFF_SUGGEST, "literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

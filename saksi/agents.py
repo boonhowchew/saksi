@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (LITERATURE_QUERIES, LITERATURE_SCREEN, SIGNOFF_SUGGEST)
+from .prompts import (FRONT_MATTER, LITERATURE_QUERIES, LITERATURE_SCREEN, SIGNOFF_SUGGEST)
 from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, CURATOR_UPDATE, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
@@ -1005,6 +1005,60 @@ class Agents:
         return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
                                          requested_by=requested_by, attempts=attempts,
                                          instructions=str(instructions)[:6000] if instructions else None)
+
+    def front_matter(self, requested_by: str, instruction: str | None = None, word_limit: int | None = None) -> State:
+        """The abstract (number-checked, within the word limit, rewritten once if the check fails), a suggested title
+        and up to five keywords, each matched to a MeSH descriptor by NCBI. Authors adopt or edit them."""
+        from . import literature as lit
+        s = self.project.state()
+        v = s.draft_version
+        if not v:
+            raise WorkflowError("there is no draft yet")
+        limit = int(word_limit or (s.front.get("abstract") or {}).get("word_limit") or 250)
+        limit = max(100, min(limit, 500))
+        text = self.project.blobs.get_text(s.drafts[v]["text_sha256"])
+        report = (s.plan_locked or {}).get("report") or {}
+        current_abs = s.front.get("abstract")
+        user = (f"DRAFT (version {v}):\n{text[:60000]}\n\nREPORT: {json.dumps(report)}\n"
+                f"REPORTING GUIDELINE: {guidelines.for_design(report.get('design'))['name']}\n"
+                f"CURRENT TITLE: {(s.front.get('title') or {}).get('value') or s.title}\nWORD LIMIT: {limit}"
+                + (f"\n\nCURRENT ABSTRACT:\n{self.project.blobs.get_text(current_abs['value'])}" if current_abs else "")
+                + (f"\n\nAUTHORS' INSTRUCTION: {instruction}" if instruction else ""))
+        abstract, checks, call = "", {}, None
+        for attempt in (1, 2):
+            obj, call, _ = self._json_call(WRITER_ID, "checklist", FRONT_MATTER, user, "front_matter")
+            abstract = str(obj.get("abstract") or "").strip()
+            r = self.project.check_abstract(abstract, s)
+            checks = summarise(r) | {"words": r["words"], "word_limit": limit}
+            if checks.get("ok") and r["words"] <= limit * 1.05 or attempt == 2:
+                break
+            self.project.record_model_call(WRITER_ID, call)
+            problems = [f"untraced number {u['number']} in: {u['sentence'][:200]}" for u in r["untraced"][:10]]
+            if r["words"] > limit * 1.05:
+                problems.append(f"{r['words']} words; the limit is {limit}: shorten it")
+            user += "\n\nYOUR LAST ABSTRACT FAILED THESE CHECKS; fix them:\n- " + "\n- ".join(problems)
+        if len(abstract.split()) < 40:
+            self.project.record_model_call(WRITER_ID, call)
+            raise AgentError("the Writing Agent returned no usable abstract")
+        st = self.project.set_front(WRITER_ID, "abstract", abstract, requested_by=requested_by, checks=checks,
+                                    instruction=instruction, word_limit=limit)
+        self.project.record_model_call(WRITER_ID, call)
+        title = " ".join(str(obj.get("title") or "").split())
+        if title and title != (st.front.get("title") or {}).get("value"):
+            st = self.project.set_front(WRITER_ID, "title_suggestion", title, requested_by=requested_by)
+        pm = self.pubmed or lit.PubMed()
+        kws = []
+        for k in [str(x).strip() for x in obj.get("keywords") or [] if str(x).strip()][:8]:
+            try:
+                ok = pm.mesh_term(k)
+            except Exception:
+                ok = None
+            kws.append({"term": k, "mesh": bool(ok)})
+        kws = sorted(kws, key=lambda k: not k["mesh"])[:5]
+        kw = st.front.get("keywords")
+        if kws and (not kw or str(kw.get("by", "")).startswith("agent:")):      # the authors' own choice stands
+            st = self.project.set_front(WRITER_ID, "keywords", kws, requested_by=requested_by)
+        return st
 
     def suggest_signoff(self, requested_by: str) -> State:
         """Suggest the claim and the least-defensible result for the current version, from its text."""

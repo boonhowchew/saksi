@@ -239,3 +239,22 @@ def test_sign_in_with_the_token_alone_and_ids_are_made_for_you(tmp_path):
     r = c.post(f"/projects/{pid}/commands/register_human", headers={"X-Saksi-Token": tok},
                json={"args": {"actor": {"name": "Boon How Chew"}, "role": "reviewer"}})
     assert "boon-how-chew-2" in r.json()["state"]["actors"]                  # unique, made from the name
+
+
+def test_invitation_tokens_stay_readable_until_used_and_can_be_reissued(tmp_path):
+    c, tok_a = setup(tmp_path)
+    h = {"X-Saksi-Token": tok_a}
+    tok_b = cmd(c, tok_a, "register_human", actor=AUTHOR_B, role="author").json()["token_for_new_actor"]
+    inv = c.get("/projects/gdm-demo/invitations", headers=h).json()
+    assert inv["pending"]["coauthor"]["token"] == tok_b
+    assert c.get("/projects/gdm-demo/invitations", headers={"X-Saksi-Token": tok_b}).status_code == 403
+    assert c.post("/signin", json={"token": tok_b}).status_code == 200            # used: no longer shown
+    inv = c.get("/projects/gdm-demo/invitations", headers=h).json()
+    assert "coauthor" not in inv["pending"] and inv["joined"]["coauthor"]
+    r = c.post("/projects/gdm-demo/actors/coauthor/token", headers=h)
+    assert r.status_code == 200
+    new = r.json()["token_for_new_actor"]
+    assert c.get("/projects/gdm-demo", headers={"X-Saksi-Token": tok_b}).status_code == 401      # old one revoked
+    assert c.get("/projects/gdm-demo", headers={"X-Saksi-Token": new}).json()["you"] == "coauthor"
+    assert any(e["type"] == "access.token_reissued" for e in c.get("/projects/gdm-demo/events", headers=h).json())
+    assert c.post("/projects/gdm-demo/actors/coauthor/token", headers={"X-Saksi-Token": new}).status_code == 409

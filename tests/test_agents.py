@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("so" if "An author is about to sign off" in system
+        purpose = ("front" if "writing the front matter of a manuscript" in system
+                   else "so" if "An author is about to sign off" in system
                    else "lit_q" if "PubMed search queries" in system else "lit_s" if "Screen these PubMed records" in system
                    else "curator_update" if "Bring your earlier report on this dataset up to date" in system
                    else "outline" if "what this paper is going to report" in system
@@ -130,6 +131,8 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "front" and not self.script.get("front"):
+            reply = FRONT_REPLY
         elif purpose == "so" and not self.script.get("so"):
             reply = {"claim": "Booking BMI was associated with gestational diabetes in this cohort, an exploratory finding.",
                      "least_comfortable": "The adjusted odds ratio for previous GDM, whose interval is very wide with few events."}
@@ -157,6 +160,17 @@ class ScriptedModel:
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
 
 
+FRONT_REPLY = {
+    "abstract": ("**Background:** Booking body mass index (BMI) may help identify women at risk of gestational diabetes "
+                 "(GDM).\n**Methods:** A cohort of pregnant women booking at public health clinics; logistic regression "
+                 "of GDM on booking BMI, adjusted for age, parity and previous GDM.\n**Results:** Of 400 records, 12 "
+                 "lacked booking BMI [A:s_data_quality]. The association between booking BMI and GDM was imprecise and "
+                 "the analysis was exploratory because the sample fell short of its plan.\n**Conclusions:** Booking BMI "
+                 "was not clearly associated with GDM in this exploratory analysis; a larger study is needed."),
+    "title": "Booking body mass index and gestational diabetes in Malaysian public health clinics: a retrospective cohort study",
+    "keywords": ["Diabetes, Gestational", "Body Mass Index", "Risk Factors", "Malaysia", "booking visit"]}
+
+
 class FakePubMed:
     """PubMed without the network: two records, searched and fetched."""
     RECORDS = {
@@ -180,6 +194,9 @@ class FakePubMed:
 
     def by_doi(self, doi):
         return [r for r in self.RECORDS.values() if r["doi"] == doi]
+
+    def mesh_term(self, term):
+        return term if term in {"Diabetes, Gestational", "Body Mass Index", "Risk Factors", "Malaysia"} else None
 
 
 LIT_SCREEN_REPLY = {"references": [
@@ -1339,3 +1356,30 @@ def test_co_authors_can_join_at_any_stage_and_join_the_remaining_decisions(proj)
     assert ev.payload["joined_at_stage"] == "AUTHOR_REVISION" and ev.payload["invited_by"] == "bhc"
     s = sign_all(proj)                                   # the late author's sign-off is needed too
     assert "late" in s.signoffs[s.draft_version]
+
+
+def test_front_matter_abstract_checked_title_suggested_keywords_matched_to_mesh(setup):
+    p, agents, model, _ = setup
+    bmi = _to_drafting(p, agents, model)
+    model.script["write"] = [_draft(bmi, extra="", exploratory="An exploratory model gave a similar estimate [A:x_q1].")]
+    agents.write_draft("bhc")
+    agents.pubmed = FakePubMed()
+    s = agents.front_matter("bhc", word_limit=200)
+    F = s.front
+    assert F["abstract"]["checks"]["ok"] and F["abstract"]["word_limit"] == 200 and F["abstract"]["by"] == "agent:writer"
+    assert "**Results:**" in p.blobs.get_text(F["abstract"]["value"])
+    assert F["title_suggestion"]["value"].endswith("a retrospective cohort study")
+    kws = F["keywords"]["value"]
+    assert [k["term"] for k in kws][:4] == ["Diabetes, Gestational", "Body Mass Index", "Risk Factors", "Malaysia"]
+    assert all(k["mesh"] for k in kws[:4]) and not kws[4]["mesh"]
+    with pytest.raises(WorkflowError, match="authors' to set"):
+        p.set_front("agent:writer", "title", "A title the agent may not set", requested_by="bhc")
+    s = p.set_front("bhc", "title", F["title_suggestion"]["value"])
+    assert s.title == F["title_suggestion"]["value"] and s.front["title"]["by"] == "bhc"
+    s = p.set_front("bhc", "abstract", p.blobs.get_text(F["abstract"]["value"]).replace("12 lacked", "99 lacked"))
+    assert not s.front["abstract"]["checks"]["ok"] and s.front["abstract"]["checks"]["untraced"] == 1   # numbers checked
+    s = p.set_front("bhc", "keywords", [{"term": "Pregnancy", "mesh": False}])
+    s = agents.front_matter("bhc", instruction="Shorter, please")
+    assert s.front["keywords"]["value"] == [{"term": "Pregnancy", "mesh": False}]          # the authors' choice stands
+    s = p.set_front("coauthor", "registration", {"registry": "NMRR", "number": "NMRR-19-1234"})
+    assert s.front["registration"]["value"]["number"] == "NMRR-19-1234"

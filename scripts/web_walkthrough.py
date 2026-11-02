@@ -46,7 +46,7 @@ with sync_playwright() as p:
     f.locator("input[name=name]").fill("Boon-How Chew")
     f.locator("input[name=orcid]").fill("0000-0002-8627-6248"); f.locator("input[name=affiliation]").fill("UPM")
     f.get_by_role("button", name="Start project").click(); page.wait_for_selector(".progress")
-    tok_a = page.locator(".secret").inner_text().strip()
+    tok_a = page.locator(".secret").first.inner_text().strip()
     shot(page, "02-new-project")
     # add co-author and reviewer
     toks = {}
@@ -54,7 +54,7 @@ with sync_playwright() as p:
         page.get_by_role("tab", name="People").click()
         page.fill("form[data-form=addperson] input[name=name]", nm)
         page.check(f"form[data-form=addperson] input[value={role}]")
-        click(page, "Add and show their token"); toks[aid] = page.locator(".secret").inner_text().strip()
+        click(page, "Add and show their token"); toks[aid] = page.locator(".secret").first.inner_text().strip()
         if aid == "siti": shot(page, "02b-people")
     print("people ok", note(page))
     # upload
@@ -230,6 +230,9 @@ with sync_playwright() as p:
         click(pg, "Sign off version")
     page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(300)
     page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
+    print("front matter:", page.locator(".front .abstract").count(), "abstract |", page.locator(".front .tag", has_text="MeSH").count(), "MeSH keywords |",
+          page.locator(".front p.small", has_text="Saksi suggests").inner_text()[:90] if page.locator(".front p.small", has_text="Saksi suggests").count() else "no title suggestion")
+    assert page.locator(".front .abstract").count() == 1
     print("suggested claim:", page.locator("form[data-form=signoff] textarea[name=claim]").input_value()[:80],
           "| CRediT suggested:", page.locator("form[data-form=signoff] .credit .aibadge").count())
     signoff(page)

@@ -163,6 +163,9 @@ form.signoff .soitem { border: 1px solid var(--rule); border-radius: 8px; paddin
 .guar { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; }
 .guar .g-strong { background: #e3f1ec; } .guar .g-partial { background: #fbf0dc; } .guar .g-limited { background: #f6e1e4; }
 .guar label.radio { border-radius: 8px; padding: .6rem; }
+.front .mtitle { font-family: var(--serif, Georgia, serif); font-size: 1.6rem; line-height: 1.3; margin: .4rem 0; }
+.front .authorsline { margin: .2rem 0; } .front .affils { font-size: .85rem; color: var(--muted); margin: .2rem 0 .4rem 0; list-style: none; padding: 0; }
+.front .abstract p { margin: .35rem 0; } .front { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 1rem; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -410,6 +413,14 @@ function describe(e) {
   const forWhom = p.requested_by ? ` for ${esc(name(p.requested_by))}` : "";
   switch (e.type) {
     case "figure.omitted": return `${who} left a figure out of the paper: “${esc(p.reason)}”`;
+    case "front.set": return `${who} ${({ title: "set the title", abstract: "wrote the abstract", keywords: "set the keywords", registration: "recorded the trial registration", title_suggestion: "suggested a title" })[p.field] || "updated the front matter"}${forWhom}`;
+    case "signoff.suggested": return `${who} suggested sign-off answers for version ${p.version}${forWhom}`;
+    case "access.token_reissued": return `${who} issued a new personal token for ${esc(name(p.actor_id))}`;
+    case "references.found": return `${who} added ${p.items.length} reference${p.items.length > 1 ? "s" : ""} from PubMed${forWhom}`;
+    case "reference.removed": return `${who} removed a reference (PMID ${esc(p.pmid)}): “${esc(p.reason)}”`;
+    case "labels.set": return `${who} named the codes of ${esc(p.column)}`;
+    case "analysis.placed": return `${who} moved ${esc(p.analysis_id)} to ${p.place === "supplement" ? "the supplementary material" : "the main Results"}${forWhom}`;
+    case "settings.reference_style": return `${who} chose the ${esc(p.style)} reference style`;
     case "figure.restored": return `${who} put a figure back in the paper`;
     case "project.created": return `${who} started the project`;
     case "actor.registered": return p.kind === "agent" ? `${esc(p.name)} joined, running ${esc(p.model)}`
@@ -540,7 +551,7 @@ async function render() {
   if (S.tab === "draft") maybeOpenDraft();
   if (S.tab === "plan") maybeSuggestAnswers();
   if (S.tab === "materials") maybeUpdateCurator();
-  if (S.tab === "draft") { maybeReviseForChecklist(); maybeSuggestSignoff(); }
+  if (S.tab === "draft") { maybeReviseForChecklist(); maybeFrontMatter(); maybeSuggestSignoff(); }
   maybeStartAnalysis();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
@@ -582,7 +593,7 @@ async function panel(tab) {
 async function panelBody(tab) {
   {
     switch (tab) {
-      case "people": return people();
+      case "people": await invitesNow(); return people();
       case "materials": return await materials();
       case "plan": return await plan();
       case "analyses": return await analyses();
@@ -610,6 +621,7 @@ function inviteForm(reviewerOnly = false) {
   return `<form class="stack" data-form="addperson">
         <label><span>Full name</span><input type="text" name="name" required autocomplete="off"></label>
         ${reviewerOnly ? `<input type="hidden" name="role" value="reviewer">` : ""}
+        <label><span>Email (optional: Saksi opens an invitation email with their token, ready to send)</span><input type="email" name="email" autocomplete="off"></label>
         <label><span>ORCID iD (optional)</span><input type="text" name="orcid" placeholder="0000-0000-0000-0000"></label>
         <label><span>Affiliation (optional)</span><input type="text" name="affiliation"></label>
         <div><button class="btn" data-label="Adding">Add${reviewerOnly ? " the reviewer" : ""} and show their token</button></div>
@@ -622,6 +634,30 @@ const AGENT_JOBS = {
   writer: "Drafts Methods, Results and Discussion from the computed results.",
   reviewer_assist: "Briefs the reviewer. A separate, open-weights model that never sees the authors' side.",
 };
+// Invitations the corresponding author made: the token stays readable until the invitee first signs in, so it can
+// be copied or emailed again; after that only a new token can be issued (the old one stops working).
+async function invitesNow() {
+  if (!has("corresponding_author")) return (S.invites = null);
+  const key = `${S.pid}|${S.state.head_seq}`;
+  if (S.invites?.key !== key) { try { S.invites = { key, ...(await api(`/projects/${S.pid}/invitations`)) }; } catch { S.invites = { key, pending: {}, joined: {} }; } }
+  return S.invites;
+}
+function inviteMail(id, tok, role) {
+  const a = S.state.actors[id] || {}, title = S.state.front?.title?.value || S.state.title;
+  const subject = `Invitation to ${role === "reviewer" ? "review" : "co-author"}: ${title}`;
+  const body = `Dear ${a.name},\n\nI would like to invite you to ${role === "reviewer" ? "review the manuscript" : "join as a co-author of the paper"} "${title}" on Saksi, where every step of the analysis and writing is recorded.\n\n1. Open ${location.origin}\n2. Paste this personal token on the sign-in page: ${tok}\n\nThe token is personal; please do not share it.\n\nWith thanks,\n${name(S.you)}`;
+  return `mailto:${encodeURIComponent(a.email || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+function inviteCell(id, role) {
+  const I = S.invites;
+  if (!I || id === S.you) return "";
+  const p = (I.pending || {})[id];
+  if (p) return `<div class="small"><span class="tag attn">invitation not used yet</span>
+    <div class="copyrow"><div class="secret">${esc(p.token)}</div><button class="btn quiet" data-action="copy" data-text="${esc(p.token)}">Copy</button>
+    <a class="btn quiet" href="${esc(inviteMail(id, p.token, role))}">Email the invitation</a></div></div>`;
+  const j = (I.joined || {})[id];
+  return `<div class="small">${j ? `Signed in ${fmtTime(j)}. ` : ""}<button class="linkish small" data-action="reissue" data-id="${esc(id)}" data-label="Issuing">Issue a new token</button></div>`;
+}
 function people() {
   const s = S.state, all = Object.entries(s.actors);
   const humans = all.filter(([, a]) => a.kind !== "agent");
@@ -631,7 +667,7 @@ function people() {
   const orcid = (a) => a.orcid ? `<a href="https://orcid.org/${esc(a.orcid)}" rel="noreferrer" target="_blank">${esc(a.orcid)}</a>` : "";
   const joined = (id) => { const e = S.events.find((x) => x.type === "actor.registered" && x.payload.actor_id === id);
     return e ? `${fmtTime(e.ts)}${e.payload.invited_by ? ", invited by " + esc(name(e.payload.invited_by)) : ""}${e.payload.joined_at_stage ? ` (${esc(STAGE_NAMES[e.payload.joined_at_stage] || e.payload.joined_at_stage)})` : ""}` : ""; };
-  const row = ([id, a], role) => `<tr><td>${esc(a.name)}${id === S.you ? ' <span class="tag">you</span>' : ""}</td><td>${role}</td><td>${esc(a.affiliation || "")}</td><td>${orcid(a)}</td><td class="small muted">${joined(id)}</td></tr>`;
+  const row = ([id, a], role) => `<tr><td>${esc(a.name)}${id === S.you ? ' <span class="tag">you</span>' : ""}${inviteCell(id, role === "Reviewer" ? "reviewer" : "author")}</td><td>${role}</td><td>${esc(a.affiliation || "")}</td><td>${orcid(a)}</td><td class="small muted">${joined(id)}</td></tr>`;
   const canAdd = has("corresponding_author") && s.stage !== "FINAL";
   const authorsOpen = s.stage !== "FINAL";
   const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
@@ -1560,6 +1596,59 @@ async function analyses() {
         ${!s.analyses_accepted_by.includes(S.you) ? `<button class="btn" data-action="accept" data-label="Accepting">Accept these results</button>` : `<span class="tag good">You accepted</span>`}</section>` : ""}` : ""}`;
 }
 
+/* Front matter: title, authors and affiliations, the structured abstract (written by the Writing Agent from the
+   draft, number-checked, within a word limit; editable), MeSH keywords and trial registration. */
+async function frontHtml(v, can) {
+  const s = S.state, F = s.front || {};
+  const title = F.title?.value || s.title, sug = F.title_suggestion?.value;
+  const authors = s.authors.map((a) => s.actors[a]).filter(Boolean);
+  const affs = [...new Set(authors.map((a) => a.affiliation).filter(Boolean))];
+  const corr = authors.find((a) => (a.roles || []).includes("corresponding_author"));
+  const abs = F.abstract, absText = abs ? await blob(abs.value) || "" : "";
+  const c = abs?.checks || {};
+  const design = s.plan_locked?.report?.design || "other", reg = F.registration?.value || {};
+  const kw = F.keywords?.value || [];
+  const stale = abs && Object.values(s.drafts).some((d) => d.seq > abs.seq) ? true : false;
+  return `<section class="front">
+    <h1 class="mtitle" ${can ? `contenteditable="true" spellcheck="true" data-front="title"` : ""}>${esc(title)}</h1>
+    ${can ? `<div class="editbar" id="eb-title" hidden><button class="btn" data-action="savetitle" data-label="Saving">Save the title</button><button class="btn quiet" data-action="canceldesc">Cancel</button></div>` : ""}
+    ${sug && sug !== title ? `<p class="small"><span class="aibadge">AI</span> Saksi suggests: <em>${esc(sug)}</em>${can ? ` <button class="linkish" data-action="usetitle" data-label="Saving">Use this title</button>` : ""}</p>` : ""}
+    <p class="authorsline">${authors.map((a) => `${esc(a.name)}<sup>${a.affiliation ? affs.indexOf(a.affiliation) + 1 : ""}${(a.roles || []).includes("corresponding_author") ? "*" : ""}</sup>`).join(", ")}</p>
+    ${affs.length ? `<ul class="affils">${affs.map((x, i) => `<li><sup>${i + 1}</sup> ${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${corr ? `<p class="small">*Corresponding author: ${esc(corr.name)}${corr.orcid ? `, ORCID ${esc(corr.orcid)}` : ""}.</p>` : ""}
+    <h2>Abstract</h2>
+    ${abs ? `<div class="abstract manuscript-view" ${can ? `contenteditable="true" spellcheck="true" data-front="abstract"` : ""}>${absText.split(/\n+/).filter(Boolean).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}</div>
+      ${can ? `<div class="editbar" id="eb-abstract" hidden><button class="btn" data-action="saveabstract" data-label="Saving">Save my changes</button><button class="btn quiet" data-action="canceldesc">Cancel</button><span class="small muted">Saved under your name; its numbers are checked again.</span></div>` : ""}
+      <p class="small muted">${esc(c.words ?? "")} words${c.word_limit ? ` (limit ${esc(c.word_limit)})` : ""}. ${abs.by?.startsWith("agent:") ? "Written by the Writing Agent" : "Edited by " + esc(name(abs.by))}${abs.requested_by ? " for " + esc(name(abs.requested_by)) : ""}, ${fmtTime(abs.ts)}.
+        <span class="tag ${c.ok ? "good" : "attn"}">${c.ok ? "numbers checked" : `${esc(c.untraced || 0)} number(s) not in the results`}</span></p>
+      ${stale ? `<p class="msg warn small">The draft has changed since the abstract was written.${can ? ` <button class="linkish" data-agent="front_matter" data-label="The Writing Agent is updating the abstract">Update the abstract</button>` : ""}</p>` : ""}`
+    : can ? `<div class="bigaction"><p><strong>No abstract yet.</strong> The Writing Agent writes a structured abstract from the draft (its numbers checked by code), suggests a title, and proposes up to five keywords matched to MeSH.</p>
+      <button class="btn" data-agent="front_matter" data-label="The Writing Agent is writing the abstract">Write the abstract, title and keywords</button></div>` : `<p class="muted">Not written yet.</p>`}
+    <p><strong>Keywords:</strong> ${kw.length ? kw.map((k) => `${esc(k.term)}${k.mesh ? ' <span class="tag good" title="Matches a MeSH descriptor in NCBI">MeSH</span>' : ""}`).join("; ") : '<span class="muted">none yet</span>'}</p>
+    ${can ? `<details class="small"><summary>Edit the keywords</summary><form class="chatform" data-form="keywords"><input type="text" name="kw" value="${esc(kw.map((k) => k.term).join("; "))}" placeholder="Up to five, separated by semicolons" aria-label="Keywords"><button class="btn quiet" data-label="Saving">Save</button></form></details>` : ""}
+    ${reg.number ? `<p><strong>Trial registration:</strong> ${esc(reg.registry)} ${esc(reg.number)}${reg.date ? `, registered ${esc(reg.date)}` : ""}.</p>` : ""}
+    ${can ? `<details class="small" ${design === "rct" && !reg.number ? "open" : ""}><summary>${design === "rct" ? "Trial registration (required for a trial)" : "Trial or study registration (optional)"}</summary>
+      <form class="stack" data-form="registration"><label><span>Registry</span><input type="text" name="registry" value="${esc(reg.registry || "")}" placeholder="For example ClinicalTrials.gov, ISRCTN, ANZCTR, NMRR"></label>
+        <label><span>Registration number</span><input type="text" name="number" value="${esc(reg.number || "")}" placeholder="For example NCT01234567"></label>
+        <label><span>Date registered (optional)</span><input type="text" name="date" value="${esc(reg.date || "")}" placeholder="YYYY-MM-DD"></label>
+        <div><button class="btn quiet" data-label="Saving">Save the registration</button></div></form></details>` : ""}
+    ${can && abs ? `<form class="chatform" data-form="frontchat"><span class="aibadge">AI</span><input type="text" name="message" required autocomplete="off" placeholder="Ask Saksi: shorten the abstract, change its emphasis, suggest a shorter title, other keywords" aria-label="Ask Saksi about the front matter">
+      <select name="limit" aria-label="Word limit">${[150, 200, 250, 300, 350].map((n) => `<option value="${n}" ${(+(c.word_limit || 250)) === n ? "selected" : ""}>${n} words</option>`).join("")}</select><button class="btn quiet" data-label="The Writing Agent is revising">Send</button></form>` : ""}
+  </section>`;
+}
+function maybeFrontMatter() {
+  const s = S.state, v = s.draft_version, d = s.drafts?.[String(v)];
+  if (S.busy || !isAuthor() || !["AUTHOR_REVISION", "RESPONSE"].includes(s.stage) || s.front?.abstract) return;
+  const c = d?.checklist;
+  const pendingRevision = c && c.summary.missing + c.summary.partly && !String(d.instructions || "").startsWith("REPORTING GUIDELINE") && !(S.reviseTried || {})[`${S.pid}|${v}`];
+  if (d?.type === "draft.created" && (!c || pendingRevision)) return;
+  (S.frontTried ||= {});
+  if (S.frontTried[S.pid]) return;
+  S.frontTried[S.pid] = true;
+  act(null, () => agent("front_matter"), "Saksi wrote the abstract, suggested a title and proposed MeSH keywords. Edit any of them, or ask Saksi to change them.",
+    "The Writing Agent is writing the abstract, a title and keywords from the draft.");
+}
+
 /* Sign-off: Saksi suggests from the record and the draft; the author agrees, changes or rejects, and discloses
    their contribution (CRediT) and what they verified (HACprint 2.0 evidence areas). Everything is time-stamped. */
 async function signoffNow(v) {
@@ -1915,6 +2004,7 @@ async function draft() {
       checks.references_unknown?.length ? `Referred to but not built: ${checks.references_unknown.join(", ")}` : ""].filter(Boolean).map(esc).join(". ")}.</p>` : ""}
     ${canEdit && !editing ? `<div class="bigaction"><p><strong>Edit on the page.</strong> Click any paragraph to change its words. In the tables you can reword the title, headings, row labels and footnotes; the numbers are locked, because they come from the results. Saving makes version ${v + 1}, recorded under your name and checked again.</p>
       <button class="btn" data-action="canvas">Edit on the page</button></div>` : ""}
+    ${await frontHtml(v, canEdit || (isAuthor() && current && s.stage !== "FINAL"))}
     ${(await refsNow(v)) ? "" : ""}<article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
     ${referencesHtml(await refsNow(v), isAuthor() && s.stage !== "FINAL")}
     ${await supplementHtml()}
@@ -1993,8 +2083,9 @@ async function review() {
   const revs = Object.entries(s.actors).filter(([, a]) => (a.roles || []).includes("reviewer"));
   const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
   const inviteHere = has("corresponding_author") && ["AUTHOR_REVISION", "REVIEW", "RESPONSE"].includes(s.stage);
+  if (inviteHere) await invitesNow();
   const reviewerBox = inviteHere ? `<section><h2>Reviewer</h2>
-    ${revs.length ? `<p>${revs.map(([id, a]) => `${esc(a.name)}${a.affiliation ? `, ${esc(a.affiliation)}` : ""}`).join("; ")}.</p>` : `<p>No reviewer yet. ${allSigned ? "Every author has signed off; invite the reviewer and send the draft for review." : "Invite the reviewer now; the review starts once every author has signed off."}</p>`}
+    ${revs.length ? `<ul>${revs.map(([id, a]) => `<li>${esc(a.name)}${a.affiliation ? `, ${esc(a.affiliation)}` : ""}${inviteCell(id, "reviewer")}</li>`).join("")}</ul>` : `<p>No reviewer yet. ${allSigned ? "Every author has signed off; invite the reviewer and send the draft for review." : "Invite the reviewer now; the review starts once every author has signed off."}</p>`}
     ${s.stage === "AUTHOR_REVISION" && revs.length && allSigned ? `<p><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></p>` : ""}
     <details ${revs.length ? "" : "open"}><summary>Invite ${revs.length ? "another" : "a"} reviewer</summary>${inviteForm(true)}</details></section>` : "";
   return `${reviewerBox}${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
@@ -2117,6 +2208,12 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "updatecurator": return updateCurator(t);
+    case "reissue": return act(t, async () => { const r = await api(`/projects/${S.pid}/actors/${t.dataset.id}/token`, { method: "POST", body: {} });
+        S.invites = null; return r; }, "A new token was issued; the old one no longer works. It is shown below until they sign in.");
+    case "savetitle": return act(t, () => command("set_front", { field: "title", value: document.querySelector("[data-front=title]").innerText.trim() }), "The title is saved, under your name.");
+    case "usetitle": return act(t, () => command("set_front", { field: "title", value: S.state.front.title_suggestion.value }), "The suggested title is now the paper's title.");
+    case "saveabstract": return act(t, () => command("set_front", { field: "abstract", value: [...document.querySelectorAll("[data-front=abstract] p")].map((p) => serialiseBlock(p)).join("\n") }),
+      "Your abstract is saved under your name, and its numbers checked again.");
     case "removeref": {
       return act(t, () => command("remove_reference", { pmid: t.dataset.pmid, reason: "Not to be cited in this paper (the authors' decision)" }), "Removed. It stays in the record; the next draft will not cite it.");
     }
@@ -2236,6 +2333,8 @@ document.addEventListener("click", async (ev) => {
 document.addEventListener("toggle", (ev) => { if (ev.target.id === "details-all") S.detailsOpen = ev.target.open; }, true);
 document.addEventListener("input", (ev) => {
   if (ev.target.closest?.("[data-methods]")) { const b = document.getElementById("eb-methods"); if (b) b.hidden = false; return; }
+  const fr = ev.target.closest?.("[data-front]");
+  if (fr) { const b = document.getElementById("eb-" + fr.dataset.front); if (b) b.hidden = false; return; }
   const el = ev.target.closest?.("[data-desc],[data-head]");
   if (!el) return;
   const id = el.dataset.desc || el.dataset.head, bar = document.getElementById("eb-" + id);
@@ -2298,7 +2397,18 @@ document.addEventListener("submit", async (ev) => {
       S.pendingName = actor.name;
       if (val("orcid")) actor.orcid = val("orcid");
       if (val("affiliation")) actor.affiliation = val("affiliation");
-      return act(btn, () => command("register_human", { actor, role: val("role") }), `${actor.name} was added.`);
+      const email = val("email"), role = val("role");
+      return act(btn, async () => {
+        const r = await command("register_human", { actor, role });
+        const id = Object.keys(r.state.actors).find((k) => r.state.actors[k].name === actor.name && !S.state.actors[k]);
+        S.invites = null;
+        if (email && id && r.token_for_new_actor) {
+          r.state.actors[id].email = email;
+          S.state = r.state;
+          window.location.href = inviteMail(id, r.token_for_new_actor, role);      // the author's email app, ready to send
+        }
+        return r;
+      }, email ? `${actor.name} was added. Your email app opened with the invitation and token, ready to send.` : `${actor.name} was added.`);
     }
     case "upload": {
       const form = new FormData(); form.append("kind", val("kind")); form.append("file", fd.get("file"));
@@ -2409,6 +2519,14 @@ document.addEventListener("submit", async (ev) => {
       const id = val("id").trim();
       return act(btn, () => agent("find_literature", /^\d{4,9}$/.test(id) ? { pmids: [id] } : { doi: id }), "Added from PubMed. The next draft can cite it.");
     }
+    case "keywords": return act(btn, () => {
+        const old = Object.fromEntries((s.front?.keywords?.value || []).map((k) => [k.term.toLowerCase(), k.mesh]));
+        const value = val("kw").split(/[;,]/).map((x) => x.trim()).filter(Boolean).slice(0, 5).map((term) => ({ term, mesh: !!old[term.toLowerCase()] }));
+        return command("set_front", { field: "keywords", value });
+      }, "The keywords are saved.");
+    case "registration": return act(btn, () => command("set_front", { field: "registration", value: { registry: val("registry"), number: val("number"), date: val("date") } }), "The registration is saved.");
+    case "frontchat": return act(btn, () => agent("front_matter", { instruction: val("message"), word_limit: +val("limit") }),
+      "The Writing Agent revised the front matter as you asked. The abstract's numbers were checked again.", "The Writing Agent is revising the abstract, title and keywords.");
     case "withdrawanalysis": return act(btn, () => command("withdraw_analysis", { analysis_id: f.dataset.id, reason: val("reason") }),
       "Left out of the paper. It stays in the record, with your reason, and the reviewer is told.");
     case "t1change": {

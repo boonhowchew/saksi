@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -51,6 +52,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "update_curator_report": ("update_curator_report", set(), "author"),
     "find_literature": ("find_literature", {"pmids", "doi", "instructions"}, "author"),
     "suggest_signoff": ("suggest_signoff", set(), "author"),
+    "front_matter": ("front_matter", {"instruction", "word_limit"}, "author"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", {"instructions"}, "author"),
@@ -73,6 +75,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "omit_figure": ("omit_figure", {"analysis_id", "name", "reason"}),
     "place_analysis": ("place_analysis", {"analysis_id", "place", "reason"}),
     "remove_reference": ("remove_reference", {"pmid", "reason"}),
+    "set_front": ("set_front", {"field", "value"}),
     "set_reference_style": ("set_reference_style", {"style"}),
     "set_value_labels": ("set_value_labels", {"column", "labels", "reason"}),
     "restore_figure": ("restore_figure", {"analysis_id", "name"}),
@@ -108,26 +111,53 @@ class TokenStore:
     def _path(self, pid: str) -> Path:
         return self.root / pid / "tokens.json"
 
-    def _load(self, pid: str) -> dict[str, str]:
+    def _load(self, pid: str) -> dict[str, Any]:
         p = self._path(pid)
         return json.loads(p.read_text()) if p.exists() else {}
 
-    def issue(self, pid: str, actor_id: str) -> str:
-        token = "sk_saksi_" + secrets.token_urlsafe(24)
-        data = self._load(pid)
-        data[sha256_text(token)] = actor_id
+    def _save(self, pid: str, data: dict[str, Any]) -> None:
         p = self._path(pid)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data))
         p.chmod(0o600)
+
+    def issue(self, pid: str, actor_id: str, pending: bool = False) -> str:
+        """A new personal token. pending=True keeps it readable by the corresponding author until the invitee first
+        signs in (they saw it when issuing it anyway), so an invitation can be copied or emailed again later."""
+        token = "sk_saksi_" + secrets.token_urlsafe(24)
+        data = self._load(pid)
+        data[sha256_text(token)] = actor_id
+        if pending:
+            data.setdefault("_pending", {})[actor_id] = {"token": token, "issued": datetime.now(timezone.utc).isoformat()}
+        self._save(pid, data)
         return token
+
+    def reissue(self, pid: str, actor_id: str) -> str:
+        """Revoke every token the person has and issue a new one, pending until they sign in."""
+        data = {k: v for k, v in self._load(pid).items() if k.startswith("_") or v != actor_id}
+        self._save(pid, data)
+        return self.issue(pid, actor_id, pending=True)
+
+    def pending(self, pid: str) -> dict[str, Any]:
+        return dict(self._load(pid).get("_pending") or {})
+
+    def _claimed(self, pid: str, actor_id: str) -> None:
+        data = self._load(pid)
+        if actor_id in (data.get("_pending") or {}):
+            data["_pending"].pop(actor_id)
+            data.setdefault("_joined", {})[actor_id] = datetime.now(timezone.utc).isoformat()
+            self._save(pid, data)
+
+    def joined(self, pid: str) -> dict[str, str]:
+        return dict(self._load(pid).get("_joined") or {})
 
     def find(self, token: str) -> tuple[str, str] | None:
         """Which project and person a token belongs to, so signing in needs only the token."""
         h = sha256_text(token.strip())
         for f in sorted(self.root.glob("*/tokens.json")):
             actor = json.loads(f.read_text()).get(h)
-            if actor:
+            if isinstance(actor, str):
+                self._claimed(f.parent.name, actor)
                 return f.parent.name, actor
         return None
 
@@ -135,8 +165,10 @@ class TokenStore:
         if not token:
             raise HTTPException(401, "missing X-Saksi-Token header")
         actor = self._load(pid).get(sha256_text(token))
-        if not actor:
+        if not isinstance(actor, str):
             raise HTTPException(401, "token not recognised for this project")
+        if actor in (self._load(pid).get("_pending") or {}) and self._load(pid)["_pending"][actor]["token"] == token:
+            self._claimed(pid, actor)
         return actor
 
 
@@ -299,6 +331,27 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         return {"style": style, "styles": STYLES, "labels": labels, "list": reference_list(order, lib, style),
                 "items": items}
 
+    @app.get("/projects/{pid}/invitations")
+    def get_invitations(pid: str, who: str = Depends(actor)):
+        """For the corresponding author: invitations not yet used, with their tokens (to copy or email again), and
+        when each invitee first signed in."""
+        p = existing(pid)
+        if "corresponding_author" not in (p.state().actors.get(who) or {}).get("roles", []):
+            raise HTTPException(403, "only the corresponding author sees invitations")
+        return {"pending": tokens.pending(pid), "joined": tokens.joined(pid)}
+
+    @app.post("/projects/{pid}/actors/{actor_id}/token")
+    def reissue_token(pid: str, actor_id: str, who: str = Depends(actor)):
+        """A new personal token for an invited person (the old ones stop working). Recorded with the time."""
+        p = existing(pid)
+        try:
+            s = p.record_token_reissue(who, actor_id)
+        except WorkflowError as e:
+            raise refused(e)
+        token = tokens.reissue(pid, actor_id)
+        persist()
+        return {"state": s.to_dict(), "token_for_new_actor": token}
+
     @app.get("/projects/{pid}/signoff-suggestions")
     def get_signoff_suggestions(pid: str, version: int | None = None, who: str = Depends(actor)):
         """What Saksi suggests at sign-off, from the record: answers code can establish, CRediT roles per author
@@ -375,7 +428,7 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
             raise HTTPException(422, f"bad arguments: {e}")
         out: dict[str, Any] = {"state": s.to_dict()}
         if name == "register_human":
-            out["token_for_new_actor"] = tokens.issue(pid, body.args["actor"]["actor_id"])
+            out["token_for_new_actor"] = tokens.issue(pid, body.args["actor"]["actor_id"], pending=True)
             out["note"] = "Send this token privately to the person you registered; it is shown only once."
         persist()
         return out

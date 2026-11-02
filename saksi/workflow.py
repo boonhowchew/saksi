@@ -158,6 +158,7 @@ class State:
     references: dict[str, dict[str, Any]] = field(default_factory=dict)     # PMID -> record ref, role, finding
     reference_style: str = "vancouver"
     signoff_suggestions: list[dict[str, Any]] = field(default_factory=list)
+    front: dict[str, Any] = field(default_factory=dict)          # title, abstract, keywords, trial registration
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -205,7 +206,7 @@ class State:
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
             "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "references": self.references,
-            "reference_style": self.reference_style, "signoff_suggestions": self.signoff_suggestions, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "reference_style": self.reference_style, "signoff_suggestions": self.signoff_suggestions, "front": self.front, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -311,6 +312,11 @@ def apply(s: State, ev: Event) -> State:
     elif t == "reference.removed":
         if p["pmid"] in s.references:
             s.references[p["pmid"]]["removed"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
+    elif t == "front.set":
+        s.front[p["field"]] = {"value": p["value"], "by": ev.actor_id, "requested_by": p.get("requested_by"),
+                               "seq": ev.seq, "ts": ev.ts, **{k: p[k] for k in ("checks", "instruction", "word_limit") if k in p}}
+        if p["field"] == "title":
+            s.title = p["value"]
     elif t == "signoff.suggested":
         s.signoff_suggestions.append(p | {"by": ev.actor_id, "seq": ev.seq})
     elif t == "settings.reference_style":
@@ -441,6 +447,64 @@ class Project:
             raise WorkflowError(f"ORCID iD {orcid!r} is not in the form 0000-0000-0000-0000")
         return {"actor_id": aid, "kind": "human", "name": name, "orcid": orcid,
                 "affiliation": actor.get("affiliation"), "roles": roles}
+
+    FRONT_FIELDS = ("title", "abstract", "keywords", "registration", "title_suggestion")
+
+    def set_front(self, by: str, field: str, value: Any, requested_by: str | None = None, checks: dict | None = None,
+                  instruction: str | None = None, word_limit: int | None = None) -> State:
+        """The paper's front matter. Authors set the title, keywords and trial registration and may edit the abstract;
+        the Writing Agent writes the abstract (number-checked) and suggests a title and keywords, for an author."""
+        s = self.state()
+        a = s.actors.get(by) or {}
+        if "author" in a.get("roles", []):
+            if field == "title_suggestion":
+                raise WorkflowError("a title suggestion comes from the Writing Agent")
+        else:
+            w = self._require_role(s, by, "writer")
+            self._requested_by(s, w, requested_by)
+            if field in ("title", "registration"):
+                raise WorkflowError("the title and the trial registration are the authors' to set")
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
+        if field not in self.FRONT_FIELDS:
+            raise WorkflowError(f"unknown front-matter field {field!r}")
+        if field == "title":
+            value = " ".join(str(value or "").split())
+            if len(value) < 10:
+                raise WorkflowError("a title of at least a few words")
+        if field == "abstract":
+            if not isinstance(value, str) or len(value.split()) < 40:
+                raise WorkflowError("an abstract of at least 40 words")
+            value = self.blobs.put_text(value)
+            if "author" in a.get("roles", []):
+                r = self.check_abstract(self.blobs.get_text(value), s)
+                checks = summarise_checks(r) | {"words": r["words"], "word_limit": (s.front.get("abstract") or {}).get("word_limit")}
+        if field == "keywords":
+            value = [{"term": str(k.get("term") if isinstance(k, dict) else k).strip()[:80],
+                      "mesh": bool(k.get("mesh")) if isinstance(k, dict) else False}
+                     for k in (value or []) if str(k.get("term") if isinstance(k, dict) else k).strip()][:5]
+        if field == "registration":
+            value = {k: str((value or {}).get(k) or "").strip()[:200] for k in ("registry", "number", "date")}
+        p = {"field": field, "value": value, "requested_by": requested_by}
+        if checks is not None:
+            p["checks"] = checks
+        if instruction:
+            p["instruction"] = instruction[:1000]
+        if word_limit:
+            p["word_limit"] = int(word_limit)
+        self._emit(by, "front.set", p)
+        return self.state()
+
+    def record_token_reissue(self, by: str, actor_id: str) -> State:
+        """The corresponding author issues a new personal token for someone they invited (the old ones are revoked).
+        The token itself is a secret and never enters the record; the fact and the time do."""
+        s = self.state()
+        self._require_role(s, by, "corresponding_author")
+        a = s.actors.get(actor_id)
+        if not a or a.get("kind") == "agent" or actor_id == by:
+            raise WorkflowError("a new token can be issued only for a person you invited")
+        self._emit(by, "access.token_reissued", {"actor_id": actor_id})
+        return self.state()
 
     def register_human(self, by: str, actor: dict[str, Any], role: str) -> State:
         s = self.state()
@@ -1066,6 +1130,20 @@ class Project:
         r = self.check_text(text, s)
         return {"checks_sha256": self.blobs.put_json(r), "checks": summarise_checks(r)}
 
+    def check_abstract(self, text: str, s: State | None = None) -> dict[str, Any]:
+        """The number check for the abstract: every number traced to a result it cites, exploratory analyses named;
+        it need not report every analysis."""
+        s = s or self.state()
+        ok = {k: v for k, v in current(s).items() if self.blobs.has(v["outputs_sha256"])}
+        outputs = {k: {**self.blobs.get_json(v["outputs_sha256"]), **({"sample_check": v["sample_check"]}
+                                                                      if v.get("sample_check") else {})} for k, v in ok.items()}
+        counts = []
+        if s.curator_reports:
+            counts.append(self.blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("profile", {}).get("rows"))
+        r = trace(text, s.analyses, outputs, [c for c in counts if c is not None])
+        r["words"] = len(CITE.sub("", text).split())
+        return r
+
     def check_text(self, text: str, s: State | None = None) -> dict[str, Any]:
         """Full number/reporting check of a text against this project's results. Writes nothing."""
         s = s or self.state()
@@ -1501,7 +1579,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "front.set": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",
