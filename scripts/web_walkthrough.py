@@ -190,6 +190,8 @@ with sync_playwright() as p:
     shot(page, "06-draft")
     print("draft:", page.locator(".msg.ok, .msg.warn").first.inner_text()[:120])
     print("draft check:", page.locator("#panel .msg").filter(has_text="Number check").first.inner_text()[:90])
+    print("references:", page.locator("ol.reflist li").count(), "in the list |", page.locator("ol.reflist li").first.inner_text()[:90] if page.locator("ol.reflist li").count() else "")
+    assert page.locator("ol.reflist li").count() == 2 and page.locator("#ms .refcite").count() >= 1
     print("in place:", page.locator("#ms .pubtable").count(), "tables,", page.locator("#ms figure.fig").count(), "figures")
     order = page.evaluate("""() => [...document.querySelectorAll('#ms h3, #ms h2, #ms .pubtable .ptitle, #ms figure figcaption strong')].map(e => e.innerText.split('.')[0].trim()).filter(Boolean)""")
     print("draft order:", " > ".join(order)[:200])

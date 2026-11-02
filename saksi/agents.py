@@ -24,6 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
+from .prompts import (LITERATURE_QUERIES, LITERATURE_SCREEN)
 from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, CURATOR_UPDATE, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
@@ -126,6 +127,7 @@ class Agents:
     project: Project
     client: ModelClient
     executor: Executor
+    pubmed: Any = None              # literature.PubMed; injectable for tests and the offline server
 
     # -- materials ---------------------------------------------------------
     def _latest(self, s: State, kind: str, sha: str | None = None) -> dict[str, Any]:
@@ -961,6 +963,12 @@ class Agents:
                 f"FIGURES (refer to them only by these numbers):\n{_figure_list(s, ok)}\n\n"
                 f"TABLES (built by Saksi from RESULTS; refer to them only by these numbers):\n"
                 f"{tables_mod.listing(s, self.project.blobs)}")
+        lib = self.project.library(s)
+        litems = [{"cite_as": f"[R:{p}]", "first_author": ((r.get("authors") or [{}])[0].get("last") or (r.get("authors") or [{}])[0].get("collective")),
+                   "year": r.get("year"), "title": r.get("title"), "journal": r.get("journal"),
+                   "role": s.references[p].get("role"), "finding": s.references[p].get("finding") or "(no finding checked: cite only for its topic)"}
+                  for p, r in lib.items()]
+        user += "\n\nLITERATURE (cite only these, as given in cite_as):\n" + (json.dumps(litems, indent=1)[:30000] if litems else "(none)")
         if s.draft_version and s.drafts.get(s.draft_version):
             d = s.drafts[s.draft_version]
             cur_text = self.project.blobs.get_text(d["text_sha256"]) if d.get("text_sha256") and self.project.blobs.has(d["text_sha256"]) else ""
@@ -997,6 +1005,64 @@ class Agents:
         return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
                                          requested_by=requested_by, attempts=attempts,
                                          instructions=str(instructions)[:6000] if instructions else None)
+
+    # -- Literature --------------------------------------------------------------
+    def find_literature(self, requested_by: str, pmids: list[str] | None = None, doi: str | None = None,
+                        instructions: str | None = None) -> State:
+        """Find the evidence the Introduction and Discussion should cite, in PubMed: the Writing Agent writes the
+        searches, Saksi runs them and fetches the records, the Writing Agent screens them, and code checks that
+        each finding is backed by a quotation from the record's abstract. Authors can also add a PMID or a DOI."""
+        from . import literature as lit
+        pm = self.pubmed or lit.PubMed()
+        s = self.project.state()
+        plan = s.plan_locked or s.plan or {}
+        report = plan.get("report") or {}
+        if pmids or doi:
+            recs = pm.fetch([str(p).strip() for p in pmids or [] if str(p).strip().isdigit()]) if pmids else pm.by_doi(doi)
+            if not recs:
+                raise AgentError("PubMed has no record for that identifier")
+            items = [{"pmid": r["pmid"], "record_sha256": self.project.blobs.put_json(r), "role": "comparison",
+                      "finding": "", "quote": "", "label": "added by the authors"} for r in recs]
+            return self.project.record_references(WRITER_ID, items, [f"PMID or DOI given by the authors"], requested_by)
+        cur = current(s)
+        key = {k: {"title": v["spec"].get("title"), "kind": v.get("kind"),
+                   "estimates": (self.project.blobs.get_json(v["outputs_sha256"]).get("estimates") or [])[:6]}
+               for k, v in cur.items() if not v.get("standard")}
+        brief = (f"AIM: {report.get('aim')}\nQUESTIONS: {json.dumps(report.get('questions') or (s.outline or {}).get('questions'))}\n"
+                 f"DESIGN: {report.get('design')}\nPOPULATION: {(s.outline or {}).get('population')}\n"
+                 f"OUTCOMES: {json.dumps((s.outline or {}).get('outcomes'))}\nEXPOSURES: {json.dumps((s.outline or {}).get('exposures'))}\n"
+                 f"MAIN RESULTS: {json.dumps(key)[:8000]}" + (f"\nTHE AUTHORS ASK: {instructions}" if instructions else ""))
+        obj, call, _ = self._json_call(WRITER_ID, "checklist", LITERATURE_QUERIES, brief, "literature_queries")
+        self.project.record_model_call(WRITER_ID, call)
+        queries = [str(q)[:300] for q in obj.get("queries") or []][:6]
+        found: list[str] = []
+        for q in queries:
+            try:
+                found += [p for p in pm.search(q, 8) if p not in found]
+            except Exception:
+                continue
+        have = {k for k, v in s.references.items() if not v.get("removed")}
+        recs = {r["pmid"]: r for r in pm.fetch([p for p in found if p not in have][:40])}
+        if not recs:
+            raise AgentError("PubMed returned nothing for these searches; try again, or add references by PMID")
+        listing = [{"pmid": p, "title": r["title"], "journal": r["journal"], "year": r["year"],
+                    "abstract": r["abstract"][:1500]} for p, r in recs.items()]
+        obj, call, _ = self._json_call(WRITER_ID, "checklist", LITERATURE_SCREEN,
+                                       brief + "\n\nRECORDS:\n" + json.dumps(listing)[:90000], "literature_screen")
+        items = []
+        for x in obj.get("references") or []:
+            r = recs.get(str(x.get("pmid") or ""))
+            if not r or x.get("role") not in ("background", "comparison", "methods"):
+                continue
+            quote = str(x.get("quote") or "")
+            ok = lit.quote_in_abstract(quote, r)
+            items.append({"pmid": r["pmid"], "record_sha256": self.project.blobs.put_json(r), "role": x["role"],
+                          "finding": str(x.get("finding") or "")[:500] if ok else "",
+                          "quote": quote[:400] if ok else "", "label": "found by Saksi"})
+        if not items:
+            self.project.record_model_call(WRITER_ID, call)
+            raise AgentError("none of the records found could be backed by its abstract")
+        return self.project.record_references(WRITER_ID, items[:25], queries, requested_by, call=call)
 
     # -- Review ----------------------------------------------------------------
     def brief_reviewer(self, requested_by: str) -> State:

@@ -78,9 +78,18 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                 "to the paper.",
                 {"type": "leave_out", "analysis_id": t["analysis_id"],
                  "instruction": f"Same results as {t['duplicate_of']['analysis_id']}"} if a.get("basis") == "post hoc" else None)
+    validated: set[str] = set()
     for aid, a in sorted(cur.items(), key=lambda kv: kv[1]["seq"]):
         if a.get("standard"):
             continue
+        # A text that still points to a figure the authors left out.
+        d = a.get("description") or {}
+        gone = [f for f in s.figures if f["analysis_id"] == aid and f.get("omitted") and f["name"] in (d.get("figure_order") or [])]
+        if gone:
+            add(f"figtext:{aid}", aid, f"The text for “{a['spec'].get('title') or aid}” refers to a figure that was left out",
+                "Its information should be in the words instead.",
+                {"type": "rewrite_text", "analysis_id": aid,
+                 "instruction": "The figure was left out of the paper: give its key information in the text and do not refer to it."})
         out_ = blobs.get_json(a["outputs_sha256"])
         title = a["spec"].get("title") or aid
         est = out_.get("estimates") or []
@@ -96,7 +105,9 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
             add(f"text:{aid}", aid, f"The text for “{title}” has numbers not in the results",
                 "Every number in the text must come from the computed results.",
                 {"type": "rewrite_text", "analysis_id": aid, "instruction": "Use only numbers that are in the results."})
-        if a.get("kind") != "multivariable":
+        # Model checks and sensitivity analyses are suggested for the paper's own models, not for a sensitivity
+        # analysis of them (which would only repeat the suggestion).
+        if a.get("kind") != "multivariable" or a["spec"].get("based_on") or (a.get("place") or {}).get("where") == "supplement":
             continue
         d = out_.get("diagnostics") if isinstance(out_.get("diagnostics"), dict) else None
         if d is None:
@@ -114,7 +125,7 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
         asm, fit, infl = d.get("assumptions") or {}, d.get("fit") or {}, d.get("influence") or {}
         epv = asm.get("events_per_parameter")
         if isinstance(epv, (int, float)) and epv < EPV_MIN:
-            add(f"epv:{aid}", aid, f"Few outcome events per predictor parameter ({epv})",
+            add(f"epv:{aid}", aid, f"Few outcome events per predictor parameter ({epv}): {title}",
                 f"Below about {EPV_MIN}, logistic regression estimates are biased away from the null and unstable. "
                 "Firth's penalised likelihood reduces this small-sample bias.",
                 {"type": "variant", "analysis_id": aid,
@@ -138,7 +149,7 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                  "instruction": f"As a sensitivity analysis, model {', '.join(nonlin)} with restricted cubic splines "
                                 "(3 knots, patsy cr()), and compare the estimates and fit."})
         if (infl.get("cooks_above_1") or 0) > 0 or (infl.get("cooks_above_4_over_n") or 0) > 0.05 * (d.get("n") or 1e9):
-            add(f"infl:{aid}", aid, "Influential observations",
+            add(f"infl:{aid}", aid, f"Influential observations: {title}",
                 f"{infl.get('cooks_above_4_over_n')} observations have Cook's distance above 4/n. Results should not depend "
                 "on a few records.",
                 {"type": "variant", "analysis_id": aid,
@@ -146,15 +157,17 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                                 "report how many were excluded, and compare the estimates."})
         c = fit.get("c_statistic")
         text = " ".join(str(a["spec"].get(k) or "") for k in ("title", "objective", "method"))
-        if isinstance(c, (int, float)) and PREDICTION.search(text):
-            add(f"boot:{aid}", aid, "Apparent performance only",
+        formula = str((out_.get("model") or {}).get("formula_or_description") or aid)
+        if isinstance(c, (int, float)) and PREDICTION.search(text) and formula not in validated:
+            validated.add(formula)              # one model, one suggestion, however many analyses report it
+            add(f"boot:{aid}", aid, f"Apparent performance only: {title}",
                 "Discrimination and calibration measured on the data the model was fitted to are optimistic. "
                 "Bootstrap internal validation estimates the optimism.",
                 {"type": "variant", "analysis_id": aid,
                  "instruction": "Estimate optimism-corrected C-statistic and calibration slope by bootstrap internal "
                                 "validation (200 resamples, using seed), and report apparent, optimism and corrected values."})
         elif isinstance(c, (int, float)) and c < C_LOW:
-            add(f"c:{aid}", aid, f"Limited discrimination (C-statistic {c:.2f})",
+            add(f"c:{aid}", aid, f"Limited discrimination (C-statistic {c:.2f}): {title}",
                 "The model separates those with and without the outcome only modestly; say so when reporting it.")
         used = [x.get("column") for x in [a["spec"].get("outcome") or {}] + list(a["spec"].get("exposures") or [])
                 + list(a["spec"].get("covariates") or []) if isinstance(x, dict) and x.get("column")]

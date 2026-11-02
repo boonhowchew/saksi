@@ -109,7 +109,8 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("curator_update" if "Bring your earlier report on this dataset up to date" in system
+        purpose = ("lit_q" if "PubMed search queries" in system else "lit_s" if "Screen these PubMed records" in system
+                   else "curator_update" if "Bring your earlier report on this dataset up to date" in system
                    else "outline" if "what this paper is going to report" in system
                    else "suggest" if "propose an answer to each" in system
                    else "prep" if "preparing a raw research dataset" in system
@@ -128,6 +129,10 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "lit_q" and not self.script.get("lit_q"):
+            reply = {"queries": ["diabetes, gestational[mh] AND body mass index[tiab]", "gestational diabetes risk factors Malaysia"]}
+        elif purpose == "lit_s" and not self.script.get("lit_s"):
+            reply = LIT_SCREEN_REPLY
         elif purpose == "curator_update" and not self.script.get("curator_update"):
             reply = CURATOR_UPDATE_REPLY
         elif purpose == "outline" and not self.script.get("outline"):
@@ -147,6 +152,38 @@ class ScriptedModel:
         return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
 
+
+class FakePubMed:
+    """PubMed without the network: two records, searched and fetched."""
+    RECORDS = {
+        "31000001": {"pmid": "31000001", "title": "Maternal obesity and gestational diabetes: a systematic review and meta-analysis",
+                     "authors": [{"last": "Lim", "initials": "SY"}, {"last": "Tan", "initials": "K"}, {"last": "Ahmad", "initials": "N"}],
+                     "journal": "BMJ Open", "journal_full": "BMJ open", "year": "2021", "volume": "11", "issue": "4",
+                     "pages": "e041234", "doi": "10.1136/bmjopen-2020-041234",
+                     "abstract": "Obesity was associated with a threefold higher risk of gestational diabetes (pooled OR 3.01, 95% CI 2.34 to 3.87)."},
+        "32000002": {"pmid": "32000002", "title": "Risk factors for gestational diabetes in Malaysian women",
+                     "authors": [{"last": "Chew", "initials": "BH"}, {"last": "Ismail", "initials": "M"}],
+                     "journal": "Diabetes Res Clin Pract", "journal_full": "Diabetes research and clinical practice",
+                     "year": "2022", "volume": "185", "issue": "", "pages": "109789", "doi": "10.1016/j.diabres.2022.109789",
+                     "abstract": "A previous history of gestational diabetes was the strongest predictor (adjusted OR 3.4)."},
+    }
+
+    def search(self, term, retmax=8):
+        return list(self.RECORDS)[:retmax]
+
+    def fetch(self, pmids):
+        return [self.RECORDS[p] for p in pmids if p in self.RECORDS]
+
+    def by_doi(self, doi):
+        return [r for r in self.RECORDS.values() if r["doi"] == doi]
+
+
+LIT_SCREEN_REPLY = {"references": [
+    {"pmid": "31000001", "role": "background", "finding": "Obesity roughly trebles the odds of GDM.",
+     "quote": "Obesity was associated with a threefold higher risk of gestational diabetes"},
+    {"pmid": "32000002", "role": "comparison", "finding": "Previous GDM was the strongest predictor in Malaysian women.",
+     "quote": "previous history of gestational diabetes was the strongest predictor"},
+    {"pmid": "99999999", "role": "comparison", "finding": "Invented.", "quote": "not real"}]}
 
 CURATOR_UPDATE_REPLY = {"summary": "The protocol is now available and the identifiers have been removed.", "flags": [
     {"severity": "high", "column": "", "issue": "No study protocol was uploaded", "suggested_check": "Upload it",
@@ -307,8 +344,8 @@ def test_curate_plan_run_end_to_end(setup):
     assert roc["caption_check"]["ok"] is True
     assert p.blobs.get_text(roc["svg_sha256"]).lstrip().startswith("<?xml")
     assert all(f["caption_check"]["untraced"] == 0 for f in s.figures)
-    # AUC_FIXED claims 0 excluded while 12 of 400 records were dropped: Saksi flags the flow diagram.
-    assert "do not add up" in figs[("auc", "participant_flow")]["warning"]
+    # One participant flow diagram per paper: the second planned analysis states its numbers in the text.
+    assert ("auc", "participant_flow") not in figs and sum(1 for k in figs if k[1] == "participant_flow") == 1
     assert figs[("primary", "participant_flow")]["warning"] is None
     assert len(prim["execution"]["attempts"]) == 1
     assert prim["execution"]["provenance"]["data_sha256"] == ds_sha
@@ -1206,3 +1243,53 @@ def test_authors_name_the_codes_and_unknown_is_missing():
     t = T._table1("t1", {}, t1, labels)
     assert [r["cells"][0] for r in t["rows"]] == ["History of PCOS, n (%)"]          # yes/no again: one row
     assert t["rows"][0]["cells"][1] == "2 (10.5)" and any("not known 1" in n for n in t["footnotes"])
+
+
+def test_literature_is_found_in_pubmed_checked_and_formatted_by_code(setup):
+    from saksi import literature as lit
+    p, agents, model, _ = setup
+    _to_drafting(p, agents, model)
+    agents.pubmed = FakePubMed()
+    s = agents.find_literature("bhc")
+    assert set(s.references) == {"31000001", "32000002"}                      # the invented PMID is not there
+    assert s.references["31000001"]["finding"] and s.references["31000001"]["role"] == "background"
+    lib = p.library(s)
+    text = "Obesity is common [R:31000001][R:32000002]. Previous GDM matters [R:32000002]."
+    out, order = lit.cite(text, lib, "vancouver")
+    assert out == "Obesity is common [1,2]. Previous GDM matters [2]." and order == ["31000001", "32000002"]
+    assert lit.reference_list(order, lib, "vancouver")[0] == (
+        "1. Lim SY, Tan K, Ahmad N. Maternal obesity and gestational diabetes: a systematic review and meta-analysis. "
+        "BMJ Open. 2021;11(4):e041234. doi:10.1136/bmjopen-2020-041234")
+    out, order = lit.cite(text, lib, "apa")
+    assert "(Lim et al., 2021; Chew & Ismail, 2022)" in out and order == ["32000002", "31000001"]
+    assert lit.format_reference(lib["32000002"], "apa").startswith("Chew, B. H., & Ismail, M. (2022).")
+    # Numbers in citations are not results; an unknown PMID fails the draft check.
+    r = p.check_text("## Results\nOf 400 records, 12 lacked booking BMI [A:s_data_quality] [R:31000001].")
+    assert not r["untraced"] and r["references_not_in_library"] == []
+    assert p.check_text("Known [R:12345678].")["references_not_in_library"] == ["12345678"]
+    s = p.remove_reference("coauthor", "31000001", "Not relevant")
+    assert "31000001" not in p.library(s)
+    s = p.set_reference_style("bhc", "ama")
+    assert s.reference_style == "ama" and lit.cite("A [R:32000002].", p.library(s), "ama")[0] == "A^1^."
+    s = agents.find_literature("bhc", doi="10.1136/bmjopen-2020-041234")
+    assert s.references["31000001"]["label"] == "added by the authors" and "removed" not in s.references["31000001"]
+
+
+def test_pubmed_xml_is_read_into_records():
+    from saksi.literature import PubMed
+    xml = """<?xml version="1.0"?><PubmedArticleSet><PubmedArticle><MedlineCitation><PMID Version="1">35001234</PMID>
+    <Article><Journal><JournalIssue><Volume>12</Volume><Issue>3</Issue><PubDate><Year>2022</Year></PubDate></JournalIssue>
+    <Title>BMJ open</Title><ISOAbbreviation>BMJ Open</ISOAbbreviation></Journal>
+    <ArticleTitle>Gestational diabetes in <i>six</i> clinics.</ArticleTitle><Pagination><MedlinePgn>e052554</MedlinePgn></Pagination>
+    <Abstract><AbstractText Label="OBJECTIVE">To find risk factors.</AbstractText><AbstractText Label="RESULTS">Previous GDM mattered.</AbstractText></Abstract>
+    <AuthorList><Author><LastName>Chew</LastName><Initials>BH</Initials></Author><Author><CollectiveName>GDM-RIDMAN group</CollectiveName></Author></AuthorList>
+    </Article></MedlineCitation><PubmedData><ArticleIdList><ArticleId IdType="doi">10.1136/bmjopen-2021-052554</ArticleId></ArticleIdList></PubmedData>
+    </PubmedArticle></PubmedArticleSet>"""
+    calls = []
+    pm = PubMed(get=lambda url, params: (calls.append((url, params)), xml if "efetch" in url else
+                                         "<eSearchResult><IdList><Id>35001234</Id></IdList></eSearchResult>")[1])
+    assert pm.search("gdm") == ["35001234"]
+    r = pm.fetch(["35001234"])[0]
+    assert r["title"] == "Gestational diabetes in six clinics" and r["year"] == "2022" and r["issue"] == "3"
+    assert r["authors"] == [{"last": "Chew", "initials": "BH"}, {"collective": "GDM-RIDMAN group"}]
+    assert r["doi"] == "10.1136/bmjopen-2021-052554" and "Previous GDM mattered." in r["abstract"]

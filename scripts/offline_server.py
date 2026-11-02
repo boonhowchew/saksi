@@ -23,7 +23,7 @@ from saksi.api import create_app
 from saksi.llm import ModelClient
 from saksi.sandbox import LocalExecutor
 from sklearn.metrics import roc_auc_score
-from tests.test_agents import AUC_FIXED, CURATOR_REPLY, PLAN_REPLY, ScriptedModel, fence
+from tests.test_agents import AUC_FIXED, CURATOR_REPLY, PLAN_REPLY, FakePubMed, ScriptedModel, fence
 from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
 
 df = demo_data.make().dropna(subset=["gdm", "booking_bmi", "age", "parity", "previous_gdm"])
@@ -79,14 +79,14 @@ Of 400 women planned (about 40 GDM events), 388 were analysed, with 18 GDM event
 
 In an exploratory variant of this model that the authors asked for after seeing the results, booking BMI had an adjusted odds ratio of {f('booking_bmi')} (the same as in Table 2) [A:x_q1].
 
-In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} (Table 3; Figures 4 and 5) [A:auc.r1].
+In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} (Table 3; Figure 4) [A:auc.r1].
 
 ## Discussion
 ### Principal findings
 The intervals are wide and include no association, so the data are compatible with both no association and a modest one. 
 
 ### Comparison with other studies
-[Authors: comparison with previous studies]
+Maternal obesity is known to roughly treble the odds of GDM [R:31000001], and previous GDM was the strongest predictor in Malaysian women [R:32000002]. [Authors: comparison with previous studies]
 
 ### Strengths and limitations
 The analysis was pre-specified and checked by code; the sample fell short of the plan, so the estimates are imprecise.
@@ -115,6 +115,6 @@ model = ScriptedModel({"curate": [CURATOR_REPLY] * 6,      # the Curator updates
                        # the planned analyses; then, from the walk-through's AI boxes, a variant and a redo
                        "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED), fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT] * 4, "review": [REVIEW1, REVIEW2]})
 root = tempfile.mkdtemp()
-app = create_app(root, agents_factory=lambda p: Agents(p, ModelClient(p.blobs, transport=model, mode="live"), LocalExecutor()))
+app = create_app(root, agents_factory=lambda p: Agents(p, ModelClient(p.blobs, transport=model, mode="live"), LocalExecutor(), FakePubMed()))
 print(f"Offline Saksi on http://127.0.0.1:8765 (data in {root})")
 uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")

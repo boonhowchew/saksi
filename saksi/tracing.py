@@ -19,6 +19,7 @@ from typing import Any, Iterable
 
 EXPLORATORY_WORDS = re.compile(r"exploratory|post[- ]hoc|hypothesis[- ]generating|not pre-?specified|"
                                r"sensitivity analys|secondary analys", re.I)
+REFS = re.compile(r"\[R:[0-9]{4,9}\]")                     # literature citations carry no result
 CITE = re.compile(r"\[A:([A-Za-z0-9_.\-]+)\]")
 NUM = re.compile(r"(?<![\w.])(<\s*)?(-?\d+(?:,\d{3})*(?:\.\d+)?)(\s*%)?")
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])|\n+")
@@ -99,7 +100,7 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
             if "protocol" in low and "primary" in low:
                 disclosed.update(refs)
             pool = [v for r in refs if r in outputs for v in numeric_leaves(outputs[r])] + counts
-            plain = CITE.sub("", sent)
+            plain = REFS.sub("", CITE.sub("", sent))
             skip = _conventional_spans(plain)
             for m in NUM.finditer(plain):
                 if any(a <= m.start() < b for a, b in skip):
@@ -121,7 +122,7 @@ def trace(text: str, analyses: dict[str, dict[str, Any]], outputs: dict[str, Any
     # Fail safe: a check that found nothing to check must not report a pass when
     # the body text plainly contains numbers.
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-    body = CITE.sub("", body)
+    body = REFS.sub("", CITE.sub("", body))
     for pat in CONVENTIONAL:
         body = pat.sub("", body)
     nothing_checked = not rows and bool(re.search(r"\d", body))

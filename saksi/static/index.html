@@ -153,6 +153,9 @@ details.replaced > summary { color: var(--muted); font-size: .85rem; cursor: poi
 details.replaced .item { opacity: .8; }
 .diag h4 { margin: 0 0 .4rem; }
 figure.fig.omitted img { opacity: .45; }
+.refcite { color: var(--accent, #23366f); }
+ol.reflist { padding-left: 1.6rem; font-size: .92rem; } ol.reflist.plain { list-style: none; padding-left: 0; }
+ol.reflist.plain li { padding-left: 1.6rem; text-indent: -1.6rem; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -1320,9 +1323,15 @@ async function runProposal(action, message) {
 // A figure the authors leave out: recorded under their name, unnumbered, out of the draft; its information goes into
 // the text, which the Writing Agent rewrites (and the draft, if there is one, is rewritten to match).
 async function omitFigure(aid, figName, reason) {
-  const f = S.state.figures.find((x) => x.analysis_id === aid && x.name === figName);
-  await command("omit_figure", { analysis_id: aid, name: figName, reason: reason || "Its information is given in the text instead." });
-  const r = await agent("describe", { analysis_id: aid, instruction: `The figure "${f?.caption || figName}" has been left out of the paper. Give its key information in the text instead, and do not refer to it.` });
+  const before = new Set(S.state.figures.filter((x) => x.omitted).map((x) => x.analysis_id + "|" + x.name));
+  const r0 = await command("omit_figure", { analysis_id: aid, name: figName, reason: reason || "Its information is given in the text instead." });
+  // Every text that pointed to a figure now left out (a flow diagram takes the others with it) is rewritten.
+  const gone = r0.state.figures.filter((x) => x.omitted && !before.has(x.analysis_id + "|" + x.name));
+  let r = r0;
+  for (const g of gone) {
+    if (!r.state.analyses[g.analysis_id]?.description) continue;
+    r = await agent("describe", { analysis_id: g.analysis_id, instruction: `The figure "${g.caption || g.name}" has been left out of the paper. Give its key information in the text instead, and do not refer to it.` });
+  }
   return refreshDraftAfterResultsChange(r);
 }
 async function refreshDraftAfterResultsChange(r) {
@@ -1572,9 +1581,42 @@ function inlineMd(t, marks, editing) {
     const q = esc(m.quote);
     if (q.length >= 12 && h.includes(q)) h = h.replace(q, `<mark data-point="${esc(m.id)}" title="${esc(m.id)}">${q}</mark>`);
   }
-  return h.replace(/\[A:([A-Za-z0-9_.\-]+)\]/g, (_, r) => `<span class="cite" contenteditable="false" data-ref="${r}" title="Computed result: ${r}">${r}</span>`)
+  return h.replace(/(?:\s*\[R:\d{4,9}\])+/g, (m) => citeHtml([...m.matchAll(/\[R:(\d+)\]/g)].map((x) => x[1])))
+    .replace(/\[A:([A-Za-z0-9_.\-]+)\]/g, (_, r) => `<span class="cite" contenteditable="false" data-ref="${r}" title="Computed result: ${r}">${r}</span>`)
     .replace(/\[Authors?:([^\]]+)\]/g, '<span class="placeholder">[Authors:$1]</span>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+// Literature citations, labelled as the chosen style prints them (numbers or author-year), from the server's labels.
+function citeHtml(pmids) {
+  const R = S.refs || {}, lab = R.labels || {}, numbered = ["vancouver", "ama"].includes(R.style || "vancouver");
+  let label;
+  if (numbered) {
+    const ns = [...new Set(pmids.map((p) => +lab[p]).filter(Boolean))].sort((a, b) => a - b), parts = [];
+    for (let i = 0; i < ns.length;) { let j = i; while (j + 1 < ns.length && ns[j + 1] === ns[j] + 1) j++; parts.push(j - i >= 2 ? `${ns[i]}-${ns[j]}` : ns.slice(i, j + 1).join(",")); i = j + 1; }
+    label = parts.length ? (R.style === "ama" ? `<sup>${parts.join(",")}</sup>` : ` [${parts.join(",")}]`) : " [ref]";
+  } else label = ` (${pmids.map((p) => lab[p] || "ref").join("; ")})`;
+  return `<span class="refcite" contenteditable="false" data-refs="${pmids.join(",")}" title="PubMed ${pmids.join(", ")}">${label}</span>`;
+}
+async function refsNow(v) {
+  const key = `${S.pid}|${S.state.head_seq}|${v || ""}`;
+  if (S.refs?.key !== key) {
+    try { S.refs = { key, ...(await api(`/projects/${S.pid}/references${v ? `?version=${v}` : ""}`)) }; } catch { S.refs = { key, labels: {}, list: [], items: [], styles: {}, style: "vancouver" }; }
+  }
+  return S.refs;
+}
+// The references: chosen style, the list as the journal prints it, and the literature Saksi found (with what each is
+// cited for, checked against its abstract). Authors add a PMID or DOI, or remove a record.
+function referencesHtml(R, canEdit) {
+  const unused = R.items.filter((x) => !x.removed && !x.cited);
+  return `<section class="refs"><h2>References</h2>
+    <p class="small">Style: ${canEdit ? `<select data-change="refstyle" aria-label="Reference style">${Object.entries(R.styles || {}).map(([k, v]) => `<option value="${esc(k)}" ${k === R.style ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>` : esc((R.styles || {})[R.style] || R.style)}
+      <span class="muted">Formatted by code from PubMed records; the Writing Agent cites only records Saksi fetched.</span></p>
+    ${R.list.length ? `<ol class="reflist ${["vancouver", "ama"].includes(R.style) ? "" : "plain"}">${R.list.map((x) => `<li>${esc(x.replace(/^\d+\.\s*/, "")).replace(/\*([^*]+)\*/g, "<em>$1</em>")}</li>`).join("")}</ol>` : `<p class="small muted">No references cited in this version yet.</p>`}
+    <details ${R.items.length ? "" : "open"}><summary>Literature found for this paper (${R.items.filter((x) => !x.removed).length})${unused.length ? `, ${unused.length} not yet cited` : ""}</summary>
+      ${canEdit ? `<p class="small"><button class="btn quiet" data-agent="find_literature" data-label="The Writing Agent is searching PubMed">${R.items.length ? "Search PubMed again" : "Find the literature in PubMed"}</button></p>
+        <form class="chatform" data-form="addref"><input type="text" name="id" required placeholder="Add a reference by PMID or DOI" aria-label="PMID or DOI"><button class="btn quiet" data-label="Fetching from PubMed">Add</button></form>` : ""}
+      <ul class="small">${R.items.map((x) => `<li${x.removed ? ' class="muted"' : ""}>${esc(x.reference)} <span class="tag">${esc(x.role || "")}</span>${x.cited ? ' <span class="tag good">cited</span>' : ""}
+        ${x.finding ? `<br><span class="muted">Cited for: ${esc(x.finding)}</span>` : ""}${x.removed ? `<br>Removed by ${esc(name(x.removed.by))}: “${esc(x.removed.reason)}”` : canEdit ? ` <button class="linkish small" data-action="removeref" data-pmid="${esc(x.pmid)}" data-label="Removing">Remove</button>` : ""}</li>`).join("")}</ul></details></section>`;
 }
 function refsIn(t) {
   const out = { table: [], figure: [] };
@@ -1658,6 +1700,7 @@ function serialiseBlock(el) {
     if (n.nodeType === 3) return n.nodeValue.replace(/ /g, " ");
     if (n.nodeType !== 1) return "";
     if (n.classList.contains("cite")) return `[A:${n.dataset.ref}]`;
+    if (n.classList.contains("refcite")) return n.dataset.refs.split(",").map((p) => `[R:${p}]`).join("");
     if (n.tagName === "BR") return "\n\n";
     const inner = [...n.childNodes].map(walk).join("");
     if (n.tagName === "STRONG" || n.tagName === "B") return inner.trim() ? `**${inner}**` : "";
@@ -1785,7 +1828,8 @@ async function draft() {
       checks.references_unknown?.length ? `Referred to but not built: ${checks.references_unknown.join(", ")}` : ""].filter(Boolean).map(esc).join(". ")}.</p>` : ""}
     ${canEdit && !editing ? `<div class="bigaction"><p><strong>Edit on the page.</strong> Click any paragraph to change its words. In the tables you can reword the title, headings, row labels and footnotes; the numbers are locked, because they come from the results. Saving makes version ${v + 1}, recorded under your name and checked again.</p>
       <button class="btn" data-action="canvas">Edit on the page</button></div>` : ""}
-    <article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
+    ${(await refsNow(v)) ? "" : ""}<article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
+    ${referencesHtml(await refsNow(v), isAuthor() && s.stage !== "FINAL")}
     ${await supplementHtml()}
     ${editing ? `<form class="savebar" data-form="canvassave">
       <label><span class="small">What you changed and why (kept in the record)</span><input type="text" name="summary" required placeholder="For example: added the small-events limitation; relabelled the GDM groups"></label>
@@ -1954,7 +1998,14 @@ document.addEventListener("click", async (ev) => {
   if (t.dataset.tab) { S.tab = t.dataset.tab; S.notice = null; await render(); $("#panel")?.focus?.(); return; }
   if (t.dataset.agent) {
     const label = t.dataset.label;
-    await act(t, () => agent(t.dataset.agent, t.dataset.args ? JSON.parse(t.dataset.args) : {}), "Done. The result is below and in the record.",
+    await act(t, async () => {
+      // Before the first draft, Saksi finds the literature the Introduction and Discussion should cite.
+      if (t.dataset.agent === "write_draft" && !Object.keys(S.state.references || {}).length && !(S.litTried ||= {})[S.pid]) {
+        S.litTried[S.pid] = true;
+        try { await agent("find_literature"); } catch { /* drafted without literature; the Draft page offers the search */ }
+      }
+      return agent(t.dataset.agent, t.dataset.args ? JSON.parse(t.dataset.args) : {});
+    }, "Done. The result is below and in the record.",
       `${label}. This can take a minute or two; the page updates when it is done.`);
     if (t.dataset.agent === "write_draft" && S.state.draft_version) document.querySelector("[data-agent=checklist]")?.click();
     return;
@@ -1972,6 +2023,9 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "updatecurator": return updateCurator(t);
+    case "removeref": {
+      return act(t, () => command("remove_reference", { pmid: t.dataset.pmid, reason: "Not to be cited in this paper (the authors' decision)" }), "Removed. It stays in the record; the next draft will not cite it.");
+    }
     case "place": return act(t, async () => refreshDraftAfterResultsChange(await command("place_analysis", { analysis_id: t.dataset.id, place: t.dataset.place,
         reason: t.dataset.place === "supplement" ? "Moved to the supplementary material by the authors" : "Moved back to the main Results by the authors" })),
       t.dataset.place === "supplement" ? "Moved to the supplementary material. Its tables and figures are numbered S1, S2, ..." : "Back in the main Results.");
@@ -2103,6 +2157,7 @@ document.addEventListener("paste", (ev) => {
 document.addEventListener("change", async (ev) => {
   const t = ev.target;
   if (t.dataset.change === "version") { S.version = +t.value; return render(); }
+  if (t.dataset.change === "refstyle") return act(null, () => command("set_reference_style", { style: t.value }), "The references are now in this style, throughout.");
   if (t.dataset.inc !== undefined) {
     const box = document.getElementById("why-" + t.dataset.inc);
     if (box) { box.style.display = t.checked ? "none" : ""; if (!t.checked) box.querySelector("input")?.focus(); }
@@ -2255,6 +2310,10 @@ document.addEventListener("submit", async (ev) => {
         if (a.type && a.type !== "none") { const r2 = await runProposal(a, msg); entry.text += " " + doneText(a); return r2 || r; }
         return r;
       }, null, "Saksi AI is working on it. If it runs an analysis, this can take a minute or two.");
+    }
+    case "addref": {
+      const id = val("id").trim();
+      return act(btn, () => agent("find_literature", /^\d{4,9}$/.test(id) ? { pmids: [id] } : { doi: id }), "Added from PubMed. The next draft can cite it.");
     }
     case "withdrawanalysis": return act(btn, () => command("withdraw_analysis", { analysis_id: f.dataset.id, reason: val("reason") }),
       "Left out of the paper. It stays in the record, with your reason, and the reviewer is told.");

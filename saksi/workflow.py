@@ -115,6 +115,8 @@ class State:
     figures: list[dict[str, Any]] = field(default_factory=list)
     results_seq: int = 0                            # last event that changed the Results (runs, texts, figures)
     value_labels: dict[str, dict[str, Any]] = field(default_factory=dict)   # column -> {codes, by, reason}
+    references: dict[str, dict[str, Any]] = field(default_factory=dict)     # PMID -> record ref, role, finding
+    reference_style: str = "vancouver"
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -161,7 +163,8 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "references": self.references,
+            "reference_style": self.reference_style, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -261,6 +264,14 @@ def apply(s: State, ev: Event) -> State:
         s.analyses[p["analysis_id"]]["place"] = {"where": p["place"], "by": ev.actor_id, "reason": p["reason"],
                                                  "requested_by": p.get("requested_by"), "seq": ev.seq}
         _number_figures(s)
+    elif t == "references.found":
+        for it in p["items"]:
+            s.references[it["pmid"]] = it | {"by": ev.actor_id, "requested_by": p.get("requested_by"), "seq": ev.seq}
+    elif t == "reference.removed":
+        if p["pmid"] in s.references:
+            s.references[p["pmid"]]["removed"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
+    elif t == "settings.reference_style":
+        s.reference_style = p["style"]
     elif t == "labels.set":
         s.value_labels[p["column"]] = {"codes": p["labels"], "by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
     elif t == "analyses.accepted":
@@ -751,9 +762,12 @@ class Project:
         live = [f for f in s.figures if f["analysis_id"] != replacing
                 and not s.analyses.get(f["analysis_id"], {}).get("superseded_by")]
         seen_svg = {f["svg_sha256"] for f in live}
-        seen_flow = {tuple(f["flow_counts"]) for f in live if f.get("flow_counts")}
-        made = [f for f in made if f["svg_sha256"] not in seen_svg
-                and not (f.get("flow_counts") and tuple(f["flow_counts"]) in seen_flow)]
+        # One participant flow diagram per paper (STROBE asks for one), for a planned analysis; none at all once the
+        # authors have chosen to give the flow in the text. Other analyses state their numbers in the text.
+        no_flow = (any(f.get("flow_counts") and not f.get("omitted") for f in live)
+                   or any(f.get("flow_counts") and f.get("omitted") for f in s.figures)
+                   or basis == "post hoc" or bool(spec.get("based_on")))
+        made = [f for f in made if f["svg_sha256"] not in seen_svg and not (f.get("flow_counts") and no_flow)]
         # The label is Saksi's fact, so Saksi states it on captions written by analysis code.
         prefix = ""      # the label belongs in the text, not in captions (author's decision, 31 Oct)
         for f in from_code:
@@ -784,6 +798,14 @@ class Project:
         if not (reason or "").strip():
             raise WorkflowError("say why the figure is left out")
         self._emit(by, "figure.omitted", {"analysis_id": analysis_id, "name": name, "reason": reason.strip()})
+        # Leaving out a participant flow diagram is a decision about all of them: the others follow.
+        target = next(f for f in s.figures if f["analysis_id"] == analysis_id and f["name"] == name)
+        if target.get("flow_counts"):
+            who = (s.actors.get(by) or {}).get("name") or by
+            for f in self.state().figures:
+                if f.get("flow_counts") and not f.get("omitted") and (f["analysis_id"], f["name"]) != (analysis_id, name):
+                    self._emit(by, "figure.omitted", {"analysis_id": f["analysis_id"], "name": f["name"],
+                                                      "reason": f"Follows {who}'s decision: participant flow is given in the text."})
         return self.state()
 
     def restore_figure(self, by: str, analysis_id: str, name: str) -> State:
@@ -821,6 +843,50 @@ class Project:
         self._emit(by, "analysis.placed", {"analysis_id": analysis_id, "place": place, "reason": reason.strip(),
                                            "requested_by": requested_by})
         return self.state()
+
+    def record_references(self, by: str, items: list[dict[str, Any]], queries: list[str], requested_by: str,
+                          call: dict[str, Any] | None = None) -> State:
+        """PubMed records Saksi fetched for this paper (the record itself is stored as a blob), with what each is
+        cited for and, where given, the abstract quotation that backs it (checked by code before this)."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
+        clean = [{k: it.get(k) for k in ("pmid", "record_sha256", "role", "finding", "quote", "label")}
+                 for it in items if it.get("pmid") and self.blobs.has(it.get("record_sha256", ""))]
+        if not clean:
+            raise WorkflowError("no PubMed records to add")
+        call_seq = self._log_call(by, call)
+        self._emit(by, "references.found", {"items": clean, "queries": queries, "requested_by": requested_by,
+                                            "llm_call_seq": call_seq})
+        return self.state()
+
+    def remove_reference(self, by: str, pmid: str, reason: str) -> State:
+        s = self.state()
+        self._require_role(s, by, "author")
+        if pmid not in s.references or s.references[pmid].get("removed"):
+            raise WorkflowError("no such reference")
+        if not (reason or "").strip():
+            raise WorkflowError("give a reason")
+        self._emit(by, "reference.removed", {"pmid": pmid, "reason": reason.strip()})
+        return self.state()
+
+    def set_reference_style(self, by: str, style: str) -> State:
+        from .literature import STYLES
+        s = self.state()
+        self._require_role(s, by, "author")
+        if style not in STYLES:
+            raise WorkflowError(f"choose one of: {', '.join(STYLES)}")
+        if style == s.reference_style:
+            raise WorkflowError("that style is already in use")
+        self._emit(by, "settings.reference_style", {"style": style})
+        return self.state()
+
+    def library(self, s: State | None = None) -> dict[str, dict[str, Any]]:
+        """The references the paper may cite: PubMed records Saksi fetched, minus those the authors removed."""
+        s = s or self.state()
+        return {k: self.blobs.get_json(v["record_sha256"]) for k, v in s.references.items() if not v.get("removed")}
 
     def set_value_labels(self, by: str, column: str, labels: dict[str, Any], reason: str = "") -> State:
         """Names for a column's codes (for example clinic 1 to 6), used in every table. Authors' facts, recorded."""
@@ -982,11 +1048,16 @@ class Project:
                                    [f"Figure S{n}" for n in sorted(sref["figure"] - s_figs)]
         r["supplement_not_referred"] = [f"Table S{n}" for n in sorted(s_tables - sref["table"])] + \
                                        [f"Figure S{n}" for n in sorted(s_figs - sref["figure"])]
+        # Literature: only records Saksi fetched from PubMed for this paper may be cited.
+        from .literature import REF_TOKEN
+        lib = {k for k, v in s.references.items() if not v.get("removed")}
+        r["references_not_in_library"] = sorted(set(REF_TOKEN.findall(text)) - lib)
         # Required subheadings (Methods and Discussion) and the guideline's structure.
         r["missing_subheadings"] = missing_subheadings(text) if re.search(r"(?m)^##\s+Results", text) else []
         r["ok"] = r["ok"] and not (r["tables_not_referred"] or r["figures_not_referred"] or r["references_unknown"]
                                    or r["references_out_of_order"] or r["referred_before_results"]
-                                   or r["supplement_not_referred"] or r["missing_subheadings"])
+                                   or r["supplement_not_referred"] or r["missing_subheadings"]
+                                   or r["references_not_in_library"])
         return r
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
@@ -1365,7 +1436,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",

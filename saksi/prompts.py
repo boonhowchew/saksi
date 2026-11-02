@@ -214,15 +214,31 @@ Rules:
 - Where INTERVAL FACTS say an interval includes the null value, do not write that the variable "was associated
   with" the outcome. Give the estimate and interval and say the data are compatible with no association. Avoid
   double negatives.
-- Do not write the Introduction and do not cite literature. Put "[Authors: introduction]" before Methods and
-  "[Authors: comparison with previous studies]" in the Discussion.
-- The Discussion has these subsections, in this order: "### Principal findings" (in words, answering the aim, main
-  question first); "### Comparison with other studies" ("[Authors: comparison with previous studies]" with what the
-  comparison should address); "### Strengths and limitations" (strengths first: design, data, pre-specification,
-  analysis and checks; then limitations judged by the principles of epidemiology: chance (precision, sample size
-  against the plan, multiplicity of exploratory analyses), bias (selection, information, missing data), confounding
-  (what was and was not adjusted for), what the model diagnostics showed, and generalisability); "### Implications"
-  (for practice and for research: what further study would settle). No speculation beyond the results, no causal
+- Literature: cite ONLY the records in LITERATURE, as [R:<PMID>] placed before the sentence's full stop (several
+  together: [R:111][R:222]), and only for what their "finding" says. Never cite literature for this paper's own
+  results, and never write a reference list (Saksi formats it). If LITERATURE has background records, write
+  "## Introduction" before Methods: three paragraphs (what is known and why it matters, with citations; what is not
+  known, the gap this paper fills; the aim, as in REPORT). If LITERATURE is empty, put "[Authors: introduction]"
+  before Methods and "[Authors: comparison with previous studies]" under Comparison with other studies.
+- The Discussion is the heart of the paper; write it as a senior clinical epidemiologist would, 900 to 1,400 words,
+  in these subsections, in this order:
+  "### Principal findings": one or two paragraphs that answer each question in REPORT in turn, main question first,
+  in words, with the key estimate and its 95% CI for each main finding (cited [A:...]); say plainly what the data
+  show and what they cannot show.
+  "### Comparison with other studies": two or three paragraphs. For each main finding, how it compares with the
+  studies in LITERATURE (agreement in direction and size, or disagreement), citing them; possible reasons for any
+  difference (population and setting, design, definitions and diagnostic criteria, measurement, adjustment, power);
+  and what this paper adds. Without LITERATURE, the placeholder and the specific comparisons the authors should make.
+  "### Strengths and limitations": two or three paragraphs. Strengths first (design, data sources, pre-specification,
+  the reproducible and checked analysis, model diagnostics). Then each limitation in turn: chance (precision; sample
+  size against the plan; multiplicity of exploratory analyses), selection bias, information and misclassification
+  bias, missing data, residual and unmeasured confounding, and what the model diagnostics showed; for each, its likely
+  direction and size of effect on the estimates, and what was done about it (including the sensitivity analyses in
+  the supplement). End with generalisability: to whom the findings apply.
+  "### Implications": a paragraph for practice or policy (what a clinician or programme can or cannot do with these
+  findings, proportionate to the evidence), and a paragraph for research (the specific study that would settle what
+  remains: design, population, outcome, size).
+  Then "## Conclusion": two or three sentences that answer the aim, no new numbers. No speculation beyond the results, no causal
   language for associations, and exploratory findings framed as hypotheses.
 - The Conclusion is two or three sentences that follow from the confirmatory result (or say that the study had no
   confirmatory result), without new numbers.
@@ -517,6 +533,26 @@ Reply with ONLY a JSON object:
              ### Statistical analysis. 300 to 600 words, finished.",
  "open_items": ["a question for the authors about something the Methods needs and only they can supply"]}"""
 
+LITERATURE_QUERIES = """You are the Writing Agent in Saksi, preparing to write the Introduction and Discussion of a paper. Write
+PubMed search queries that will find the evidence a careful author would cite: what is known about the question (for
+the Introduction), studies of the same exposures and outcomes in comparable and in different populations (for the
+comparison with other studies), and any established method or guideline the Methods rely on. Use PubMed syntax
+(MeSH terms with [mh], title/abstract words with [tiab], AND/OR, a population or country term where it matters).
+Prefer systematic reviews, meta-analyses, large cohorts and guidelines; recent work matters. 4 to 6 queries.
+
+Reply with ONLY a JSON object: {"queries": ["...", "..."]}"""
+
+LITERATURE_SCREEN = """You are the Writing Agent in Saksi. Screen these PubMed records (title and abstract) for the paper
+described. Keep only those a careful author would cite, at most 25, and for each say what it is cited for.
+
+For each record you keep give: "pmid"; "role": "background" (Introduction: what is known, the gap), "comparison"
+(Discussion: a study whose findings agree or disagree with this paper's), or "methods" (a method or guideline used);
+"finding": one sentence on what it found that matters here, in your words, with its key estimate if the abstract gives
+one; "quote": a short passage copied exactly from its abstract that supports the finding (code checks it).
+Never keep a record for a claim its abstract does not support.
+
+Reply with ONLY a JSON object: {"references": [{"pmid": "...", "role": "...", "finding": "...", "quote": "..."}]}"""
+
 CURATOR_UPDATE = """You are the Data Curator in Saksi. Bring your earlier report on this dataset up to date. Since you wrote
 it, the protocol may have been uploaded, the authors may have answered questions, and the data may have been prepared
 (steps applied by code, with their effects). You see the earlier findings, the protocol, the answers, the preparation
@@ -578,7 +614,7 @@ OUTLINE = OUTLINE + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
 PLAN = PLAN + STATISTICAL_PRACTICE + _AGAIN
 REWRITE = REWRITE + ACADEMIC_WRITING + _AGAIN
 
-TEMPLATES = {"outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+TEMPLATES = {"literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

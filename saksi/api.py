@@ -49,6 +49,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "suggest_answers": ("suggest_answers", set(), "author"),
     "outline": ("outline", set(), "author"),
     "update_curator_report": ("update_curator_report", set(), "author"),
+    "find_literature": ("find_literature", {"pmids", "doi", "instructions"}, "author"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", {"instructions"}, "author"),
@@ -70,6 +71,8 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "edit_outline_methods": ("edit_outline_methods", {"text"}),
     "omit_figure": ("omit_figure", {"analysis_id", "name", "reason"}),
     "place_analysis": ("place_analysis", {"analysis_id", "place", "reason"}),
+    "remove_reference": ("remove_reference", {"pmid", "reason"}),
+    "set_reference_style": ("set_reference_style", {"style"}),
     "set_value_labels": ("set_value_labels", {"column", "labels", "reason"}),
     "restore_figure": ("restore_figure", {"analysis_id", "name"}),
     "prepare_dataset": ("prepare_dataset", {"step_ids", "note"}),
@@ -273,6 +276,27 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         if d and d.get("table_edits_sha256"):
             ts = apply_edits(ts, p.blobs.get_json(d["table_edits_sha256"]))
         return {"tables": ts}
+
+    @app.get("/projects/{pid}/references")
+    def get_references(pid: str, version: int | None = None, who: str = Depends(actor)):
+        """The paper's references: PubMed records Saksi fetched, the chosen style, and (for a draft version) the
+        citation labels and the formatted list, numbered or ordered as the style requires. Formatted by code."""
+        from .literature import STYLES, _short, cite, format_reference, reference_list
+        p = existing(pid)
+        s = p.state()
+        lib = p.library(s)
+        style = s.reference_style
+        text = ""
+        if version and version in s.drafts and p.blobs.has(s.drafts[version].get("text_sha256", "")):
+            text = p.blobs.get_text(s.drafts[version]["text_sha256"])
+        _, order = cite(text, lib, style)
+        labels = ({x: str(i + 1) for i, x in enumerate(order)} if style in ("vancouver", "ama")
+                  else {x: _short(lib[x], style) for x in order})
+        items = [{"pmid": k, **{f: v.get(f) for f in ("role", "finding", "quote", "label", "removed", "by", "requested_by")},
+                  "reference": format_reference(p.blobs.get_json(v["record_sha256"]), style),
+                  "cited": k in labels} for k, v in s.references.items()]
+        return {"style": style, "styles": STYLES, "labels": labels, "list": reference_list(order, lib, style),
+                "items": items}
 
     @app.get("/projects/{pid}/suggestions")
     def get_suggestions(pid: str, who: str = Depends(actor)):
