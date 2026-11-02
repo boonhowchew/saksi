@@ -644,8 +644,15 @@ class Agents:
                        f"{json.dumps(parent['spec'], indent=1)[:6000]}\nIts code:\n```python\n"
                        f"{self.project.blobs.get_text(parent['code_sha256'])[:12000]}\n```\n"
                        f"Change it as the author asks: {prompt}")
-        return self._run_one(requested_by, spec, plan_analysis_id=None, analysis_id=self._next_id(spec["id"]),
-                             request_id=request_id, context=context)
+        aid = self._next_id(spec["id"])
+        st = self._run_one(requested_by, spec, plan_analysis_id=None, analysis_id=aid, request_id=request_id, context=context)
+        # A sensitivity analysis checks a main result; journals report it in the supplementary material, so Saksi
+        # puts it there by default, for the author who asked, and says so. The authors can move it.
+        if based_on and SENSITIVITY.search(prompt or "") and aid in current(st):
+            st = self.project.place_analysis(ANALYST_ID, aid, "supplement",
+                                             "A sensitivity analysis of a main result: reported in the supplementary "
+                                             "material by default", requested_by=requested_by)
+        return st
 
     def _next_id(self, base: str) -> str:
         s = self.project.state()
@@ -737,7 +744,7 @@ class Agents:
 
     # -- The assistant on the Analyses page ----------------------------------
     ACTIONS = {"variant", "new_analysis", "redo", "rewrite_text", "table1", "merge_into_table1", "leave_out",
-               "remove_figure", "none"}
+               "remove_figure", "to_supplement", "to_main", "label_values", "none"}
 
     def assist(self, requested_by: str, message: str, analysis_id: str | None = None):
         """An author writes to the assistant about one result or the whole Results. The assistant answers and
@@ -747,7 +754,7 @@ class Agents:
             raise WorkflowError("write a message")
         if s.plan_locked is None:
             raise WorkflowError("the analysis plan has not been confirmed by every author")
-        tables = tables_mod.build(s, self.project.blobs)
+        tables = tables_mod.build(s, self.project.blobs, supplement=True)
         cur = current(s)
         brief = {}
         for k, v in sorted(cur.items(), key=lambda kv: _position(kv[1])):
@@ -762,9 +769,17 @@ class Agents:
                         "figures": [f["number"] for f in s.figures if f["analysis_id"] == k and f.get("number")],
                         "n_analysed": out.get("n_analysed"), "estimates": (out.get("estimates") or [])[:8],
                         "diagnostic_flags": d.get("flags"), "text": text[:1500]}
-        dic = [{"column": c.get("column"), "label": c.get("label")} for c in self._dictionary(s).get("dictionary") or []][:300]
+        dic = [{"column": c.get("column"), "label": c.get("label"), "coding": c.get("units_or_coding"),
+                "names_given_by_authors": (s.value_labels.get(c.get("column")) or {}).get("codes")}
+               for c in self._dictionary(s).get("dictionary") or []][:300]
+        try:
+            protocol, _ = self._protocol_text(s)
+        except Exception:
+            protocol = ""
         user = (f"AUTHOR'S MESSAGE: {message}\n\nABOUT: {analysis_id or 'the Results as a whole'}\n\n"
-                f"RESULTS SO FAR:\n{json.dumps(brief, indent=1)[:40000]}\n\nDATA DICTIONARY:\n{json.dumps(dic)}")
+                f"RESULTS SO FAR:\n{json.dumps(brief, indent=1)[:40000]}\n\nDATA DICTIONARY:\n{json.dumps(dic)[:30000]}\n\n"
+                f"THE AUTHORS' ANSWERS:\n{answers_text(s)[:6000]}\n\nPROTOCOL (excerpt):\n{protocol[:25000]}\n\n"
+                f"SUPPORTING MATERIALS:\n{self._supporting_text(s)[:15000]}")
         obj, call, _ = self._json_call(ANALYST_ID, "assist", ASSIST, user, purpose="assist")
         self.project.record_model_call(ANALYST_ID, call)
         reply = str(obj.get("reply") or "").strip()[:1200]
@@ -797,6 +812,22 @@ class Agents:
                 kind, reply = "none", reply + " (A planned analysis is reported; only an exploratory one added after the plan can be left out.)"
         proposal = {"reply": reply or "Done.", "action": {"type": kind, "analysis_id": target if kind != "none" else None,
                                                           "instruction": str(act.get("instruction") or message)[:2000]}}
+        if kind in ("to_supplement", "to_main"):
+            ids = [i for i in (act.get("analysis_ids") or ([target] if target else [])) if i in cur and not cur[i].get("standard")]
+            if not ids:
+                kind, reply = "none", reply + " (Tell me which results to move.)"
+            else:
+                proposal["action"]["analysis_ids"] = ids
+        if kind == "label_values":
+            col = act.get("column")
+            labels = {str(k): str(v) for k, v in (act.get("labels") or {}).items() if str(v).strip()}
+            known = {d.get("column") for d in self._dictionary(s).get("dictionary") or []}
+            if col not in known or not labels:
+                kind, reply = "none", reply + " (Tell me the column and the name for each code.)"
+            else:
+                proposal["action"].update({"column": col, "labels": labels})
+        proposal["action"]["type"] = kind
+        proposal["reply"] = reply or "Done."
         if merge is not None and kind == "merge_into_table1":
             proposal["action"].update(merge)
         if fig is not None and kind == "remove_figure":
@@ -839,9 +870,9 @@ class Agents:
         if a.get("sample_check"):
             out = {**out, "sample_check": a["sample_check"]}
         section = "methods" if a.get("standard") == "data_quality" else "results"
-        tbl = next((t for t in tables_mod.build(s, self.project.blobs) if t["analysis_id"] == analysis_id), None)
+        tbl = next((t for t in tables_mod.build(s, self.project.blobs, supplement=True) if t["analysis_id"] == analysis_id), None)
         figs = [{"token": f"[[Figure:{f['name']}]]", "caption": f["caption"]}
-                for f in s.figures if f["analysis_id"] == analysis_id and f.get("number")]
+                for f in s.figures if f["analysis_id"] == analysis_id and (f.get("number") or f.get("s_number"))]
         shown = _for_writer(a, out, current(s)) if a.get("standard") == "data_quality" else out
         info = {"id": analysis_id, "title": a["spec"].get("title"), "label": a["label"], "basis": a.get("basis"),
                 "kind": a.get("kind"), "standard": a.get("standard"), "sample_check": a.get("sample_check"),
@@ -881,8 +912,9 @@ class Agents:
                                               attempts=attempts, heading=heading)
 
     # -- Writing -------------------------------------------------------------
-    def write_draft(self, requested_by: str) -> State:
-        """First draft (or an author-requested redraft) from computed results only."""
+    def write_draft(self, requested_by: str, instructions: str | None = None) -> State:
+        """First draft (or an author-requested redraft) from computed results only. instructions: what the redraft
+        must fix (for example the reporting-guideline items the checklist found missing)."""
         s = self.project.state()
         protocol, _ = self._protocol_text(s)
         d = self._dictionary(s)
@@ -933,8 +965,10 @@ class Agents:
             d = s.drafts[s.draft_version]
             cur_text = self.project.blobs.get_text(d["text_sha256"]) if d.get("text_sha256") and self.project.blobs.has(d["text_sha256"]) else ""
             if cur_text:
-                user += (f"\n\nTHE CURRENT DRAFT (version {s.draft_version}; the results have changed since it was written):\n"
-                         f"{cur_text[:60000]}")
+                user += (f"\n\nTHE CURRENT DRAFT (version {s.draft_version}; keep the authors' wording where nothing below "
+                         f"requires a change):\n{cur_text[:60000]}")
+        if instructions:
+            user += f"\n\nWHAT THIS REVISION MUST FIX:\n{str(instructions)[:6000]}"
         # Write, check, and give the agent one chance to fix what the check found.
         # Whatever still fails goes to the authors with the findings attached.
         attempts, text, last_call = [], "", None
@@ -961,7 +995,8 @@ class Agents:
             raise AgentError("the draft has no Results section after a rewrite")
         sections = [ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")]
         return self.project.create_draft(WRITER_ID, text, sections, sorted(ok), last_call,
-                                         requested_by=requested_by, attempts=attempts)
+                                         requested_by=requested_by, attempts=attempts,
+                                         instructions=str(instructions)[:6000] if instructions else None)
 
     # -- Review ----------------------------------------------------------------
     def brief_reviewer(self, requested_by: str) -> State:
@@ -1038,9 +1073,15 @@ def _focus(d: dict[str, Any], specs: list[dict[str, Any]]):
             {**d["profile"], "columns": [c for c in cols if c["name"] in named]}, [c["name"] for c in cols])
 
 
+SENSITIVITY = re.compile(r"sensitivity analys|robustness|as a check of|refit .* excluding|multiple imputation|"
+                         r"\bfirth\b|bootstrap", re.I)
+
+
 def _figure_list(s: State, ok: dict[str, Any]) -> str:
     rows = [f"Figure {f['number']} [A:{f['analysis_id']}]: {f['caption']}"
             for f in sorted(s.figures, key=lambda f: f["number"] or 0) if f["analysis_id"] in ok and f["number"]]
+    rows += [f"Supplementary Figure S{f['s_number']} [A:{f['analysis_id']}]: {f['caption']}"
+             for f in sorted(s.figures, key=lambda f: f.get("s_number") or 0) if f["analysis_id"] in ok and f.get("s_number")]
     return "\n".join(rows) or "(none)"
 
 
@@ -1053,7 +1094,7 @@ def _software(s: State) -> dict[str, str]:
 
 
 def _texts(s: State, ok: dict[str, Any], blobs) -> str:
-    tables = tables_mod.build(s, blobs)
+    tables = tables_mod.build(s, blobs, supplement=True)
     rows = []
     for k, v in sorted(ok.items(), key=lambda kv: _position(kv[1])):
         d = v.get("description")
@@ -1083,6 +1124,12 @@ def _brief(findings: dict[str, Any]) -> str:
         lines.append(f"- FIGURE {n} NOT REFERRED TO: refer to it where its result is reported")
     for x in findings.get("references_unknown", []):
         lines.append(f"- {x.upper()} DOES NOT EXIST: use only the numbers in TABLES and FIGURES")
+    for x in findings.get("missing_subheadings", []):
+        sec, sub = x.split(": ", 1)
+        lines.append(f"- MISSING SUBHEADING in {sec}: add '### {sub}' with its content (in the required order)")
+    for x in findings.get("supplement_not_referred", []):
+        lines.append(f"- SUPPLEMENTARY {x.upper()} NOT REFERRED TO: give its main finding in a sentence in Results, citing "
+                     "its analysis and pointing to it")
     for x in findings.get("references_out_of_order", []):
         lines.append(f"- {x.upper()} REFERRED TO BEFORE A LOWER-NUMBERED ONE: in Results, refer to tables and figures "
                      "first in number order (reorder the paragraphs or the sentences)")

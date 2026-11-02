@@ -106,8 +106,19 @@ def _clean_label(name: str) -> str:
 
 def _codes(col: str, labels: dict[str, dict[str, Any]]) -> dict[str, str]:
     """Value labels from the data dictionary's coding, for example '0=No, 1=Yes' or '1 = Malay; 2 = Chinese'."""
+    own = (labels.get(col) or {}).get("value_labels")
     units = str((labels.get(col) or {}).get("units_or_coding") or "")
-    return {k.strip(): v.strip().rstrip(".") for k, v in re.findall(r"(-?\w+)\s*[=:]\s*([^,;=]+?)(?=\s*(?:[,;]|\s-?\w+\s*[=:]|$))", units)}
+    parsed = {k.strip(): _tidy_code_label(v) for k, v in re.findall(r"(-?\w+)\s*[=:]\s*([^,;=]+?)(?=\s*(?:[,;]|\s-?\w+\s*[=:]|$))", units)}
+    return {**parsed, **{str(k): str(v) for k, v in (own or {}).items()}}
+
+
+UNKNOWN_LEVEL = re.compile(r"^\s*(?:unknown|not known|missing|not recorded|not stated|n/?a|unk)\b", re.I)
+
+
+def _tidy_code_label(v: str) -> str:
+    """A code's label as printed: without a curator's note to the authors ('unknown? — confirm with authors')."""
+    v = re.split(r"\s+[—–-]{1,2}\s+(?:confirm|check|verify|ask)\b", v.strip(), maxsplit=1)[0]
+    return v.rstrip(".?").strip()
 
 
 def _is_binary(levels: list[str]) -> bool:
@@ -164,14 +175,21 @@ def _table1(aid: str, a: dict[str, Any], t: dict[str, Any], labels: dict[str, di
             rows.append({"cells": [f"{_name(v, labels, True)}, {s}", cont(r.get("overall"), s)]
                          + [cont((r.get("by_group") or {}).get(g["level"]), s) for g in groups] + p, "marks": m})
             continue
+        codes = _codes(v, labels)
         cats = [c for c in r.get("categories") or [] if str(c["level"]) not in NA_CODES]
+        unknown = [c for c in cats if UNKNOWN_LEVEL.match(codes.get(str(c["level"]), ""))]
+        if unknown and len(cats) - len(unknown) >= 2:
+            # A code that means "not known" is a missing value, not a category: shown in a footnote, and the
+            # percentages are of those with a known value.
+            cats = [_repct(c, cats, unknown, groups) for c in cats if c not in unknown]
+            k = sum(int((c.get("overall") or {}).get("n") or 0) for c in unknown)
+            missing.append(f"{_clean_label(_name(v, labels))} not known {k} (percentages are of those known)")
         if _is_binary([c["level"] for c in cats]):
             # A yes/no characteristic is one row: the number (%) with it, as journals report it.
             yes = next(c for c in cats if str(c["level"]).strip().lower() in _YES)
             rows.append({"cells": [f"{_clean_label(_name(v, labels))}, n (%)", npct(yes.get("overall"))]
                          + [npct((yes.get("by_group") or {}).get(g["level"])) for g in groups] + p, "marks": m})
             continue
-        codes = _codes(v, labels)
         rows.append({"cells": [f"{_clean_label(_name(v, labels))}, n (%)", ""] + [""] * len(groups) + p, "marks": m})
         for c in cats:
             rows.append({"cells": [codes.get(str(c["level"]), str(c["level"])), npct(c.get("overall"))]
@@ -188,6 +206,20 @@ def _table1(aid: str, a: dict[str, Any], t: dict[str, Any], labels: dict[str, di
             "title": "Characteristics of the participants" + (f", by {by_name.lower()}" if by else ""),
             "columns": cols, "rows": rows, "footnotes": notes,
             "stale_missing_codes": any(str(g["level"]) in NA_CODES for g in t.get("groups") or [])}
+
+
+def _repct(c: dict[str, Any], cats: list[dict[str, Any]], unknown: list[dict[str, Any]], groups: list[dict[str, Any]]):
+    """A category's percentages recomputed among those with a known value."""
+    known = [x for x in cats if x not in unknown]
+
+    def pct(x, tot):
+        return None if not x or not tot else {**x, "pct": 100 * (x.get("n") or 0) / tot}
+    tot = sum(int((x.get("overall") or {}).get("n") or 0) for x in known)
+    out = {**c, "overall": pct(c.get("overall"), tot), "by_group": {}}
+    for g in groups:
+        gt = sum(int(((x.get("by_group") or {}).get(g["level"]) or {}).get("n") or 0) for x in known)
+        out["by_group"][g["level"]] = pct((c.get("by_group") or {}).get(g["level"]), gt)
+    return out
 
 
 MAX_ROWS, MAX_COLS = 80, 12
@@ -425,13 +457,17 @@ def _results(aid: str, a: dict[str, Any], out: dict[str, Any], labels: dict[str,
             "columns": cols, "rows": rows, "footnotes": notes}
 
 
-def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[str, Any]]:
+def build(s: Any, blobs: BlobStore, with_duplicates: bool = False, supplement: bool = False) -> list[dict[str, Any]]:
     """Every table, numbered in reporting order, from the current (not replaced) analyses. A table identical to an
-    earlier one (same headings and cells) is not numbered again; with_duplicates=True returns it, marked."""
-    from .workflow import current
+    earlier one (same headings and cells) is not numbered again; with_duplicates=True returns it, marked.
+    Tables of analyses the authors put in the supplementary material are numbered S1, S2, ... ("s_number") and
+    returned only with supplement=True (or with_duplicates=True); by default the list is the main text's."""
+    from .workflow import current, in_supplement
     labels = {}
     if s.curator_reports:
         labels = _labels(blobs.get_json(s.curator_reports[-1]["report_sha256"]).get("dictionary"))
+    for col, v in (getattr(s, "value_labels", None) or {}).items():      # the authors' names for codes come first
+        labels[col] = {**labels.get(col, {}), "value_labels": v.get("codes") or {}}
     tables = []
     for aid, a in sorted(current(s).items(), key=lambda kv: position(kv[1])):
         if a.get("standard") == "data_quality" or not blobs.has(a["outputs_sha256"]):
@@ -446,18 +482,27 @@ def build(s: Any, blobs: BlobStore, with_duplicates: bool = False) -> list[dict[
         elif t and t.get("laid_out_by") and is_instruction(t["title"]):
             t["title"] = _title_from_request(t["title"])
         if t:
-            tables.append(t | {"label": a.get("label")})
+            tables.append(t | {"label": a.get("label"), "supplement": in_supplement(a)})
     seen: dict[str, dict[str, Any]] = {}
-    n = 0
+    n = sn = 0
     for t in tables:
         key = json.dumps([t["columns"], [r["cells"] for r in t["rows"]]])
+        t["s_number"] = None
         if key in seen:
             t["number"], t["duplicate_of"] = None, {"analysis_id": seen[key]["analysis_id"], "number": seen[key]["number"]}
+        elif t["supplement"]:
+            sn += 1
+            t["number"], t["s_number"] = None, sn
+            seen[key] = t
         else:
             n += 1
             t["number"] = n
             seen[key] = t
-    return tables if with_duplicates else [t for t in tables if t["number"]]
+    for t in tables:
+        t["ref"] = f"Table {t['number']}" if t["number"] else f"Supplementary Table S{t['s_number']}" if t["s_number"] else None
+    if with_duplicates:
+        return tables
+    return [t for t in tables if t["number"] or (supplement and t["s_number"])]
 
 
 def merge_plan(s: Any, blobs: BlobStore, target: str | None, known: set[str] | None = None) -> dict[str, Any] | None:
@@ -481,7 +526,7 @@ def merge_plan(s: Any, blobs: BlobStore, target: str | None, known: set[str] | N
 
 
 def listing(s: Any, blobs: BlobStore) -> str:
-    rows = [f"Table {t['number']} [A:{t['analysis_id']}]: {t['title']}" for t in build(s, blobs)]
+    rows = [f"{t['ref']} [A:{t['analysis_id']}]: {t['title']}" for t in build(s, blobs, supplement=True)]
     return "\n".join(rows) or "(none)"
 
 
@@ -515,7 +560,7 @@ def to_docx(tables: list[dict[str, Any]], heading: str | None = None) -> bytes:
         doc.add_paragraph().add_run(heading).bold = True
     for t in tables:
         p = doc.add_paragraph()
-        p.add_run(f"Table {t['number']}. ").bold = True
+        p.add_run(f"{t.get('ref') or 'Table ' + str(t['number'])}. ".replace("Supplementary ", "")).bold = True
         p.add_run(t["title"])
         tb = doc.add_table(rows=1 + len(t["rows"]), cols=len(t["columns"]))
         last = len(t["rows"])
@@ -664,10 +709,11 @@ def apply_edits(tables: list[dict[str, Any]], edits: dict[str, Any] | None) -> l
 def resolve(text: str, aid: str, tables: list[dict[str, Any]], figures: list[dict[str, Any]]) -> str:
     """Replace a description's [[Table]] and [[Figure:name]] tokens with the current numbers."""
     t = next((x for x in tables if x["analysis_id"] == aid), None)
-    out = (text or "").replace("[[Table]]", f"Table {t['number']}" if t else "the table")
+    out = (text or "").replace("[[Table]]", (t.get("ref") or f"Table {t['number']}") if t and (t.get("number") or t.get("s_number")) else "the table")
     for f in figures:
         if f["analysis_id"] == aid:
-            out = out.replace(f"[[Figure:{f['name']}]]", f"Figure {f['number']}" if f.get("number") else "the figure")
+            out = out.replace(f"[[Figure:{f['name']}]]", f"Figure {f['number']}" if f.get("number")
+                              else f"Supplementary Figure S{f['s_number']}" if f.get("s_number") else "the figure")
     return re.sub(r"\[\[Figure:[^\]]*\]\]", "the figure", out)
 
 
@@ -696,6 +742,17 @@ def out_of_order(text: str) -> list[str]:
             bad.append(f"{kind.capitalize()} {n}")
         top[kind] = max(top[kind], n)
     return bad
+
+
+_SREF = re.compile(r"\b(Tables?|Fig(?:ure)?s?\.?)\s+(S\d+(?:\s*(?:,|and|to|-|–)\s*S?\d+)*)", re.I)
+
+
+def supplementary_references(text: str) -> dict[str, set[int]]:
+    found: dict[str, set[int]] = {"table": set(), "figure": set()}
+    for m in _SREF.finditer(text or ""):
+        kind = "table" if m.group(1).lower().startswith("tab") else "figure"
+        found[kind].update(int(x) for x in re.findall(r"\d+", m.group(2)))
+    return found
 
 
 def references(text: str) -> dict[str, set[int]]:

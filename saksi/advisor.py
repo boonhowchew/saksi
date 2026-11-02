@@ -167,6 +167,17 @@ def suggestions(s: Any, blobs: BlobStore) -> list[dict[str, Any]]:
                  "instruction": "As a sensitivity analysis, handle missing values by multiple imputation by chained "
                                 "equations (statsmodels MICE, 20 imputations, using seed), pool with Rubin's rules, and "
                                 "compare with the complete-case estimates."})
+    # Sensitivity analyses belong in the supplementary material, with a sentence in the Results.
+    from .agents import SENSITIVITY
+    from .workflow import in_supplement
+    sens = [k for k, a in sorted(cur.items(), key=lambda kv: kv[1]["seq"])
+            if (a["spec"].get("based_on") and SENSITIVITY.search(str(a["spec"].get("author_request") or a["spec"].get("title") or "")))
+            and not in_supplement(a)]
+    if sens:
+        add("supp", None, f"Move {len(sens)} sensitivity analys{'es' if len(sens) > 1 else 'is'} to the supplementary material",
+            "Sensitivity analyses check whether a main result holds; journals report them in the supplementary material, "
+            "with one or two sentences in the Results. This keeps the Results focused on the paper's questions.",
+            {"type": "to_supplement", "analysis_ids": sens, "instruction": "Sensitivity analyses: reported in the supplementary material"})
     post_hoc = [a for a in cur.values() if a.get("basis") == "post hoc"]
     if len(post_hoc) >= 3:
         add("multiplicity", None, f"{len(post_hoc)} exploratory analyses added after the plan",

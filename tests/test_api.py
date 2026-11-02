@@ -131,10 +131,13 @@ def test_review_loop_over_http(tmp_path, monkeypatch):
 
     monkeypatch.setenv("META_API_KEY", "test-key")
     monkeypatch.setenv("BASETEN_API_KEY", "test-key-2")
-    draft = ("## Methods\nLogistic regression as planned.\n\n## Results\n"
+    from tests.test_agents import METHODS_SUBS
+    draft = ("## Methods\n" + METHODS_SUBS + "### Statistical analysis\nLogistic regression as planned.\n\n## Results\n"
              "Of 400 records, 12 lacked booking BMI [A:s_data_quality]. "
              "In this exploratory analysis, booking BMI was associated with GDM [A:primary]. 388 women were analysed against 400 planned, "
-             "with 18 GDM events against 40 planned [A:primary]. Table 1 and Figures 1 and 2 show the model.\n\n## Discussion\nThe sample was small.\n")
+             "with 18 GDM events against 40 planned [A:primary]. Table 1 and Figures 1 and 2 show the model.\n\n## Discussion\n### Principal findings\nAs above.\n\n"
+             "### Comparison with other studies\n[Authors: comparison]\n\n### Strengths and limitations\nThe sample was small.\n\n"
+             "### Implications\nMore data are needed.\n")
     model = ScriptedModel({
         "curate": [CURATOR_REPLY], "plan": [{"analyses": [PLAN_REPLY["analyses"][0]]}], "code": [fence(GOOD)],
         "write": [draft],

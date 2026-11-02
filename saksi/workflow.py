@@ -49,6 +49,7 @@ from . import tables as tables_mod
 
 # Where the Analyses page is a worksheet: before the results are accepted, while the authors revise the draft, and
 # when they respond to review. Anything done there after a draft exists is new, so the draft is rewritten from it.
+FIG_TOKEN = re.compile(r"\[\[Figure:([^\]]+)\]\]")
 WORKSHEET_STAGES = ("ANALYSIS", "AUTHOR_REVISION", "RESPONSE")
 STAGES = ("INGEST", "ANALYSIS", "DRAFTING", "AUTHOR_REVISION", "REVIEW", "RESPONSE", "ATTESTATION", "FINAL")
 HUMAN_ROLES = {"author", "corresponding_author", "reviewer"}
@@ -113,6 +114,7 @@ class State:
     reviewed_versions: dict[int, int] = field(default_factory=dict)
     figures: list[dict[str, Any]] = field(default_factory=list)
     results_seq: int = 0                            # last event that changed the Results (runs, texts, figures)
+    value_labels: dict[str, dict[str, Any]] = field(default_factory=dict)   # column -> {codes, by, reason}
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -159,7 +161,7 @@ class State:
             "briefings": self.briefings, "items": self.items,
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
-            "figures": self.figures, "results_seq": self.results_seq, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -169,7 +171,8 @@ def apply(s: State, ev: Event) -> State:
     """Pure reducer: fold one event into the state."""
     p, t = ev.payload, ev.type
     s.head_seq = ev.seq
-    if t in ("analysis.completed", "analysis.described", "analysis.withdrawn", "figure.omitted", "figure.restored"):
+    if t in ("analysis.completed", "analysis.described", "analysis.withdrawn", "figure.omitted", "figure.restored",
+             "analysis.placed", "labels.set"):
         s.results_seq = ev.seq
     if t == "project.created":
         s.project_id, s.title, s.study_type = ev.project_id, p["title"], p["study_type"]
@@ -215,6 +218,8 @@ def apply(s: State, ev: Event) -> State:
         if p.get("supersedes"):
             old = s.analyses[p["supersedes"]]
             old["superseded_by"] = p["analysis_id"]
+            if old.get("place"):
+                s.analyses[p["analysis_id"]]["place"] = old["place"]
             s.analyses[p["analysis_id"]]["order_seq"] = old.get("order_seq", old["seq"])
         s.figures.extend(f | {"analysis_id": p["analysis_id"], "seq": ev.seq} for f in p.get("figures") or [])
         _number_figures(s)
@@ -251,6 +256,13 @@ def apply(s: State, ev: Event) -> State:
     elif t == "analysis.described":
         if p["analysis_id"] in s.analyses:
             s.analyses[p["analysis_id"]]["description"] = p | {"by": ev.actor_id, "seq": ev.seq}
+            _number_figures(s)
+    elif t == "analysis.placed":
+        s.analyses[p["analysis_id"]]["place"] = {"where": p["place"], "by": ev.actor_id, "reason": p["reason"],
+                                                 "requested_by": p.get("requested_by"), "seq": ev.seq}
+        _number_figures(s)
+    elif t == "labels.set":
+        s.value_labels[p["column"]] = {"codes": p["labels"], "by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
     elif t == "analyses.accepted":
         s.analyses_accepted_by.setdefault(p["analysis_set_sha256"], set()).add(ev.actor_id)
     elif t in ("draft.created", "draft.edited"):
@@ -783,6 +795,45 @@ class Project:
         self._emit(by, "figure.restored", {"analysis_id": analysis_id, "name": name})
         return self.state()
 
+    def place_analysis(self, by: str, analysis_id: str, place: str, reason: str, requested_by: str | None = None) -> State:
+        """Report an analysis in the main Results or in the supplementary material (appendix). Authors decide; the
+        Analysis Agent places a sensitivity analysis there by default, for an author, and says so."""
+        s = self.state()
+        actor = s.actors.get(by) or {}
+        if "author" in actor.get("roles", []):
+            pass
+        else:
+            self._require_role(s, by, "analyst")
+            if not requested_by or "author" not in (s.actors.get(requested_by) or {}).get("roles", []):
+                raise WorkflowError("the agent places an analysis only for a named author")
+        self._require_stage(s, *WORKSHEET_STAGES)
+        a = current(s).get(analysis_id)
+        if a is None:
+            raise WorkflowError(f"{analysis_id!r} is not a current analysis")
+        if place not in ("main", "supplement"):
+            raise WorkflowError("place must be 'main' or 'supplement'")
+        if a.get("standard") or (a.get("label") == "confirmatory" and place == "supplement"):
+            raise WorkflowError("the data checks, Table 1 and the primary analysis are reported in the main text")
+        if ((a.get("place") or {}).get("where") or "main") == place:
+            raise WorkflowError("it is already there")
+        if not (reason or "").strip():
+            raise WorkflowError("give a reason")
+        self._emit(by, "analysis.placed", {"analysis_id": analysis_id, "place": place, "reason": reason.strip(),
+                                           "requested_by": requested_by})
+        return self.state()
+
+    def set_value_labels(self, by: str, column: str, labels: dict[str, Any], reason: str = "") -> State:
+        """Names for a column's codes (for example clinic 1 to 6), used in every table. Authors' facts, recorded."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        if s.stage == "FINAL":
+            raise WorkflowError("the paper is final")
+        clean = {str(k).strip(): str(v).strip()[:80] for k, v in (labels or {}).items() if str(k).strip() and str(v).strip()}
+        if not column or not clean:
+            raise WorkflowError("give the column and at least one code with its name")
+        self._emit(by, "labels.set", {"column": column, "labels": clean, "reason": (reason or "").strip()[:300]})
+        return self.state()
+
     def withdraw_analysis(self, by: str, analysis_id: str, reason: str) -> State:
         """Leave an exploratory analysis that was asked for after the plan out of the paper. It stays in the record,
         with the reason, and the reviewer is told. Pre-specified analyses cannot be left out this way."""
@@ -817,7 +868,7 @@ class Project:
                                                "text_sha256": self.blobs.put_text(text), "checks": checks,
                                                "instruction": instruction, "attempts": attempts or [],
                                                "heading": heading, "requested_by": requested_by,
-                                               "llm_call_seq": call_seq})
+                                               "figure_order": FIG_TOKEN.findall(text), "llm_call_seq": call_seq})
         return self.state()
 
     def edit_description(self, by: str, analysis_id: str, text: str, heading: str | None = None) -> State:
@@ -847,7 +898,7 @@ class Project:
                                                "text_sha256": self.blobs.put_text(text),
                                                "checks": summarise_checks(check), "heading": heading,
                                                "edited_by_author": True, "previous_by": old.get("by"),
-                                               "requested_by": None})
+                                               "figure_order": FIG_TOKEN.findall(text), "requested_by": None})
         return self.state()
 
     def record_checklist(self, by: str, version: int, guideline: str, items: list[dict[str, Any]],
@@ -923,13 +974,24 @@ class Project:
         r["references_out_of_order"] = tables_mod.out_of_order(results_part)
         early = tables_mod.references(before)
         r["referred_before_results"] = [f"Table {n}" for n in sorted(early["table"])] + [f"Figure {n}" for n in sorted(early["figure"])]
+        # Supplementary tables and figures: only those that exist may be cited (Table S1, Figure S2).
+        s_tables = {t["s_number"] for t in tables_mod.build(s, self.blobs, supplement=True) if t.get("s_number")}
+        s_figs = {f["s_number"] for f in s.figures if f.get("s_number") and f["analysis_id"] in ok}
+        sref = tables_mod.supplementary_references(plain)
+        r["references_unknown"] += [f"Table S{n}" for n in sorted(sref["table"] - s_tables)] + \
+                                   [f"Figure S{n}" for n in sorted(sref["figure"] - s_figs)]
+        r["supplement_not_referred"] = [f"Table S{n}" for n in sorted(s_tables - sref["table"])] + \
+                                       [f"Figure S{n}" for n in sorted(s_figs - sref["figure"])]
+        # Required subheadings (Methods and Discussion) and the guideline's structure.
+        r["missing_subheadings"] = missing_subheadings(text) if re.search(r"(?m)^##\s+Results", text) else []
         r["ok"] = r["ok"] and not (r["tables_not_referred"] or r["figures_not_referred"] or r["references_unknown"]
-                                   or r["references_out_of_order"] or r["referred_before_results"])
+                                   or r["references_out_of_order"] or r["referred_before_results"]
+                                   or r["supplement_not_referred"] or r["missing_subheadings"])
         return r
 
     def create_draft(self, by: str, text: str, sections: list[str], source_analysis_ids: list[str],
                      call: dict[str, Any] | None, requested_by: str | None = None,
-                     attempts: list[dict[str, Any]] | None = None) -> State:
+                     attempts: list[dict[str, Any]] | None = None, instructions: str | None = None) -> State:
         s = self.state()
         a = self._require_role(s, by, "writer")
         self._require_stage(s, "DRAFTING", "AUTHOR_REVISION", "RESPONSE")
@@ -944,7 +1006,7 @@ class Project:
             "version": s.draft_version + 1, "base_version": s.draft_version or None,
             "text_sha256": self.blobs.put_text(text), "sections": sections,
             "source_analysis_ids": source_analysis_ids, "requested_by": requested_by, "llm_call_seq": call_seq,
-            "writer_attempts": attempts or [],
+            "writer_attempts": attempts or [], "instructions": instructions,
             **self._trace(s, text),
         })
         if s.stage == "DRAFTING":
@@ -1224,15 +1286,49 @@ def current(s: State) -> dict[str, dict[str, Any]]:
             if v["status"] == "ok" and v.get("outputs_sha256") and not v.get("superseded_by") and not v.get("withdrawn")}
 
 
+REQUIRED_SUBHEADINGS = {   # subheading -> words that recognise it
+    "Methods": {"Study design and setting": r"design", "Participants": r"participant", "Variables": r"variable",
+                "Data sources and measurement": r"source|measurement", "Study size": r"size",
+                "Statistical analysis": r"statistic"},
+    "Discussion": {"Principal findings": r"principal|main finding|key finding|summary of",
+                   "Comparison with other studies": r"comparison|other studies|literature|previous",
+                   "Strengths and limitations": r"limitation", "Implications": r"implication"},
+}
+
+
+def missing_subheadings(text: str) -> list[str]:
+    """The '### ' subheadings a journal-ready Methods and Discussion must have."""
+    out = []
+    for section, subs in REQUIRED_SUBHEADINGS.items():
+        m = re.search(rf"(?ms)^##\s+{section}\b.*?(?=^##\s|\Z)", text or "")
+        heads = " | ".join(re.findall(r"(?m)^###\s+(.+?)\s*$", m.group(0))) if m else ""
+        out += [f"{section}: {sub}" for sub, pat in subs.items() if not re.search(pat, heads, re.I)]
+    return out
+
+
+def in_supplement(a: dict[str, Any]) -> bool:
+    return ((a or {}).get("place") or {}).get("where") == "supplement"
+
+
 def _number_figures(s: State) -> None:
-    """Figures are numbered in reporting order; a replaced analysis's figures lose their number."""
+    """Figures are numbered in the order the text first refers to them: by analysis in reporting order, and within an
+    analysis in the order its text mentions them. Main-text figures are 1, 2, ...; supplementary ones S1, S2, ...
+    A replaced, withdrawn or omitted figure has no number."""
     live = [f for f in s.figures if not s.analyses.get(f["analysis_id"], {}).get("superseded_by")
             and not s.analyses.get(f["analysis_id"], {}).get("withdrawn") and not f.get("omitted")]
-    live.sort(key=lambda f: (position(s.analyses[f["analysis_id"]]), f["seq"]))
+
+    def mention(f: dict[str, Any]) -> int:
+        order = ((s.analyses[f["analysis_id"]].get("description") or {}).get("figure_order")) or []
+        return order.index(f["name"]) if f["name"] in order else len(order)
+    live.sort(key=lambda f: (position(s.analyses[f["analysis_id"]]), mention(f), f["seq"]))
     for f in s.figures:
-        f["number"] = None
-    for i, f in enumerate(live, start=1):
+        f["number"] = f["s_number"] = None
+    main = [f for f in live if not in_supplement(s.analyses[f["analysis_id"]])]
+    supp = [f for f in live if in_supplement(s.analyses[f["analysis_id"]])]
+    for i, f in enumerate(main, start=1):
         f["number"] = i
+    for i, f in enumerate(supp, start=1):
+        f["s_number"] = i
 
 
 def included_order(plan: dict[str, Any] | None) -> list[str]:
@@ -1269,7 +1365,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",

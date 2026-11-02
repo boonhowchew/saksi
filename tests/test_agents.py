@@ -444,18 +444,24 @@ def _to_drafting(p, agents, model):
 
 
 REFS = ""
+METHODS_SUBS = ("### Study design and setting\nA cohort study.\n\n### Participants\nPregnant women.\n\n"
+                "### Variables\nGDM by OGTT.\n\n### Data sources and measurement\nClinic records.\n\n"
+                "### Study size\nAs planned in the protocol.\n\n")
 
 
 def _draft(bmi, extra="The adjusted OR for previous GDM was 9.99 [A:primary]. ",
            exploratory="A further model gave a similar estimate [A:x_q1]."):
-    return ("[Authors: introduction]\n\n## Methods\nA multivariable logistic regression was pre-specified.\n\n"
+    return ("[Authors: introduction]\n\n## Methods\n" + METHODS_SUBS + "### Statistical analysis\n"
+            "A multivariable logistic regression was pre-specified.\n\n"
             "## Results\n"
             f"Of 400 records, none was duplicated and 12 lacked booking BMI [A:s_data_quality]. "
             f"Of 400 records, 388 were analysed, with 18 GDM events against 40 planned, so the primary analysis is "
             f"reported as exploratory [A:primary]. "
             f"Booking BMI was associated with GDM "
             f"(adjusted OR {bmi['estimate']:.2f}, 95% CI {bmi['ci_lower']:.2f} to {bmi['ci_upper']:.2f}) [A:primary]. "
-            f"{REFS}{extra}{exploratory}\n\n## Discussion\nThe estimate was imprecise.\n")
+            f"{REFS}{extra}{exploratory}\n\n## Discussion\n### Principal findings\nThe estimate was imprecise.\n\n"
+            "### Comparison with other studies\n[Authors: comparison with previous studies]\n\n"
+            "### Strengths and limitations\nFew events.\n\n### Implications\nA larger study is needed.\n")
 
 
 def test_writer_fixes_its_own_draft_after_check(setup):
@@ -1141,3 +1147,62 @@ def test_fold_into_table1_needs_a_table_that_describes_groups(setup):
     assert prop["action"]["type"] == "none" and "could not find a table describing the participants" in prop["reply"]
     assert "never say it is done" in model.bodies[-1]["messages"][0]["content"]
     assert "Statistical practice" in model.bodies[-1]["messages"][0]["content"]
+
+
+def test_figures_numbered_as_the_text_first_mentions_them(setup):
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    own = sorted((f for f in s.figures if f["analysis_id"] == "primary" and f["number"]), key=lambda f: f["number"])
+    assert len(own) >= 2
+    first, second = own[0], own[1]
+    # The author's text mentions the second figure first: the numbers follow the text.
+    text = f"See [[Figure:{second['name']}]] and then [[Figure:{first['name']}]]. Of 388 analysed [A:primary]."
+    s = p.edit_description("bhc", "primary", text)
+    byname = {f["name"]: f["number"] for f in s.figures if f["analysis_id"] == "primary" and f["number"]}
+    assert byname[second["name"]] == first["number"] and byname[first["name"]] == second["number"]
+
+
+def test_sensitivity_analyses_go_to_the_supplement_numbered_s(setup):
+    from saksi.workflow import missing_subheadings
+    from tests.test_sandbox import GOOD_WITH_DIAGNOSTICS
+    p, agents, model, _ = setup
+    s = _standard_run(p, agents, model, extra_code=[GOOD_WITH_DIAGNOSTICS])
+    from saksi import tables as T
+    n_main = len(T.build(s, p.blobs))
+    with pytest.raises(WorkflowError, match="main text"):
+        p.place_analysis("bhc", "s_table1" if "s_table1" in s.analyses else next(k for k, a in s.analyses.items() if a.get("standard") == "table1"),
+                         "supplement", "no")
+    aid = next(k for k, a in s.analyses.items() if not a.get("standard") and a.get("label") != "confirmatory"
+               and not a.get("superseded_by") and a["status"] == "ok")
+    with pytest.raises(WorkflowError, match="only for a named author"):
+        p.place_analysis("agent:analyst", aid, "supplement", "sensitivity")
+    s = p.place_analysis("coauthor", aid, "supplement", "A sensitivity analysis")
+    assert s.analyses[aid]["place"]["where"] == "supplement" and s.analyses[aid]["place"]["by"] == "coauthor"
+    main = T.build(s, p.blobs)
+    supp = [t for t in T.build(s, p.blobs, supplement=True) if t.get("s_number")]
+    assert aid not in {t["analysis_id"] for t in main} and [t["s_number"] for t in supp] == [1]
+    assert supp[0]["ref"] == "Supplementary Table S1" and len(main) == n_main - 1
+    assert all(f["s_number"] and not f["number"] for f in s.figures if f["analysis_id"] == aid and not f.get("omitted"))
+    assert "Supplementary Table S1 [A:" + aid + "]" in T.listing(s, p.blobs)
+    r = p.check_text("## Results\nSee Table S2 [A:" + aid + "].")
+    assert "Table S2" in r["references_unknown"] and "Table S1" in r["supplement_not_referred"]
+    assert "Discussion: Strengths and limitations" in missing_subheadings("## Methods\n## Results\n## Discussion\nx")
+    with pytest.raises(WorkflowError, match="already there"):
+        p.place_analysis("bhc", aid, "supplement", "again")
+
+
+def test_authors_name_the_codes_and_unknown_is_missing():
+    from saksi import tables as T
+    labels = T._labels([{"column": "clinic", "label": "Clinic", "units_or_coding": "1=A, 2=B"},
+                        {"column": "pcos", "label": "History of PCOS", "units_or_coding": "0=No, 1=Yes, 9=unknown? — confirm with authors"}])
+    labels["clinic"]["value_labels"] = {"1": "Klinik Kesihatan Seri Kembangan", "2": "Klinik Kesihatan Putrajaya"}
+    assert T._codes("clinic", labels) == {"1": "Klinik Kesihatan Seri Kembangan", "2": "Klinik Kesihatan Putrajaya"}
+    assert T._codes("pcos", labels)["9"] == "unknown"
+    grp = [{"level": "0", "n": 10}, {"level": "1", "n": 10}]
+    cat = lambda lv, o, a, b: {"level": lv, "overall": {"n": o, "pct": 0}, "by_group": {"0": {"n": a}, "1": {"n": b}}}
+    t1 = {"stratify_by": None, "groups": [], "n_analysed": 20, "rows": [
+        {"variable": "pcos", "type": "categorical", "categories": [cat("0", 17, 9, 8), cat("1", 2, 1, 1), cat("9", 1, 0, 1)]}]}
+    t = T._table1("t1", {}, t1, labels)
+    assert [r["cells"][0] for r in t["rows"]] == ["History of PCOS, n (%)"]          # yes/no again: one row
+    assert t["rows"][0]["cells"][1] == "2 (10.5)" and any("not known 1" in n for n in t["footnotes"])

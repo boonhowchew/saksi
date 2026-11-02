@@ -51,7 +51,7 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "update_curator_report": ("update_curator_report", set(), "author"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
-    "write_draft": ("write_draft", set(), "author"),
+    "write_draft": ("write_draft", {"instructions"}, "author"),
     "brief_reviewer": ("brief_reviewer", set(), "reviewer"),
 }
 
@@ -69,6 +69,8 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "answer_question": ("answer_question", {"question", "answer", "accepted_suggestion"}),
     "edit_outline_methods": ("edit_outline_methods", {"text"}),
     "omit_figure": ("omit_figure", {"analysis_id", "name", "reason"}),
+    "place_analysis": ("place_analysis", {"analysis_id", "place", "reason"}),
+    "set_value_labels": ("set_value_labels", {"column", "labels", "reason"}),
     "restore_figure": ("restore_figure", {"analysis_id", "name"}),
     "prepare_dataset": ("prepare_dataset", {"step_ids", "note"}),
     "confirm_plan": ("confirm_plan", {"plan_sha256"}),
@@ -284,7 +286,7 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
         from .tables import build, to_docx
         p = existing(pid)
         s = p.state()
-        ts = build(s, p.blobs)
+        ts = build(s, p.blobs, supplement=True)
         d = s.drafts.get(s.draft_version) if s.draft_version else None
         if d and d.get("table_edits_sha256"):
             from .tables import apply_edits

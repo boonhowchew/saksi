@@ -196,9 +196,11 @@ Rules:
   each, or in the sentence where each is first reported. Do not open paragraphs or sentences with "In an exploratory
   analysis" again and again. What this means for interpretation (chance findings, multiplicity, hypotheses for
   future studies) belongs once in the Discussion's limitations.
-- Follow the reporting guideline in REPORTING GUIDELINE: report each of its Methods, Results and Discussion items
-  that the results support, and put "[Authors: ...]" for items only the authors can supply (setting, recruitment
-  dates, ethics, how variables were measured).
+- Follow the reporting guideline in REPORTING GUIDELINE strictly: report every one of its Methods, Results and
+  Discussion items, each in the subsection where journals expect it. Use what the protocol, the supporting materials,
+  the answers and the Methods drafted with the authors give. Only where a specific fact is in none of them, put a short
+  "[Authors: <the missing fact>]" (for example "[Authors: recruitment dates]"), never the guideline item's wording and
+  never after a sentence that already reports it.
 - The report's aim is in REPORT: write to answer it.
 - If an analysis has a sample_check with a shortfall, state the planned and the achieved numbers from it in the
   Results, citing that analysis, and treat the shortfall as a limitation.
@@ -214,11 +216,13 @@ Rules:
   double negatives.
 - Do not write the Introduction and do not cite literature. Put "[Authors: introduction]" before Methods and
   "[Authors: comparison with previous studies]" in the Discussion.
-- The Discussion follows the usual order: the principal findings, in words, confirmatory before exploratory; their
-  strengths and limitations, judged by the principles of epidemiology: chance (precision, sample size against the
-  plan, multiplicity of exploratory analyses), bias (selection, information, missing data) and confounding (what was
-  and was not adjusted for), and what the model diagnostics showed; "[Authors: comparison with previous studies]";
-  then what the findings mean and what further research would settle. No speculation beyond the results, no causal
+- The Discussion has these subsections, in this order: "### Principal findings" (in words, answering the aim, main
+  question first); "### Comparison with other studies" ("[Authors: comparison with previous studies]" with what the
+  comparison should address); "### Strengths and limitations" (strengths first: design, data, pre-specification,
+  analysis and checks; then limitations judged by the principles of epidemiology: chance (precision, sample size
+  against the plan, multiplicity of exploratory analyses), bias (selection, information, missing data), confounding
+  (what was and was not adjusted for), what the model diagnostics showed, and generalisability); "### Implications"
+  (for practice and for research: what further study would settle). No speculation beyond the results, no causal
   language for associations, and exploratory findings framed as hypotheses.
 - The Conclusion is two or three sentences that follow from the confirmatory result (or say that the study had no
   confirmatory result), without new numbers.
@@ -244,6 +248,13 @@ Rules:
   from its "diagnostics": events per predictor parameter, collinearity (VIF), linearity, influential observations,
   overall fit, discrimination and calibration, and independence. State every flag it lists plainly. Calibration on
   the data the model was fitted to is "apparent": say so, and do not present it as evidence for new patients.
+- Methods has these subsections, in this order: "### Study design and setting", "### Participants",
+  "### Variables", "### Data sources and measurement", "### Data preparation", "### Study size",
+  "### Statistical analysis" (and "### Ethics" if the materials give it). Use "###" for them.
+- Supplementary material: analyses whose tables and figures are listed as "Supplementary Table S1" or
+  "Supplementary Figure S1" are reported in the supplement (typically sensitivity analyses). In the Results, give
+  their main finding in one or two sentences, citing them and pointing to the supplement ("Supplementary Table S1");
+  do not report them in detail. Saksi attaches the supplement itself.
 - Saksi builds the tables and figures itself from the computed results (listed in TABLES and FIGURES) and places
   each one in the Results after the paragraph that first refers to it. Every table and every figure must be
   referred to, by its number ("Table 2", "Figure 1"), and only those numbers may be used. Refer to them first in
@@ -256,7 +267,9 @@ Rules:
   matters (the main finding, its direction and size, and its uncertainty), giving only the key estimates. Do not
   repeat the table or the figure in prose, cell by cell; the reader can see it. Text and table must not disagree.
 
-Format: Markdown with exactly these headings: "## Methods", "## Results", "## Discussion", "## Conclusion"."""
+Format: Markdown with exactly these section headings: "## Methods", "## Results", "## Discussion", "## Conclusion",
+and the "###" subsections required above under Methods and Discussion. Results may use "###" subheadings that
+describe what was examined (never labels such as exploratory)."""
 
 REWRITE = """An automatic check of your draft found the problems listed under CHECK FINDINGS. Return the complete
 corrected draft, following all the original rules.
@@ -392,6 +405,11 @@ Actions you can propose:
   Table 1 gains the characteristics it lacks, and the separate table is left out of the paper. Use it whenever an
   author asks to merge a table into Table 1, or a table repeats Table 1's comparison.
 - "remove_figure": leave a figure out of the paper and put its information in the text (give "figure", its number).
+- "to_supplement" / "to_main": report analyses in the supplementary material (appendix), or back in the main Results
+  (give "analysis_ids"). Sensitivity analyses usually belong in the supplement.
+- "label_values": give names to a column's codes in every table (for example clinic 1 to 6): give "column" and
+  "labels" ({"1": "name", ...}). Take the names from the protocol, the supporting materials or the author's message;
+  if they are in none of these, ask the author for them (type "none") and never invent them.
   The analysis and its numbers stay; only the figure goes.
 - "none": just answer.
 
@@ -404,7 +422,9 @@ covariates to change its estimate). Say so in "reply".
 
 Reply with ONLY a JSON object:
 {"reply": "your answer to the author, 1 to 4 sentences",
- "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|merge_into_table1|leave_out|remove_figure|none",
+ "action": {"type": "variant|new_analysis|redo|rewrite_text|table1|merge_into_table1|leave_out|remove_figure|to_supplement|to_main|label_values|none",
+            "analysis_ids": ["id", "..."] (to_supplement and to_main only), "column": "column (label_values only)",
+            "labels": {"code": "name"} (label_values only),
             "analysis_id": "id or null", "instruction": "what to do, precisely, for the agent that will do it",
             "figure": "figure number or null (remove_figure only)",
             "stratify_by": "column or null (table1 only)", "variables": ["column", "..."] (table1 only)}}"""

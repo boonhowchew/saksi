@@ -50,6 +50,22 @@ AUC_PLAN = {"id": "auc", "title": "Discrimination of the primary model", "object
 DRAFT = f"""[Authors: introduction]
 
 ## Methods
+### Study design and setting
+A retrospective cohort of pregnant women booking at six public health clinics.
+
+### Participants
+Women with an oral glucose tolerance test in pregnancy; those with pre-existing diabetes were excluded.
+
+### Variables
+Gestational diabetes (GDM) by the oral glucose tolerance test; booking body mass index (BMI) in kg/m2; maternal age, parity and previous GDM.
+
+### Data sources and measurement
+Antenatal records abstracted on structured forms.
+
+### Study size
+The protocol planned 400 women with about 40 GDM events [A:primary].
+
+### Statistical analysis
 As pre-specified in the protocol, a multivariable logistic regression was fitted with gestational diabetes (GDM) as the outcome and booking BMI as the exposure, adjusted for maternal age, parity and previous GDM. Records with missing values were excluded (complete-case analysis). The data were first checked for missing values, duplicates and outliers. Characteristics were summarised by GDM status as mean (SD) or median (IQR), as their distribution indicated, and as n (%), and compared with t, Mann-Whitney, chi-square or Fisher's exact tests. The model was checked for events per predictor parameter, collinearity, linearity of the logit, influential observations, fit, discrimination and calibration. The dataset held {dq['n_rows']} records and {dq['n_columns']} columns, with no duplicated records; booking BMI was missing for {bmi_missing} women [A:s_data_quality].
 
 ## Results
@@ -66,7 +82,17 @@ In an exploratory variant of this model that the authors asked for after seeing 
 In a pre-specified exploratory analysis, the area under the ROC curve of the primary model was {auc:.2f} (Table 3; Figures 4 and 5) [A:auc.r1].
 
 ## Discussion
-The intervals are wide and include no association, so the data are compatible with both no association and a modest one. [Authors: comparison with previous studies]
+### Principal findings
+The intervals are wide and include no association, so the data are compatible with both no association and a modest one. 
+
+### Comparison with other studies
+[Authors: comparison with previous studies]
+
+### Strengths and limitations
+The analysis was pre-specified and checked by code; the sample fell short of the plan, so the estimates are imprecise.
+
+### Implications
+A larger study is needed.
 """
 LIMIT = "The number of GDM events was small relative to the number of model parameters, so the estimates may be unstable."
 REVIEW1 = {"primary_claim": "Booking BMI was not clearly associated with GDM after adjustment.",
@@ -87,7 +113,7 @@ model = ScriptedModel({"curate": [CURATOR_REPLY] * 6,      # the Curator updates
                        # the first plan, then the redraft agreed in the plan conversation
                        "plan": [PLAN_OUT, PLAN_OUT],
                        # the planned analyses; then, from the walk-through's AI boxes, a variant and a redo
-                       "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED), fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT], "review": [REVIEW1, REVIEW2]})
+                       "code": [fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED), fence(GOOD_WITH_DIAGNOSTICS), fence(AUC_FIXED)], "write": [DRAFT] * 4, "review": [REVIEW1, REVIEW2]})
 root = tempfile.mkdtemp()
 app = create_app(root, agents_factory=lambda p: Agents(p, ModelClient(p.blobs, transport=model, mode="live"), LocalExecutor()))
 print(f"Offline Saksi on http://127.0.0.1:8765 (data in {root})")

@@ -530,6 +530,7 @@ async function render() {
   if (S.tab === "draft") maybeOpenDraft();
   if (S.tab === "plan") maybeSuggestAnswers();
   if (S.tab === "materials") maybeUpdateCurator();
+  if (S.tab === "draft") maybeReviseForChecklist();
   maybeStartAnalysis();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
@@ -976,7 +977,7 @@ async function figureHtml(f, plain = false) {
   const ctl = (f.omitted ? `<br><span class="small">Left out of the paper by ${esc(name(f.omitted.by))}: “${esc(f.omitted.reason)}”.</span>${can ? ` <button class="linkish small" data-action="restorefig" data-aid="${esc(f.analysis_id)}" data-name="${esc(f.name)}" data-label="Putting it back">Put it back</button>` : ""}`
     : plain && can ? ` <button class="linkish small" data-action="omitfig" data-aid="${esc(f.analysis_id)}" data-name="${esc(f.name)}" data-label="Leaving it out">Leave this figure out and give its information in the text</button>` : "");
   return `<figure class="fig${f.omitted ? " omitted" : ""}"><img src="${uri}" alt="Figure ${f.number || ""}: ${esc(f.caption)}" loading="lazy">
-    <figcaption><strong>${f.number ? `Figure ${f.number}.` : f.omitted ? "Figure left out." : "Replaced figure."}</strong> ${esc(f.caption)}${ctl}
+    <figcaption><strong>${f.number || f.s_number ? `${figRef(f)}.` : f.omitted ? "Figure left out." : "Replaced figure."}</strong> ${esc(f.caption)}${ctl}
     ${plain ? "" : `<br><span class="small muted">${f.drawn_by === "saksi" ? "Drawn by Saksi from the recorded results, without a model" : "Drawn by the analysis code in the sandbox, from the data"}.</span>
     ${problems ? `<span class="tag attn">caption: ${esc(problems)}</span>` : `<span class="tag good">caption checked</span>`}
     ${f.warning ? `<span class="tag bad">${esc(f.warning)}</span>` : ""}
@@ -1009,7 +1010,7 @@ function pubTableHtml(t, { editable = false, note = "" } = {}) {
   const head = t.columns.map((c, j) => `<th class="${j ? "r" : ""}"${ce("col:" + j)}>${esc(c).replace(/\n/g, "<br>")}</th>`).join("");
   const body = t.rows.map((r, i) => `<tr>${r.cells.map((c, j) => { const mk = (r.marks || {})[j];
     return `<td class="${j ? "r" : ""}${r.indent && !j ? " ind" : ""}${editable && j ? " locked" : ""}"${j ? (editable ? ' title="From the computed results: numbers cannot be edited"' : "") : ce("row:" + i)}>${esc(c)}${mk ? `<sup>${esc(mk)}</sup>` : ""}</td>`; }).join("")}</tr>`).join("");
-  return `<div class="pubtable" id="pt-${t.number}" data-aid="${esc(t.analysis_id)}"><p class="ptitle"><strong>Table ${t.number}.</strong> <span${ce("title")}>${esc(t.title)}</span></p>
+  return `<div class="pubtable" id="pt-${t.number || "s" + t.s_number}" data-aid="${esc(t.analysis_id)}"><p class="ptitle"><strong>${esc(tableRef(t))}.</strong> <span${ce("title")}>${esc(t.title)}</span></p>
     <div class="tablewrap"><table class="pub"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
     <div class="pnotes">${t.footnotes.map((n, k) => `<p${ce("note:" + k)}>${noteHtml(n)}</p>`).join("")}</div>
     ${t.edited?.length && !editable ? `<p class="edited-note">Wording edited by ${esc(tableEditors() || "an author")}; the numbers are as computed.</p>` : ""}
@@ -1195,11 +1196,13 @@ function changesHtml() {
 function editorsOf(id) {
   return [...new Set(S.events.filter((e) => e.type === "analysis.described" && e.payload.analysis_id === id && e.payload.edited_by_author).map((e) => name(e.actor_id)))];
 }
+const tableRef = (t) => !t ? "the table" : t.number ? `Table ${t.number}` : t.s_number ? `Supplementary Table S${t.s_number}` : "the table";
+const figRef = (f) => f.number ? `Figure ${f.number}` : f.s_number ? `Supplementary Figure S${f.s_number}` : "the figure";
 function unresolveRefs(text, id, tables) {
   const t = tables.find((x) => x.analysis_id === id);
   let out = text;
-  if (t?.number) out = out.replace(new RegExp(`\\bTable ${t.number}\\b`, "g"), "[[Table]]");
-  for (const f of S.state.figures) if (f.analysis_id === id && f.number) out = out.replace(new RegExp(`\\bFigure ${f.number}\\b`, "g"), `[[Figure:${f.name}]]`);
+  if (t?.number || t?.s_number) out = out.replace(new RegExp(`\\b${tableRef(t)}\\b`, "g"), "[[Table]]");
+  for (const f of S.state.figures) if (f.analysis_id === id && (f.number || f.s_number)) out = out.replace(new RegExp(`\\b${figRef(f)}\\b`, "g"), `[[Figure:${f.name}]]`);
   return out;
 }
 function chatBox(id, canRun) {
@@ -1222,15 +1225,23 @@ async function resultsView(tables, canRun) {
     ${await rtext(dq[0], dq[1], tables, canRun)}${chatBox(dq[0], canRun)}</div>`;
   h += `<h2>Results</h2>`;
   if (!cur.some(([, a]) => a.standard === "table1")) h += `<div class="rsec"><h4>Characteristics of the participants</h4>${table1Builder(canRun)}</div>`;
-  for (const [id, a] of cur) {
-    if (a.standard === "data_quality") continue;
+  const section = async ([id, a], supp) => {
     const t = tables.find((x) => x.analysis_id === id);
-    const figs = S.state.figures.filter((f) => f.analysis_id === id && f.number).sort((x, y) => x.number - y.number);
-    h += `<div class="rsec" id="r-${esc(id)}"><h4${canRun && a.description ? ` contenteditable="true" data-head="${esc(id)}"` : ""}>${esc(head(id, a))}</h4>
+    const figs = S.state.figures.filter((f) => f.analysis_id === id && (supp ? f.s_number : f.number)).sort((x, y) => (x.number || x.s_number) - (y.number || y.s_number));
+    const movable = canRun && !a.standard && a.label !== "confirmatory";
+    return `<div class="rsec" id="r-${esc(id)}"><h4${canRun && a.description ? ` contenteditable="true" data-head="${esc(id)}"` : ""}>${esc(head(id, a))}</h4>
       ${await rtext(id, a, tables, canRun)}
-      ${t ? (t.number ? pubTableHtml(t) : `<p class="notref">Same results as Table ${esc(t.duplicate_of.number)} (${esc(t.duplicate_of.analysis_id)}), so the table is not shown again.</p>`) : ""}
+      ${t ? (t.number || t.s_number ? pubTableHtml(t) : `<p class="notref">Same results as Table ${esc(t.duplicate_of.number)} (${esc(t.duplicate_of.analysis_id)}), so the table is not shown again.</p>`) : ""}
       ${(await Promise.all(figs.map((f) => figureHtml(f, true)))).join("")}
+      ${movable ? `<p class="small"><button class="linkish small" data-action="place" data-id="${esc(id)}" data-place="${supp ? "main" : "supplement"}" data-label="Moving">${supp ? "Move to the main Results" : "Move to the supplementary material"}</button>${supp && a.place?.reason ? ` <span class="muted">${esc(a.place.reason)} (${esc(name(a.place.requested_by || a.place.by))})</span>` : ""}</p>` : ""}
       ${chatBox(id, canRun)}</div>`;
+  };
+  const isSupp = (a) => a.place?.where === "supplement";
+  for (const x of cur) if (x[1].standard !== "data_quality" && !isSupp(x[1])) h += await section(x, false);
+  const supp = cur.filter((x) => isSupp(x[1]));
+  if (supp.length) {
+    h += `<h2 id="supplement">Supplementary material</h2><p class="small muted">Reported in the appendix to the paper, with a sentence in the Results that points to it. Tables and figures here are numbered S1, S2, ...</p>`;
+    for (const x of supp) h += await section(x, true);
   }
   return `<article class="manuscript-view results" id="results-view">${h}</article>`;
 }
@@ -1244,7 +1255,8 @@ async function suggestionsNow() {
   return S.sugg.list;
 }
 const ACTION_LABEL = { variant: "Run it as a sensitivity analysis", redo: "Redo the analysis", rewrite_text: "Write the text",
-  table1: "Build Table 1", leave_out: "Leave it out", new_analysis: "Run it", merge_into_table1: "Fold it into Table 1" };
+  table1: "Build Table 1", leave_out: "Leave it out", new_analysis: "Run it", merge_into_table1: "Fold it into Table 1",
+  to_supplement: "Move to the supplementary material" };
 function suggestionsHtml(list, canRun) {
   if (!list.length) return "";
   return `<section class="advisor"><h2 class="step"><span class="aibadge">AI</span>Saksi's suggestions <span class="who">The rules of epidemiology and biostatistics, applied by code to these results. Nothing runs until you choose.</span></h2>
@@ -1254,6 +1266,9 @@ function suggestionsHtml(list, canRun) {
 // What actually happened, said after it has run (never before).
 function doneText(a) {
   switch (a.type) {
+    case "to_supplement": return `Done: ${(a.analysis_ids || []).length > 1 ? "they are" : "it is"} now in the supplementary material, numbered S1, S2, ...`;
+    case "to_main": return "Done: back in the main Results.";
+    case "label_values": return `Done: the codes of ${a.column} now show their names in every table.`;
     case "merge_into_table1": return `Done: Table 1 now includes ${a.added?.length ? a.added.length + " more characteristic" + (a.added.length > 1 ? "s" : "") : "these characteristics"}${a.leave_out ? `, and Table ${a.table_number || ""} is left out of the paper (kept in the record)` : ""}.`.replace("Table  ", "Table ");
     case "remove_figure": return `Done: Figure ${a.figure_number || ""} is left out, and its information is in the text.`;
     case "variant": case "new_analysis": return "Done: the new analysis is below, labelled exploratory.";
@@ -1273,6 +1288,17 @@ async function runProposal(action, message) {
     case "redo": r = await agent("redo", { analysis_id: id, reason: action.instruction }); break;
     case "rewrite_text": return agent("describe", action.instruction ? { analysis_id: id, instruction: action.instruction } : { analysis_id: id });
     case "remove_figure": return omitFigure(id, action.figure_name, action.instruction || message);
+    case "to_supplement": case "to_main": {
+      for (const aid of action.analysis_ids || [id]) {
+        try { r = await command("place_analysis", { analysis_id: aid, place: action.type === "to_main" ? "main" : "supplement", reason: action.instruction || message }); }
+        catch (e) { if (!/already there/.test(e.message)) throw e; }
+      }
+      return refreshDraftAfterResultsChange(r);
+    }
+    case "label_values": {
+      r = await command("set_value_labels", { column: action.column, labels: action.labels, reason: message || action.instruction || "" });
+      return refreshDraftAfterResultsChange(r);
+    }
     case "merge_into_table1": {
       // Table 1 gains what the other table adds; the other table leaves the paper (kept in the record).
       const m = action;
@@ -1407,8 +1433,8 @@ async function descriptionHtml(id, a, tables, canAsk) {
 }
 function resolveRefs(text, id, tables) {
   const t = tables.find((x) => x.analysis_id === id);
-  let out = text.replaceAll("[[Table]]", t ? `Table ${t.number}` : "the table");
-  for (const f of S.state.figures) if (f.analysis_id === id) out = out.replaceAll(`[[Figure:${f.name}]]`, f.number ? `Figure ${f.number}` : "the figure");
+  let out = text.replaceAll("[[Table]]", tableRef(t));
+  for (const f of S.state.figures) if (f.analysis_id === id) out = out.replaceAll(`[[Figure:${f.name}]]`, figRef(f));
   return out.replace(/\[\[Figure:[^\]]*\]\]/g, "the figure");
 }
 
@@ -1559,6 +1585,25 @@ function refsIn(t) {
   }
   return out;
 }
+// The supplementary material (appendix): each analysis the authors put there, with its own number-checked text,
+// its table and figures numbered S1, S2, ... It goes with the paper; the Results point to it.
+async function supplementHtml() {
+  const s = S.state;
+  const supp = Object.entries(s.analyses).filter(([, a]) => a.place?.where === "supplement" && a.status === "ok" && !a.superseded_by && !a.withdrawn)
+    .sort((x, y) => x[1].seq - y[1].seq);
+  if (!supp.length) return "";
+  const tables = await tablesNow();
+  let h = "";
+  for (const [id, a] of supp) {
+    const t = tables.find((x) => x.analysis_id === id && x.s_number);
+    const text = a.description ? resolveRefs(await blob(a.description.text_sha256) || "", id, tables) : "";
+    const figs = s.figures.filter((f) => f.analysis_id === id && f.s_number).sort((x, y) => x.s_number - y.s_number);
+    h += `<h3>${esc(a.description?.heading || a.spec?.title || id)}</h3>${text.split(/\n{2,}/).map((p) => `<p>${inlineMd(p, [], false)}</p>`).join("")}
+      ${t ? pubTableHtml(t) : ""}${(await Promise.all(figs.map((f) => figureHtml(f, true)))).join("")}`;
+  }
+  return `<article class="manuscript-view supplement" id="supp"><h2>Supplementary material</h2>
+    <p class="small muted">Appendix to the paper: the analyses the authors placed here, each with its text, tables and figures, numbered S1, S2, ... Change what goes here on the Analyses page.</p>${h}</article>`;
+}
 // What has changed in the Results since a draft version was written (null if nothing).
 function resultsChangedSince(v) {
   const s = S.state, d = s.drafts?.[String(v)];
@@ -1645,6 +1690,33 @@ function canvasTableEdits(base) {
   }
   return edits;
 }
+function canRevise(v) {
+  const s = S.state;
+  return isAuthor() && ["AUTHOR_REVISION", "RESPONSE"].includes(s.stage) && +v === s.draft_version;
+}
+function checklistInstructions(items, guideline) {
+  const todo = items.filter((x) => x.status === "missing" || x.status === "partly");
+  return `REPORTING GUIDELINE ${guideline}: report these items fully, each in the subsection where journals expect it:\n`
+    + todo.map((x) => `- ${x.id} (${x.status}) ${x.item}${x.note ? `: ${x.note}` : ""}`).join("\n");
+}
+// After a draft is checked against its guideline, Saksi revises it once, by itself, to report what is missing.
+function maybeReviseForChecklist() {
+  const s = S.state, v = s.draft_version, d = s.drafts?.[String(v)];
+  if (!d?.checklist || S.busy || !canRevise(v) || String(d.instructions || "").startsWith("REPORTING GUIDELINE")) return;
+  const c = d.checklist;
+  if (!(c.summary.missing + c.summary.partly)) return;
+  S.reviseTried = S.reviseTried || {};
+  const key = `${S.pid}|${v}`;
+  if (S.reviseTried[key]) return;
+  S.reviseTried[key] = true;
+  act(null, async () => {
+    const items = await blobJSON(c.items_sha256) || [];
+    const r = await agent("write_draft", { instructions: checklistInstructions(items, c.guideline) });
+    try { await agent("checklist", { version: r.state.draft_version }); } catch { /* the page offers it */ }
+    return r;
+  }, `The Writing Agent revised the draft to report the ${c.guideline} items that were missing or partly reported, and the new version was checked again.`,
+  `The Writing Agent is revising the draft to report the ${c.summary.missing + c.summary.partly} ${c.guideline} items that are missing or partly reported.`);
+}
 async function checklistHtml(d, v, canRun) {
   const design = S.state.plan_locked?.report?.design || "other", g = GUIDELINE[design];
   const c = d.checklist;
@@ -1654,6 +1726,8 @@ async function checklistHtml(d, v, canRun) {
   const mark = { reported: ["good", "reported"], partly: ["attn", "partly"], missing: ["bad", "missing"], not_applicable: ["", "not applicable"] };
   return `<section><h2>Reporting checklist: ${esc(c.guideline)}</h2>
     <p class="small">${esc(c.summary.reported)} reported, ${esc(c.summary.partly)} partly, ${esc(c.summary.missing)} missing. Quotations are checked against this version by code; "[Authors]" marks what only you can supply. ${run}</p>
+    ${canRevise(v) && c.summary.missing + c.summary.partly ? `<div class="bigaction"><p><strong>${c.summary.missing + c.summary.partly} item${c.summary.missing + c.summary.partly > 1 ? "s are" : " is"} not fully reported.</strong> The Writing Agent revises the draft to report each one where the guideline expects it, from the protocol, your materials and answers; what only you can supply is marked “[Authors: …]”.</p>
+      <button class="btn" data-agent="write_draft" data-args='${esc(JSON.stringify({ instructions: checklistInstructions(items, c.guideline) }))}' data-label="The Writing Agent is revising the draft against ${esc(c.guideline)}">Revise the draft to report them</button></div>` : ""}
     <details ${c.summary.missing + c.summary.partly ? "open" : ""}><summary>The items</summary><div class="tablewrap"><table><thead><tr><th>Item</th><th>Status</th><th>Where, or what is needed</th></tr></thead><tbody>
     ${items.map((x) => `<tr><td><span class="muted small">${esc(x.id)}</span> ${esc(x.item)}</td><td><span class="tag ${mark[x.status][0]}">${mark[x.status][1]}</span></td>
       <td class="small">${x.quote ? `“${esc(x.quote)}”` : ""}${x.note ? ` ${esc(x.note)}` : ""}</td></tr>`).join("")}</tbody></table></div></details></section>`;
@@ -1712,6 +1786,7 @@ async function draft() {
     ${canEdit && !editing ? `<div class="bigaction"><p><strong>Edit on the page.</strong> Click any paragraph to change its words. In the tables you can reword the title, headings, row labels and footnotes; the numbers are locked, because they come from the results. Saving makes version ${v + 1}, recorded under your name and checked again.</p>
       <button class="btn" data-action="canvas">Edit on the page</button></div>` : ""}
     <article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
+    ${await supplementHtml()}
     ${editing ? `<form class="savebar" data-form="canvassave">
       <label><span class="small">What you changed and why (kept in the record)</span><input type="text" name="summary" required placeholder="For example: added the small-events limitation; relabelled the GDM groups"></label>
       <button class="btn" data-label="Saving">Save as version ${v + 1}</button>
@@ -1897,6 +1972,9 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "updatecurator": return updateCurator(t);
+    case "place": return act(t, async () => refreshDraftAfterResultsChange(await command("place_analysis", { analysis_id: t.dataset.id, place: t.dataset.place,
+        reason: t.dataset.place === "supplement" ? "Moved to the supplementary material by the authors" : "Moved back to the main Results by the authors" })),
+      t.dataset.place === "supplement" ? "Moved to the supplementary material. Its tables and figures are numbered S1, S2, ..." : "Back in the main Results.");
     case "omitfig": return act(t, () => omitFigure(t.dataset.aid, t.dataset.name, "Its information is given in the text instead."),
       "The figure is left out, its information is in the text, and the draft follows.", "Leaving the figure out and rewriting the text to give its information.");
     case "restorefig": return act(t, async () => { await command("restore_figure", { analysis_id: t.dataset.aid, name: t.dataset.name });

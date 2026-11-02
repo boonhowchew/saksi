@@ -152,6 +152,16 @@ with sync_playwright() as p:
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
     print("text edit:", page.locator("#r-primary .byline").inner_text())
     shot(page, "05c-results-edited")
+    # A sensitivity-style result goes to the supplementary material (numbered S1) and comes back.
+    page.wait_for_function("() => !document.querySelector('.busy') && !S.busy", timeout=120000)
+    page.locator("#r-x_q1").get_by_role("button", name="Move to the supplementary material").click()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
+    print("supplement:", page.locator("#supplement").count(), "section |",
+          page.locator("#r-x_q1 .ptitle strong").first.inner_text() if page.locator("#r-x_q1 .ptitle").count() else "no table")
+    assert page.locator("#supplement").count() == 1
+    page.locator("#r-x_q1").get_by_role("button", name="Move to the main Results").click()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
+    assert page.locator("#supplement").count() == 0
     # A figure the authors do not want: left out, its information put in the text, recorded under their name.
     page.wait_for_function("() => !document.querySelector('.busy') && !S.busy", timeout=120000); page.wait_for_timeout(300)
     nfig = page.locator("#results-view figure.fig").count()
@@ -209,7 +219,7 @@ with sync_playwright() as p:
     # reviewer
     signout(page); signin(page, toks["rev1"])
     print("reviewer next:", page.locator(".next p").inner_text())
-    page.get_by_role("tab", name="Review").click(); click(page, "Ask for a briefing on version 1"); shot(page, "07-briefing")
+    page.get_by_role("tab", name="Review").click(); click(page, "Ask for a briefing on version"); shot(page, "07-briefing")
     page.get_by_role("button", name="Use as a comment").first.click(); page.wait_for_timeout(400)
     click(page, "Add comment"); click(page, "Ask for revision")
     print("after revision:", page.locator(".progress .where strong").inner_text())
@@ -225,7 +235,7 @@ with sync_playwright() as p:
     assert page.locator("#ms td.locked").count() > 0, "numbers are locked on the page"
     shot(page, "08a-canvas")
     page.fill("form[data-form=canvassave] input[name=summary]", "Added the small-events limitation (R1); relabelled a group")
-    click(page, "Save as version 2")
+    click(page, "Save as version")
     print("canvas save:", note(page)[:80])
     assert "No GDM" in page.locator("#ms .pubtable[data-aid='s_table1.r1']").inner_text()
     page.get_by_role("tab", name="Review").click()
@@ -236,14 +246,14 @@ with sync_playwright() as p:
     page.get_by_role("tab", name="Review").click(); click(page, "Send the response to the reviewer")
     print("after response:", page.locator(".progress .where strong").inner_text())
     signout(page); signin(page, toks["rev1"])
-    page.get_by_role("tab", name="Review").click(); click(page, "Ask for a briefing on version 2"); shot(page, "08-round2")
+    page.get_by_role("tab", name="Review").click(); click(page, "Ask for a briefing on version"); shot(page, "08-round2")
     click(page, "Give verdict"); click(page, "Accept the manuscript")
     signout(page); page.locator("[data-action=resume]").first.click(); page.wait_for_selector(".progress")
     for who in ("boon-how-chew", "siti-aminah"):
         page.select_option("select[data-change=switch]", who); page.wait_for_timeout(600)
         page.get_by_role("tab", name="Review").click()
         page.fill("form[data-form=attest] textarea[name=statement]", "I have read the final version and stand behind it.")
-        click(page, "Attest version 2")
+        click(page, "Attest version")
     print("final stage:", page.locator(".progress .where strong").inner_text(), "|", page.locator(".seal").inner_text()[:60])
     page.get_by_role("tab", name="Record").click(); page.wait_for_timeout(500); shot(page, "09-record")
     page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(400); shot(page, "10-final-draft")
