@@ -200,3 +200,16 @@ def test_reviewer_questions_the_data_in_aggregate_and_never_downloads_it(in_revi
     assert "lack booking BMI" in r["answer"] and r["n"] == 400
     assert ["test small", "<5"] in r["table"]["rows"]                    # small counts suppressed
     assert aggregate_only({"answer": "x", "table": {"columns": ["id"], "rows": [[i] for i in range(100)]}}) is None
+
+
+def test_other_authors_agree_with_a_response_by_name(in_review):
+    p, agents, model = in_review
+    s = _to_response(p, agents, model)
+    s = p.respond("bhc", "R2", "rebutted", "A trial could not answer this.")
+    with pytest.raises(WorkflowError, match="already given"):
+        p.endorse_response("bhc", "R2")
+    s = p.endorse_response("coauthor", "R2")
+    r = s.items["R2"]["responses"][-1]
+    assert r["by"] == "bhc" and r["ts"] and [e["by"] for e in r["endorsed_by"]] == ["coauthor"]
+    with pytest.raises(WorkflowError, match="no response"):
+        p.endorse_response("coauthor", "R1")

@@ -590,7 +590,8 @@ Values must be JSON-safe (convert numpy types with float() or int()). Never prin
 dates of individual records or any row of the data. If the question cannot be answered from aggregates, return
 {"answer": "why it cannot be answered from aggregates", "n": 0}.
 
-The DATA DICTIONARY gives the columns and their meaning. Reply with ONLY the code in one ```python block."""
+The DATA DICTIONARY gives the columns and their meaning. Think briefly; the code should be short (under 60 lines).
+Reply with ONLY the code in one ```python block."""
 
 FRONT_MATTER = """You are the Writing Agent in Saksi, writing the front matter of a manuscript from its current draft:
 the abstract, a suggested title and keywords. A program checks every number in the abstract against the results.

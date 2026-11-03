@@ -285,7 +285,13 @@ with sync_playwright() as p:
     assert page.locator("#ms ins").count() >= 1
     click(page, "Show the clean text")
     signoff(page)
-    page.select_option("select[data-change=switch]", "siti-aminah"); page.wait_for_timeout(600); signoff(page)
+    page.select_option("select[data-change=switch]", "siti-aminah"); page.wait_for_timeout(600)
+    # The co-author agrees with the response the corresponding author gave.
+    page.get_by_role("tab", name="Review").click(); page.wait_for_timeout(400)
+    print("responded:", page.locator(".btn.done").count(), "|", page.locator("section", has_text="Comments").locator(".msg").first.inner_text()[:110])
+    click(page, "I agree with this response")
+    print("agreed:", page.locator(".endorse span").first.inner_text()[:100])
+    signoff(page)
     page.select_option("select[data-change=switch]", "boon-how-chew"); page.wait_for_timeout(600)
     page.get_by_role("tab", name="Review").click(); click(page, "Send the response to the reviewer")
     print("after response:", page.locator(".progress .where strong").inner_text())

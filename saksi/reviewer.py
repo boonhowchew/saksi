@@ -47,6 +47,9 @@ CATEGORIES = {"protocol_adherence", "interpretation", "statistics", "reporting",
 ASSESSMENTS = {"addressed", "partly_addressed", "not_addressed", "cannot_tell"}
 MAX_POINTS = 10
 SETTINGS = {"temperature": 0.2, "max_tokens": 16000, "timeout": 600.0}   # it always reasons before answering
+# A data question: the open-weights model reasons at length before it writes the code, and its reasoning counts
+# against max_tokens (Baseten takes no reasoning setting), so it gets a much larger budget.
+QUERY_SETTINGS = {"temperature": 0.1, "max_tokens": 48000, "timeout": 600.0}
 CODE_CHARS, DIFF_CHARS, PROTOCOL_CHARS = 6000, 20000, 40000
 
 
@@ -72,7 +75,7 @@ class ReviewerAssistant:
             dic = [{k: d.get(k) for k in ("column", "label", "type", "units_or_coding")} for d in rep.get("dictionary") or []]
         user = f"THE REVIEWER'S QUESTION: {question}\n\nDATA DICTIONARY:\n{json.dumps(dic)[:40000]}"
         r = self.client.chat(PROVIDER, [{"role": "system", "content": DATA_QUERY}, {"role": "user", "content": user}],
-                             purpose="review_data_query", **SETTINGS)
+                             purpose="review_data_query", **QUERY_SETTINGS)
         call = r.record.to_payload()
         m = _re.search(r"```(?:python)?\s*\n(.*?)```", r.text, _re.S)
         code = (m.group(1) if m else r.text).strip()

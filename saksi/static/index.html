@@ -172,6 +172,8 @@ del { color: #9b1c1c; text-decoration: line-through; background: #fbeaea; } ins 
 .tracked p { margin: .5rem 0; } .tracked .chg-tag { font-size: .7rem; vertical-align: super; color: var(--muted); }
 .spin { display: inline-block; width: .8em; height: .8em; border: 2px solid var(--rule); border-top-color: var(--accent, #23366f); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.endorse { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .3rem 0; }
+.btn.done, .btn.done:disabled { background: #e3f1ec; color: #14532d; border-color: #9cc9b4; opacity: 1; cursor: default; }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -703,6 +705,13 @@ function people() {
 }
 
 /* Data */
+// Where a document is publicly available, so the reviewer (and later readers) open it at its source.
+function linkControl(m) {
+  const can = isAuthor() && S.state.stage !== "FINAL";
+  return `<div class="small">${m.link ? `Public link: <a href="${esc(m.link.url)}" target="_blank" rel="noreferrer">${esc(m.link.url)}</a>. ` : ""}
+    ${can ? `<details ${m.link ? "" : ""}><summary>${m.link ? "Change the public link" : "Add a public link for the reviewer (DOI, journal, preprint, OSF, registry, ethics repository)"}</summary>
+      <form class="chatform" data-form="linkmaterial" data-sha="${esc(m.sha256)}"><input type="text" name="url" value="${esc(m.link?.url || "")}" placeholder="https://... or 10.xxxx/..." aria-label="Public link"><button class="btn quiet" data-label="Saving">Save the link</button></form></details>` : ""}</div>`;
+}
 function prepareBox(again) {
   return `<div class="bigaction"><p><strong>${again ? "Draft the plan again" : "Next: let the agents prepare the analysis plan."}</strong>
     The Data Curator checks the dataset (from summaries only, never rows), then the Analysis Agent reads the protocol and drafts the plan. Saksi checks every quotation against the protocol. This takes a few minutes.</p>
@@ -743,6 +752,7 @@ async function materials() {
       <div class="head"><span class="kind">${label}</span><span>${esc(m.filename)}</span><span class="tag good">in use</span>
         <span class="small muted">uploaded by ${esc(name(m.by))}</span></div>
       <div class="small">${readText(m)}</div>
+      ${m.kind !== "dataset" ? linkControl(m) : ""}
       ${m.kind === "protocol" && m.inspection?.preview ? `<details class="small"><summary>The start of the text Saksi reads</summary><blockquote>${esc(m.inspection.preview)}…</blockquote>
         <p class="muted">Quotations in the plan are checked against this text. If it looks garbled, upload a Word or text version of the protocol.</p></details>` : ""}
       ${canFile ? removeControl(m) : ""}${isAuthor() && m.kind === "dataset" ? ` <button class="linkish small" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</div>`
@@ -791,7 +801,7 @@ async function materials() {
       <label><span>Note (optional)</span><input type="text" name="note"></label>
       <button class="btn" data-label="Uploading">Upload</button></form></section>` : ""}
   ${others.length ? `<section><h2>Other files</h2><div class="tablewrap"><table><thead><tr><th>What</th><th>File</th><th>Status</th><th>Read by Saksi</th></tr></thead><tbody>
-    ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}</td><td class="small">${status(m)}${canFile && !m.withdrawn ? removeControl(m) : ""}${isAuthor() && !m.withdrawn && m.kind === "dataset" ? ` <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
+    ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${!m.withdrawn && m.kind !== "dataset" ? linkControl(m) : ""}</td><td class="small">${status(m)}${canFile && !m.withdrawn ? removeControl(m) : ""}${isAuthor() && !m.withdrawn && m.kind === "dataset" ? ` <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
   ${rep}
   ${await preparationHtml(canEdit, rawDs, ds)}`;
 }
@@ -1758,7 +1768,7 @@ async function studyMaterialsHtml() {
     <ul>${docs.map((m) => `<li><strong>${esc(m.kind.replaceAll("_", " "))}</strong>: ${esc(m.filename)}
       ${m.link ? ` · <a href="${esc(m.link.url)}" target="_blank" rel="noreferrer">at its source</a>${m.link.note ? ` (${esc(m.link.note)})` : ""}` : ""}
       · <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>
-      ${isAuthor() && s.stage !== "FINAL" ? `<form class="chatform small" data-form="linkmaterial" data-sha="${esc(m.sha256)}"><input type="text" name="url" value="${esc(m.link?.url || "")}" placeholder="Public link or DOI (journal, preprint, OSF, registry, ethics repository)" aria-label="Public link"><button class="btn quiet" data-label="Saving">Save the link</button></form>` : ""}</li>`).join("")}</ul>
+</li>`).join("")}</ul>
     ${ds ? `<h3>The dataset</h3><p>${esc(ds.filename)}${ds.inspection?.rows ? `: ${esc(ds.inspection.rows)} records, ${esc(ds.inspection.columns)} columns` : ""}. Not downloadable by the reviewer.</p>
       ${canAsk ? `<form class="chatform" data-form="dataquery"><span class="aibadge">AI</span><input type="text" name="question" required autocomplete="off" placeholder="Ask the data: for example, how many women had missing booking BMI, by GDM status?" aria-label="Question about the data"><button class="btn quiet" data-label="Saksi is running the question on the data">Ask</button></form>` : ""}
       ${rows.join("")}` : ""}</section>`;
@@ -1818,6 +1828,23 @@ async function trackedHtml(base, v) {
   return `<article class="manuscript-view tracked" id="ms"><p class="small muted">Tracked changes from version ${base} to version ${v}: ${count} passage${count === 1 ? "" : "s"} changed. <ins>Inserted</ins>, <del>deleted</del>; the comment each change answers is in brackets.</p>${html}</article>`;
 }
 
+// Which comments have a response recorded (as the server holds it), and which are still open.
+function responseTally() {
+  const s = S.state, items = Object.entries(s.items).filter(([, it]) => it.round === s.round);
+  if (!items.length || !["RESPONSE", "REVIEW"].includes(s.stage)) return "";
+  const done = items.filter(([, it]) => it.status !== "open"), open = items.filter(([, it]) => it.status === "open");
+  return `<p class="msg ${open.length ? "warn" : "ok"} small"><strong>${done.length} of ${items.length} comments have a recorded response</strong>${done.length ? `: ${done.map(([id, it]) => `${esc(id)} (${esc(name(it.responses.at(-1)?.by))}${(it.responses.at(-1)?.endorsed_by || []).length ? ` + ${it.responses.at(-1).endorsed_by.length} agreed` : ""})`).join(", ")}` : ""}.
+    ${open.length ? `Still open: ${open.map(([id]) => esc(id)).join(", ")}.` : s.stage === "RESPONSE" ? "Every comment has a response; once every author has signed off the latest version, send the response to the reviewer." : ""}</p>`;
+}
+// After a response: the responder's button reads Responded; every other author can agree, by name and time.
+function endorseHtml(id, it, r) {
+  const s = S.state, agreed = r.endorsed_by || [], inResponse = s.stage === "RESPONSE";
+  const all = s.authors.length, n = 1 + agreed.length;
+  const mine = r.by === S.you || agreed.some((e) => e.by === S.you);
+  return `<p class="endorse"><button class="btn done" disabled>Responded ✓</button>
+    <span>${all > 1 ? `Agreed by ${n} of ${all} authors: ${esc([name(r.by) + " (responded)", ...agreed.map((e) => `${name(e.by)}, ${fmtTime(e.ts)}`)].join("; "))}.` : `By ${esc(name(r.by))}.`}</span>
+    ${isAuthor() && inResponse && !mine && it.status === "responded" ? ` <button class="btn quiet" data-action="endorse" data-id="${esc(id)}" data-label="Saving">I agree with this response</button>` : ""}</p>`;
+}
 // The response letter: each comment, the authors' response and the exact changes made for it.
 async function responseLetterHtml() {
   const s = S.state, items = Object.entries(s.items).filter(([, it]) => it.responses.length);
@@ -2249,13 +2276,15 @@ async function review() {
       <h3>${esc(id)} <span class="tag ${it.status === "open" ? "attn" : it.status === "satisfied" ? "good" : ""}">${esc(it.status.replaceAll("_", " "))}</span>
         <span class="muted small">round ${it.round}, by ${esc(name(it.by))}${it.from_point ? `, from the assistant's ${esc(it.from_point)}` : ""}</span></h3>
       <p>${esc(it.comment)}</p>${it.location ? `<p class="small muted">Where: ${esc(it.location)}</p>` : ""}
-      ${it.responses.map((r) => `<p class="small"><strong>${esc(name(r.by))}</strong> ${esc(r.response)} in version ${r.draft_version}${r.note ? `: ${esc(r.note)}` : ""}</p>`).join("")}
+      ${it.responses.map((r, k) => `<div class="small resp"><p><strong>${esc(name(r.by))}</strong> ${esc(r.response)} in version ${r.draft_version}${r.ts ? `, ${fmtTime(r.ts)}` : ""}${r.note ? `: ${esc(r.note)}` : ""}</p>
+        ${k === it.responses.length - 1 ? endorseHtml(id, it, r) : ""}</div>`).join("")}
       ${it.verdicts.map((x) => `<p class="small"><strong>${esc(name(x.by))}</strong>: ${esc(x.verdict.replaceAll("_", " "))}${x.note ? `, ${esc(x.note)}` : ""}</p>`).join("")}
       ${isReviewer() && inReview && it.status === "responded" ? `<form class="row" data-form="verdict" data-item="${esc(id)}">
         <label><span>Your verdict</span><select name="verdict"><option value="satisfied">Satisfied</option><option value="still_concerned">Still concerned</option><option value="agree_to_disagree">Agree to disagree</option></select></label>
         <label style="flex:1 1 16rem"><span>Note (required for agree to disagree; it will be published)</span><input type="text" name="note"></label>
         <button class="btn" data-label="Saving">Give verdict</button></form>` : ""}
       ${isAuthor() && inResponse && it.status === "open" ? responseHelp(id, it) : ""}
+      ${S.itemErr?.[id] ? `<p class="msg err small">${esc(S.itemErr[id])}</p>` : ""}
       ${isAuthor() && inResponse && it.status === "open" ? `<form class="row" data-form="respond" data-item="${esc(id)}">
         <label><span>Your response</span><select name="response">${[["revised", "Revised the draft"], ["clarified", "Clarified"], ["rebutted", "Rebutted"]].map(([k, l]) => `<option value="${k}" ${k === STANCE[latestSuggestion(id)?.stance] ? "selected" : ""}>${l}</option>`).join("")}</select></label>
         <label style="flex:1 1 16rem"><span>Note to the reviewer</span><textarea name="note" rows="3">${esc(latestSuggestion(id)?.response || "")}</textarea></label>
@@ -2274,12 +2303,12 @@ async function review() {
     ${revs.length ? `<ul>${revs.map(([id, a]) => `<li>${esc(a.name)}${a.affiliation ? `, ${esc(a.affiliation)}` : ""}${inviteCell(id, "reviewer")}</li>`).join("")}</ul>` : `<p>No reviewer yet. ${allSigned ? "Every author has signed off; invite the reviewer and send the draft for review." : "Invite the reviewer now; the review starts once every author has signed off."}</p>`}
     ${s.stage === "AUTHOR_REVISION" && revs.length && allSigned ? `<p><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></p>` : ""}
     <details ${revs.length ? "" : "open"}><summary>Invite ${revs.length ? "another" : "a"} reviewer</summary>${inviteForm(true)}</details></section>` : "";
-  const materialsBox = ["REVIEW", "RESPONSE", "ATTESTATION", "FINAL"].includes(s.stage) || isReviewer() ? await studyMaterialsHtml() : "";
+  const materialsBox = isReviewer() ? await studyMaterialsHtml() : "";
   return `${reviewerBox}${materialsBox}${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
       <p class="muted small">Muse Spark Open, a different, open-weights model. Every briefing starts a fresh conversation. It never opens the data and never sees the authors' side. It suggests questions; you decide what to ask.</p>
       <button class="btn${latest && latest.round === s.round && latest.draft_version === v ? " quiet" : ""}" data-agent="brief_reviewer" data-label="The Reviewer Assistant is reading">${latest && latest.round === s.round && latest.draft_version === v ? "Ask for another briefing" : `Ask for a briefing on version ${v}`}</button></section>` : ""}
     ${brief}
-    <section><h2>Comments</h2>${itemHtml || "<p>No comments yet.</p>"}${applyBar}${await responseLetterHtml()}
+    <section><h2>Comments</h2>${responseTally()}${itemHtml || "<p>No comments yet.</p>"}${applyBar}${await responseLetterHtml()}
     ${isReviewer() && inReview ? `<form class="stack" data-form="additem" id="additem">
       <h3>Add a comment</h3>
       <input type="hidden" name="assisted_by_seq" value="${esc(pre.seq ?? "")}"><input type="hidden" name="from_point" value="${esc(pre.point ?? "")}">
@@ -2396,6 +2425,7 @@ document.addEventListener("click", async (ev) => {
     }
     case "updatecurator": return updateCurator(t);
     case "applyreview": return applyReview(t);
+    case "endorse": return act(t, () => command("endorse_response", { item_id: t.dataset.id }), "Your agreement with this response is recorded, with the time.");
     case "draftresp": {
       // A drafted suggestion is replaced when it comes back; the rest of the page stays usable meanwhile.
       if ((S.state.response_suggestions || {})[t.dataset.id]) { (S.resp.errors ||= {}); S.resp.queue = S.resp.queue.filter((x) => x !== t.dataset.id); }
@@ -2767,10 +2797,34 @@ document.addEventListener("submit", async (ev) => {
       return act(btn, async () => { const r = await command("add_item", args); S.prefill = null; return r; }, `Comment ${args.item_id} added.`);
     }
     case "verdict": return act(btn, () => command("give_verdict", { item_id: f.dataset.item, verdict: val("verdict"), note: val("note") }), "Verdict recorded.");
-    case "linkmaterial": return act(btn, () => command("link_material", { sha256: f.dataset.sha, url: val("url") }), "Saved. Reviewers and readers see it at its source.");
+    case "linkmaterial": return act(btn, () => command("link_material", { sha256: f.dataset.sha, url: val("url") }), "Saved. The reviewer sees this document at its source.");
     case "dataquery": return act(btn, () => agent("reviewer_data_query", { question: val("question") }),
       "Answered from the data, in aggregate. The question and the code are in the record.", "The Reviewer Assistant is writing the code; Saksi runs it on the data in the sandbox.");
-    case "respond": return act(btn, () => command("respond", { item_id: f.dataset.item, response: val("response"), note: val("note") }), "Response recorded.");
+    case "respond": {
+      const id = f.dataset.item, response = val("response"), note = val("note");
+      (S.itemErr ||= {}); delete S.itemErr[id];
+      return act(btn, async () => {
+        try {
+          // "Revised the draft" with Saksi's changes ticked: make them first (one new version), then respond.
+          const box = document.querySelector(`.respsug[data-item="${CSS.escape(id)}"]`);
+          if (response === "revised" && box) {
+            const edits = {};
+            box.querySelectorAll("input[data-edit]").forEach((x) => {
+              const ta = box.querySelector(`textarea[data-new="${CSS.escape(x.dataset.edit)}"]`);
+              edits[x.dataset.edit] = { accept: x.checked, new: ta ? ta.value : undefined };
+            });
+            if (Object.values(edits).some((e) => e.accept))
+              await command("apply_review_changes", { decisions: [{ item_id: id, suggestion_seq: +box.dataset.seq, edits }] });
+          }
+          return await command("respond", { item_id: id, response, note });
+        } catch (e) {
+          S.itemErr[id] = /needs a new draft version/.test(e.message)
+            ? "“Revised the draft” needs a revised version: tick Saksi's change above, or edit the draft first, or choose Clarified or Rebutted."
+            : e.message;
+          throw e;
+        }
+      }, `Your response to ${id} is recorded under your name${response === "revised" ? ", with the changes in a new version of the draft" : ""}.`);
+    }
     case "submitreview": return act(btn, () => command("submit_review", { decision: btn.value, summary: val("summary") }), btn.value === "accept" ? "You accepted the manuscript." : "You asked for revision.");
     case "attest": return act(btn, () => command("attest", { version: s.draft_version, statement: val("statement") }), `You attested version ${s.draft_version}.`);
   }

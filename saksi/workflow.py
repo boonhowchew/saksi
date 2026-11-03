@@ -350,8 +350,12 @@ def apply(s: State, ev: Event) -> State:
                                  "seq": ev.seq, "draft_version_at_creation": s.draft_version}
     elif t == "review.item_responded":
         it = s.items[p["item_id"]]
-        it["responses"].append(p | {"by": ev.actor_id, "round": s.round, "seq": ev.seq})
+        it["responses"].append(p | {"by": ev.actor_id, "round": s.round, "seq": ev.seq, "ts": ev.ts})
         it["status"] = "responded"
+    elif t == "review.response_endorsed":
+        it = s.items[p["item_id"]]
+        if it["responses"]:
+            it["responses"][-1].setdefault("endorsed_by", []).append({"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
     elif t == "review.item_verdict":
         it = s.items[p["item_id"]]
         it["verdicts"].append(p | {"by": ev.actor_id, "round": s.round, "seq": ev.seq})
@@ -1517,6 +1521,20 @@ class Project:
                                                  "draft_version": s.draft_version})
         return self.state()
 
+    def endorse_response(self, by: str, item_id: str) -> State:
+        """Another author agrees with the response one author gave to a comment. Recorded with the time."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "RESPONSE")
+        it = s.items.get(item_id)
+        if it is None or not it["responses"] or it["status"] != "responded":
+            raise WorkflowError(f"{item_id} has no response to agree with")
+        r = it["responses"][-1]
+        if r["by"] == by or any(e["by"] == by for e in r.get("endorsed_by", [])):
+            raise WorkflowError("you have already given or agreed with this response")
+        self._emit(by, "review.response_endorsed", {"item_id": item_id, "response_seq": r["seq"]})
+        return self.state()
+
     def submit_response(self, by: str) -> State:
         s = self.state()
         self._require_role(s, by, "corresponding_author")
@@ -1677,7 +1695,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "front.set": "edits", "review.response_suggested": "review_assistance", "review.data_queried": "review_assistance", "material.linked": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "front.set": "edits", "review.response_suggested": "review_assistance", "review.response_endorsed": "responses_to_review", "review.data_queried": "review_assistance", "material.linked": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",

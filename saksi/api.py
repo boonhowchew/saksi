@@ -79,6 +79,7 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "remove_reference": ("remove_reference", {"pmid", "reason"}),
     "set_front": ("set_front", {"field", "value"}),
     "apply_review_changes": ("apply_review_changes", {"decisions", "summary"}),
+    "endorse_response": ("endorse_response", {"item_id"}),
     "link_material": ("link_material", {"sha256", "url", "note"}),
     "set_reference_style": ("set_reference_style", {"style"}),
     "set_value_labels": ("set_value_labels", {"column", "labels", "reason"}),
