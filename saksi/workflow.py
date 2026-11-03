@@ -159,6 +159,8 @@ class State:
     reference_style: str = "vancouver"
     signoff_suggestions: list[dict[str, Any]] = field(default_factory=list)
     front: dict[str, Any] = field(default_factory=dict)          # title, abstract, keywords, trial registration
+    response_suggestions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)   # item -> suggestions
+    data_queries: list[dict[str, Any]] = field(default_factory=list)                      # the reviewer's questions
     answers: list[dict[str, Any]] = field(default_factory=list)          # authors' answers to Saksi's questions
     suggested_answers: dict[str, Any] = field(default_factory=dict)      # question -> Saksi's suggested answer
     outline: dict[str, Any] | None = None                                # what the paper reports, and its Methods draft
@@ -206,7 +208,8 @@ class State:
             "review_decisions": {str(k): v for k, v in self.review_decisions.items()},
             "reviewed_versions": {str(k): v for k, v in self.reviewed_versions.items()},
             "figures": self.figures, "results_seq": self.results_seq, "value_labels": self.value_labels, "references": self.references,
-            "reference_style": self.reference_style, "signoff_suggestions": self.signoff_suggestions, "front": self.front, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
+            "reference_style": self.reference_style, "signoff_suggestions": self.signoff_suggestions, "front": self.front,
+            "response_suggestions": self.response_suggestions, "data_queries": self.data_queries, "answers": self.answers, "suggested_answers": self.suggested_answers, "outline": self.outline, "preparations": self.preparations,
             "attestations": {str(k): v for k, v in self.attestations.items()},
             "signoff_questions": list(SIGNOFF_QUESTIONS), "head_seq": self.head_seq,
         }
@@ -312,6 +315,14 @@ def apply(s: State, ev: Event) -> State:
     elif t == "reference.removed":
         if p["pmid"] in s.references:
             s.references[p["pmid"]]["removed"] = {"by": ev.actor_id, "reason": p["reason"], "seq": ev.seq}
+    elif t == "review.response_suggested":
+        s.response_suggestions.setdefault(p["item_id"], []).append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
+    elif t == "review.data_queried":
+        s.data_queries.append(p | {"by": ev.actor_id, "seq": ev.seq, "ts": ev.ts})
+    elif t == "material.linked":
+        for m in s.materials:
+            if m["sha256"] == p["sha256"]:
+                m["link"] = {"url": p["url"], "note": p.get("note", ""), "by": ev.actor_id, "seq": ev.seq}
     elif t == "front.set":
         s.front[p["field"]] = {"value": p["value"], "by": ev.actor_id, "requested_by": p.get("requested_by"),
                                "seq": ev.seq, "ts": ev.ts, **{k: p[k] for k in ("checks", "instruction", "word_limit") if k in p}}
@@ -1223,7 +1234,7 @@ class Project:
 
     def edit_draft(self, by: str, base_version: int, text: str, summary: str,
                    requested_by: str | None = None, call: dict[str, Any] | None = None,
-                   table_edits: dict[str, Any] | None = None) -> State:
+                   table_edits: dict[str, Any] | None = None, review_changes: list[dict[str, Any]] | None = None) -> State:
         """A new version of the draft: its text, and optionally the wording of its tables (never their numbers)."""
         s = self.state()
         a = self._require_role(s, by, "author", "writer")
@@ -1250,9 +1261,96 @@ class Project:
             "version": base_version + 1, "base_version": base_version,
             "text_sha256": self.blobs.put_text(text), "summary": summary,
             "diff": _diff_stats(old, text), "requested_by": requested_by, "llm_call_seq": call_seq,
-            "table_edits_sha256": te_sha,
+            "table_edits_sha256": te_sha, "review_changes": review_changes or [],
             **self._trace(s, text),
         })
+        return self.state()
+
+    # -- Responding to review, with Saksi's help --------------------------------
+    def record_response_suggestion(self, by: str, item_id: str, stance: str, response: str,
+                                   edits: list[dict[str, Any]], requested_by: str, call: dict[str, Any] | None = None,
+                                   checks_if_applied: dict[str, Any] | None = None) -> State:
+        """The Writing Agent's suggested response to one reviewer comment: a stance (revise, clarify or rebut), the
+        reply to the reviewer, and exact changes to the current draft. Each change quotes the text it replaces,
+        which code found in the draft. Nothing changes until an author accepts it."""
+        s = self.state()
+        a = self._require_role(s, by, "writer")
+        self._requested_by(s, a, requested_by)
+        self._require_stage(s, "RESPONSE")
+        if item_id not in s.items:
+            raise WorkflowError(f"no item {item_id}")
+        if stance not in ("revise", "clarify", "rebut"):
+            raise WorkflowError("stance must be revise, clarify or rebut")
+        text = self.blobs.get_text(s.drafts[s.draft_version]["text_sha256"])
+        clean = []
+        for i, e in enumerate(edits or []):
+            old, new = str(e.get("old") or ""), str(e.get("new") or "")
+            if old and text.count(old) == 1 and new != old:
+                clean.append({"id": f"e{i + 1}", "old": old, "new": new, "why": str(e.get("why") or "")[:400]})
+        call_seq = self._log_call(by, call)
+        self._emit(by, "review.response_suggested", {
+            "item_id": item_id, "version": s.draft_version, "stance": stance, "response": response[:3000],
+            "edits": clean, "edits_dropped": len(edits or []) - len(clean), "checks_if_applied": checks_if_applied,
+            "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
+
+    def apply_review_changes(self, by: str, decisions: list[dict[str, Any]], summary: str = "") -> State:
+        """Authors apply the changes they accepted (as suggested or as they modified them), for one or more
+        comments, as one new version. The version records which change answers which comment, and who decided."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        self._require_stage(s, "RESPONSE")
+        text = self.blobs.get_text(s.drafts[s.draft_version]["text_sha256"])
+        applied = []
+        for d in decisions or []:
+            sug = next((x for x in s.response_suggestions.get(d.get("item_id"), []) if x["seq"] == d.get("suggestion_seq")), None)
+            if sug is None:
+                raise WorkflowError(f"no such suggestion for {d.get('item_id')}")
+            for e in sug["edits"]:
+                choice = (d.get("edits") or {}).get(e["id"]) or {}
+                if not choice.get("accept"):
+                    continue
+                new = str(choice.get("new") if choice.get("new") is not None else e["new"])
+                if text.count(e["old"]) != 1:
+                    raise WorkflowError(f"{d['item_id']}: the passage “{e['old'][:60]}…” is no longer in the draft once")
+                text = text.replace(e["old"], new, 1)
+                applied.append({"item_id": d["item_id"], "edit_id": e["id"], "old": e["old"], "new": new,
+                                "suggested_seq": sug["seq"], "modified": new != e["new"]})
+        if not applied:
+            raise WorkflowError("accept at least one change")
+        items = sorted({x["item_id"] for x in applied})
+        return self.edit_draft(by, s.draft_version, text, summary or f"Revised in response to {', '.join(items)}",
+                               review_changes=applied)
+
+    def record_data_query(self, by: str, question: str, code_sha256: str, results_sha256: str | None, status: str,
+                          error: str | None, requested_by: str, call: dict[str, Any] | None = None) -> State:
+        """A reviewer's question about the data, answered by code the Reviewer Assistant wrote and Saksi ran on the
+        dataset in use. Only aggregate results return; the reviewer never receives the data. Visible to all."""
+        s = self.state()
+        self._require_role(s, by, "reviewer_assist")
+        if requested_by not in s.reviewers:
+            raise WorkflowError("only a reviewer can question the data")
+        self._require_stage(s, "REVIEW", "RESPONSE")
+        call_seq = self._log_call(by, call)
+        self._emit(by, "review.data_queried", {"question": question[:1000], "code_sha256": code_sha256,
+                                               "results_sha256": results_sha256, "status": status, "error": error,
+                                               "requested_by": requested_by, "llm_call_seq": call_seq})
+        return self.state()
+
+    def link_material(self, by: str, sha256: str, url: str, note: str = "") -> State:
+        """Where a material is publicly available (the protocol's DOI or journal page, a preprint, OSF, a registry,
+        an ethics repository), so reviewers and readers can see it at its source."""
+        s = self.state()
+        self._require_role(s, by, "author")
+        m = next((m for m in s.materials if m["sha256"] == sha256 and not m.get("withdrawn")), None)
+        if m is None:
+            raise WorkflowError("no such file")
+        url = (url or "").strip()
+        if re.fullmatch(r"10\.\d{4,9}/\S+", url):
+            url = "https://doi.org/" + url
+        if not re.fullmatch(r"https?://\S+", url):
+            raise WorkflowError("give a web address (https://...) or a DOI")
+        self._emit(by, "material.linked", {"sha256": sha256, "url": url[:500], "note": (note or "")[:300]})
         return self.state()
 
     def open_draft(self, by: str, version: int) -> State:
@@ -1579,7 +1677,7 @@ def summarise_checks(r: dict[str, Any]) -> dict[str, Any]:
 # What each event type counts as in the Contribution Ledger (white paper §3.1).
 LEDGER_CATEGORIES = {
     "material.uploaded": "materials", "material.withdrawn": "materials_removed", "plan.proposed": "plan_proposals", "plan.confirmed": "verification_decisions",
-    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "front.set": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
+    "analysis.requested": "analysis_requests", "analysis.completed": "analyses_run", "analysis.described": "result_texts", "analysis.withdrawn": "analyses_left_out", "figure.omitted": "edits", "figure.restored": "edits", "analysis.placed": "edits", "labels.set": "edits", "references.found": "references", "reference.removed": "edits", "settings.reference_style": "edits", "front.set": "edits", "review.response_suggested": "review_assistance", "review.data_queried": "review_assistance", "material.linked": "edits", "checklist.assessed": "checklists", "question.answered": "clarifications", "questions.suggested": "suggested_answers", "plan.outlined": "plan_outlines",
     "plan.outline_edited": "edits",
     "data.preparation_proposed": "data_preparation_proposals",
     "analyses.accepted": "verification_decisions", "draft.created": "drafts", "draft.edited": "edits",

@@ -166,6 +166,10 @@ form.signoff .soitem { border: 1px solid var(--rule); border-radius: 8px; paddin
 .front .mtitle { font-family: var(--serif, Georgia, serif); font-size: 1.6rem; line-height: 1.3; margin: .4rem 0; }
 .front .authorsline { margin: .2rem 0; } .front .affils { font-size: .85rem; color: var(--muted); margin: .2rem 0 .4rem 0; list-style: none; padding: 0; }
 .front .abstract p { margin: .35rem 0; } .front { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 1rem; }
+.respsug .edit { border-left: 3px solid var(--rule); padding-left: .6rem; margin: .5rem 0; }
+.respsug textarea, form[data-form=respond] textarea { width: 100%; }
+del { color: #9b1c1c; text-decoration: line-through; background: #fbeaea; } ins { color: #14532d; text-decoration: underline; background: #e6f4ea; }
+.tracked p { margin: .5rem 0; } .tracked .chg-tag { font-size: .7rem; vertical-align: super; color: var(--muted); }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -552,6 +556,7 @@ async function render() {
   if (S.tab === "plan") maybeSuggestAnswers();
   if (S.tab === "materials") maybeUpdateCurator();
   if (S.tab === "draft") { maybeReviseForChecklist(); maybeFrontMatter(); maybeSuggestSignoff(); }
+  if (S.tab === "review") maybeSuggestResponses();
   maybeStartAnalysis();
 }
 const secretHtml = (style = "") => `<div style="${style}"><p class="small"><strong>${esc(S.secret.label)}.</strong> ${esc(S.secret.hint || "It is shown only once.")}</p>
@@ -1649,6 +1654,154 @@ function maybeFrontMatter() {
     "The Writing Agent is writing the abstract, a title and keywords from the draft.");
 }
 
+/* Responding to review: Saksi drafts each response and the exact changes; the authors accept, change or reject. */
+const STANCE = { revise: "revised", clarify: "clarified", rebut: "rebutted" };
+function latestSuggestion(id) {
+  const list = (S.state.response_suggestions || {})[id] || [];
+  return list.filter((x) => x.version === S.state.draft_version).at(-1) || null;
+}
+function responseHelp(id, it) {
+  const sug = latestSuggestion(id);
+  if (!sug) return `<p class="small"><span class="aibadge">AI</span> <button class="linkish" data-agent="suggest_review_response" data-args='${esc(JSON.stringify({ item_id: id }))}' data-label="The Writing Agent is drafting a response to ${esc(id)}">Ask Saksi to draft the response and the changes</button></p>`;
+  const c = sug.checks_if_applied;
+  return `<div class="suggest respsug" data-item="${esc(id)}" data-seq="${sug.seq}"><p class="small"><span class="aibadge">AI</span> <strong>Saksi suggests: ${esc({ revise: "revise the draft", clarify: "clarify", rebut: "respectfully rebut" }[sug.stance])}.</strong>
+      The response below is in your note; ${sug.edits.length ? `${sug.edits.length} change${sug.edits.length > 1 ? "s" : ""} to the draft, each quoting the passage it replaces. Untick to reject; edit the new text to change it.` : "no change to the draft is needed."}
+      ${c ? `<span class="tag ${c.ok ? "good" : "attn"}">${c.ok ? "numbers still check with these changes" : `${c.untraced || 0} number(s) would not trace`}</span>` : ""}
+      <button class="linkish small" data-agent="suggest_review_response" data-args='${esc(JSON.stringify({ item_id: id }))}' data-label="The Writing Agent is drafting again">Draft again</button></p>
+    ${sug.edits.map((e) => `<div class="edit"><label class="inline"><input type="checkbox" data-edit="${esc(e.id)}" checked> Accept this change</label>
+      <p class="small"><del>${esc(e.old)}</del></p><textarea data-new="${esc(e.id)}" rows="3">${esc(e.new)}</textarea>${e.why ? `<p class="small muted">${esc(e.why)}</p>` : ""}</div>`).join("")}
+    ${sug.edits_dropped ? `<p class="small muted">${sug.edits_dropped} suggested change(s) quoted text not found in the draft and were left out.</p>` : ""}</div>`;
+}
+function maybeSuggestResponses() {
+  const s = S.state;
+  if (S.busy || !isAuthor() || s.stage !== "RESPONSE") return;
+  const open = Object.entries(s.items).filter(([id, it]) => it.status === "open" && !latestSuggestion(id));
+  (S.respTried ||= {});
+  const todo = open.filter(([id]) => !S.respTried[`${S.pid}|${s.draft_version}|${id}`]);
+  if (!todo.length) return;
+  todo.forEach(([id]) => (S.respTried[`${S.pid}|${s.draft_version}|${id}`] = true));
+  act(null, async () => {
+    let r;
+    for (const [i, [id]] of todo.entries()) {
+      S.notice = { kind: "warn", text: `The Writing Agent is drafting the response to ${id} (${i + 1} of ${todo.length}), with the exact changes to the draft.` };
+      const st = $("#status"); if (st) st.innerHTML = noticeHtml();
+      try { r = await agent("suggest_review_response", { item_id: id }); } catch { /* the button offers it again */ }
+    }
+    return r;
+  }, "Saksi drafted a response to each comment, with the changes it would make. Accept, change or reject each one, then apply them.",
+  "The Writing Agent is drafting the responses to the reviewer.");
+}
+async function applyReview(btn) {
+  const decisions = [], notes = {};
+  document.querySelectorAll(".respsug").forEach((box) => {
+    const id = box.dataset.item, edits = {};
+    box.querySelectorAll("input[data-edit]").forEach((x) => {
+      const ta = box.querySelector(`textarea[data-new="${CSS.escape(x.dataset.edit)}"]`);
+      edits[x.dataset.edit] = { accept: x.checked, new: ta ? ta.value : undefined };
+    });
+    if (Object.values(edits).some((e) => e.accept)) {
+      decisions.push({ item_id: id, suggestion_seq: +box.dataset.seq, edits });
+      notes[id] = document.querySelector(`form[data-form=respond][data-item="${CSS.escape(id)}"] textarea[name=note]`)?.value || "";
+    }
+  });
+  if (!decisions.length) { S.notice = { kind: "err", text: "Tick at least one change to apply." }; return render(); }
+  return act(btn, async () => {
+    let r = await command("apply_review_changes", { decisions });
+    for (const id of Object.keys(notes)) r = await command("respond", { item_id: id, response: "revised", note: notes[id] });
+    return r;
+  }, `The accepted changes are in version ${S.state.draft_version + 1}; each comment they answer is marked “Revised the draft”. Each author now signs off the revised version.`);
+}
+// What the reviewer can see of the study: documents at their source or to download, never the dataset, which they
+// question through Saksi (aggregates only).
+async function studyMaterialsHtml() {
+  const s = S.state, docs = s.materials.filter((m) => !m.withdrawn && m.kind !== "dataset" && (m.kind !== "protocol" || m === s.materials.filter((x) => x.kind === "protocol" && !x.withdrawn).at(-1)));
+  const ds = s.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
+  const canAsk = isReviewer() && ["REVIEW", "RESPONSE"].includes(s.stage);
+  const qs = s.data_queries || [];
+  const rows = await Promise.all(qs.map(async (q) => {
+    const r = q.results_sha256 ? await blobJSON(q.results_sha256) : null;
+    return `<div class="item"><p><strong>${esc(name(q.requested_by))}</strong> asked, ${fmtTime(q.ts)}: “${esc(q.question)}”</p>
+      ${r ? `<p>${esc(r.answer)}</p>${r.table ? `<div class="tablewrap"><table><thead><tr>${r.table.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${r.table.rows.map((row) => `<tr>${row.map((v) => `<td>${esc(typeof v === "number" ? +v.toFixed(3) : v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : ""}
+        <p class="small muted">${r.n != null ? `${esc(r.n)} records used. ` : ""}Computed by code the Reviewer Assistant wrote, run by Saksi on the dataset in use; only aggregates are returned, counts below 5 shown as “<5”.</p>`
+      : `<p class="small"><span class="tag attn">${esc(q.status)}</span> ${esc(q.error || "")}</p>`}</div>`;
+  }));
+  return `<section><h2>Study materials</h2>
+    <p class="small muted">What the reviewer can see: the study's documents, at their public source where the authors gave one, or to download. The dataset stays with the authors; the reviewer questions it through Saksi.</p>
+    <ul>${docs.map((m) => `<li><strong>${esc(m.kind.replaceAll("_", " "))}</strong>: ${esc(m.filename)}
+      ${m.link ? ` · <a href="${esc(m.link.url)}" target="_blank" rel="noreferrer">at its source</a>${m.link.note ? ` (${esc(m.link.note)})` : ""}` : ""}
+      · <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>
+      ${isAuthor() && s.stage !== "FINAL" ? `<form class="chatform small" data-form="linkmaterial" data-sha="${esc(m.sha256)}"><input type="text" name="url" value="${esc(m.link?.url || "")}" placeholder="Public link or DOI (journal, preprint, OSF, registry, ethics repository)" aria-label="Public link"><button class="btn quiet" data-label="Saving">Save the link</button></form>` : ""}</li>`).join("")}</ul>
+    ${ds ? `<h3>The dataset</h3><p>${esc(ds.filename)}${ds.inspection?.rows ? `: ${esc(ds.inspection.rows)} records, ${esc(ds.inspection.columns)} columns` : ""}. Not downloadable by the reviewer.</p>
+      ${canAsk ? `<form class="chatform" data-form="dataquery"><span class="aibadge">AI</span><input type="text" name="question" required autocomplete="off" placeholder="Ask the data: for example, how many women had missing booking BMI, by GDM status?" aria-label="Question about the data"><button class="btn quiet" data-label="Saksi is running the question on the data">Ask</button></form>` : ""}
+      ${rows.join("")}` : ""}</section>`;
+}
+
+// Tracked changes: the current version against the version the reviewer read, word by word, each change marked with
+// the comment it answers where the record says so.
+function trackedBase(v) {
+  const rv = Object.values(S.state.reviewed_versions || {}).map(Number).filter((x) => x < v);
+  return rv.length ? Math.max(...rv) : null;
+}
+function diffWords(a, b) {
+  const A = a.split(/(\s+)/), B = b.split(/(\s+)/);
+  if (A.length * B.length > 400000) return `<del>${esc(a)}</del> <ins>${esc(b)}</ins>`;
+  const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  let i = 0, j = 0, out = "", del = "", ins = "";
+  const flush = () => { if (del) out += `<del>${esc(del)}</del>`; if (ins) out += `<ins>${esc(ins)}</ins>`; del = ins = ""; };
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { flush(); out += esc(A[i]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) del += A[i++]; else ins += B[j++];
+  }
+  while (i < n) del += A[i++]; while (j < m) ins += B[j++];
+  flush();
+  return out;
+}
+async function trackedHtml(base, v) {
+  const clean = (t) => t.replace(/\s*\[A:[^\]]+\]/g, "").replace(/\s*\[R:\d+\]/g, "");
+  // The same blocks however the text was saved: headings on their own, whitespace collapsed.
+  const blocks0 = (t) => clean(t).replace(/^(#{1,4}[^\n]*)\n(?!\n)/gm, "$1\n\n").split(/\n{2,}/).map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const pa = blocks0(await blob(S.state.drafts[base].text_sha256) || ""), pb = blocks0(await blob(S.state.drafts[v].text_sha256) || "");
+  const changes = Object.values(S.state.drafts).filter((d) => d.version > base && d.version <= v).flatMap((d) => d.review_changes || []);
+  const n = pa.length, m = pb.length, L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = pa[i] === pb[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const blocks = []; let i = 0, j = 0, olds = [], news = [];
+  const flush = () => {
+    const k = Math.max(olds.length, news.length);
+    for (let x = 0; x < k; x++) blocks.push({ old: olds[x], new: news[x] });
+    olds = []; news = [];
+  };
+  while (i < n && j < m) {
+    if (pa[i] === pb[j]) { flush(); blocks.push({ same: pb[j] }); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) olds.push(pa[i++]); else news.push(pb[j++]);
+  }
+  while (i < n) olds.push(pa[i++]); while (j < m) news.push(pb[j++]);
+  flush();
+  const tagFor = (t) => [...new Set(changes.filter((c) => clean(c.new).trim() && (t || "").includes(clean(c.new).trim().slice(0, 60))).map((c) => c.item_id))];
+  let count = 0;
+  const html = blocks.map((b) => {
+    const head = (t) => /^#{1,4}\s/.test(t || "");
+    if (b.same !== undefined) return head(b.same) ? `<h3>${esc(b.same.replace(/^#+\s*/, ""))}</h3>` : `<p>${esc(b.same)}</p>`;
+    count++;
+    const tags = tagFor(b.new);
+    const body = b.old === undefined ? `<ins>${esc(b.new)}</ins>` : b.new === undefined ? `<del>${esc(b.old)}</del>` : diffWords(b.old, b.new);
+    return `<p class="chg">${body}${tags.length ? ` <span class="chg-tag">[${esc(tags.join(", "))}]</span>` : ""}</p>`;
+  }).join("");
+  return `<article class="manuscript-view tracked" id="ms"><p class="small muted">Tracked changes from version ${base} to version ${v}: ${count} passage${count === 1 ? "" : "s"} changed. <ins>Inserted</ins>, <del>deleted</del>; the comment each change answers is in brackets.</p>${html}</article>`;
+}
+
+// The response letter: each comment, the authors' response and the exact changes made for it.
+async function responseLetterHtml() {
+  const s = S.state, items = Object.entries(s.items).filter(([, it]) => it.responses.length);
+  if (!items.length) return "";
+  const changes = Object.values(s.drafts).flatMap((d) => (d.review_changes || []).map((c) => ({ ...c, version: d.version })));
+  return `<details class="letter"><summary>Response to the reviewer (${items.length} comment${items.length > 1 ? "s" : ""})</summary>
+    ${items.map(([id, it]) => { const r = it.responses.at(-1), ch = changes.filter((c) => c.item_id === id);
+      return `<div class="item"><p><strong>${esc(id)}.</strong> <em>${esc(it.comment)}</em></p>
+        <p><strong>Response (${esc(r.response)}, version ${esc(r.draft_version)}):</strong> ${esc(r.note || "")}</p>
+        ${ch.map((c) => `<p class="small">Changed in version ${esc(c.version)}${c.modified ? " (Saksi's suggestion, edited by the authors)" : c.suggested_seq ? " (Saksi's suggestion, accepted)" : ""}: <del>${esc(c.old)}</del> <ins>${esc(c.new)}</ins></p>`).join("")}</div>`; }).join("")}</details>`;
+}
+
 /* Sign-off: Saksi suggests from the record and the draft; the author agrees, changes or rejects, and discloses
    their contribution (CRediT) and what they verified (HACprint 2.0 evidence areas). Everything is time-stamped. */
 async function signoffNow(v) {
@@ -2005,7 +2158,8 @@ async function draft() {
     ${canEdit && !editing ? `<div class="bigaction"><p><strong>Edit on the page.</strong> Click any paragraph to change its words. In the tables you can reword the title, headings, row labels and footnotes; the numbers are locked, because they come from the results. Saving makes version ${v + 1}, recorded under your name and checked again.</p>
       <button class="btn" data-action="canvas">Edit on the page</button></div>` : ""}
     ${await frontHtml(v, canEdit || (isAuthor() && current && s.stage !== "FINAL"))}
-    ${(await refsNow(v)) ? "" : ""}<article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>
+    ${trackedBase(v) ? `<p class="small"><button class="btn quiet" data-action="tracked" data-label="Showing">${S.tracked ? "Show the clean text" : `Show tracked changes since version ${trackedBase(v)}, the version the reviewer read`}</button></p>` : ""}
+    ${(await refsNow(v)) ? "" : ""}${S.tracked && trackedBase(v) ? await trackedHtml(trackedBase(v), v) : `<article class="manuscript-view ${editing ? "canvas" : ""}" id="ms">${await renderCanvas(text || "", marks, tables, okFigures(), editing)}</article>`}
     ${referencesHtml(await refsNow(v), isAuthor() && s.stage !== "FINAL")}
     ${await supplementHtml()}
     ${editing ? `<form class="savebar" data-form="canvassave">
@@ -2060,6 +2214,7 @@ async function review() {
         <p class="small muted">Inputs are recorded by hash: draft <span class="hash">${short(b.inputs?.draft_sha256)}</span>, protocol <span class="hash">${short(b.inputs?.protocol_sha256)}</span>, plan <span class="hash">${short(b.inputs?.plan_sha256)}</span>.</p></details></section>`;
   }
   const nextItem = "R" + (items.length + 1);
+  const anySug = inResponse && isAuthor() && items.some(([id, it]) => it.status === "open" && latestSuggestion(id)?.edits?.length);
   const pre = S.prefill || {};
   const itemHtml = items.map(([id, it]) => {
     return `<div class="item ${it.status === "open" ? "attn" : it.status === "responded" ? "" : "good"}">
@@ -2072,13 +2227,16 @@ async function review() {
         <label><span>Your verdict</span><select name="verdict"><option value="satisfied">Satisfied</option><option value="still_concerned">Still concerned</option><option value="agree_to_disagree">Agree to disagree</option></select></label>
         <label style="flex:1 1 16rem"><span>Note (required for agree to disagree; it will be published)</span><input type="text" name="note"></label>
         <button class="btn" data-label="Saving">Give verdict</button></form>` : ""}
+      ${isAuthor() && inResponse && it.status === "open" ? responseHelp(id, it) : ""}
       ${isAuthor() && inResponse && it.status === "open" ? `<form class="row" data-form="respond" data-item="${esc(id)}">
-        <label><span>Your response</span><select name="response"><option value="revised">Revised the draft</option><option value="clarified">Clarified</option><option value="rebutted">Rebutted</option></select></label>
-        <label style="flex:1 1 16rem"><span>Note to the reviewer</span><input type="text" name="note"></label>
+        <label><span>Your response</span><select name="response">${[["revised", "Revised the draft"], ["clarified", "Clarified"], ["rebutted", "Rebutted"]].map(([k, l]) => `<option value="${k}" ${k === STANCE[latestSuggestion(id)?.stance] ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label style="flex:1 1 16rem"><span>Note to the reviewer</span><textarea name="note" rows="3">${esc(latestSuggestion(id)?.response || "")}</textarea></label>
         <button class="btn" data-label="Saving">Respond</button></form>` : ""}
 </div>`;
   }).join("");
   const att = s.attestations[v] || {};
+  const applyBar = anySug ? `<div class="bigaction"><p><strong>Apply the changes you accepted.</strong> Saksi makes them, for every comment at once, as version ${s.draft_version + 1}, records which change answers which comment, checks its numbers again and marks each of those comments “Revised the draft” with your note. Then each author signs off the revised version.</p>
+    <button class="btn" data-action="applyreview" data-label="Applying the changes">Apply the accepted changes and respond</button></div>` : "";
   // The reviewer is invited here too, once the draft is ready for review.
   const revs = Object.entries(s.actors).filter(([, a]) => (a.roles || []).includes("reviewer"));
   const allSigned = s.authors.every((a) => (s.signoffs[s.draft_version] || {})[a]);
@@ -2088,11 +2246,12 @@ async function review() {
     ${revs.length ? `<ul>${revs.map(([id, a]) => `<li>${esc(a.name)}${a.affiliation ? `, ${esc(a.affiliation)}` : ""}${inviteCell(id, "reviewer")}</li>`).join("")}</ul>` : `<p>No reviewer yet. ${allSigned ? "Every author has signed off; invite the reviewer and send the draft for review." : "Invite the reviewer now; the review starts once every author has signed off."}</p>`}
     ${s.stage === "AUTHOR_REVISION" && revs.length && allSigned ? `<p><button class="btn" data-action="start_review" data-label="Starting">Send version ${s.draft_version} for review</button></p>` : ""}
     <details ${revs.length ? "" : "open"}><summary>Invite ${revs.length ? "another" : "a"} reviewer</summary>${inviteForm(true)}</details></section>` : "";
-  return `${reviewerBox}${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
+  const materialsBox = ["REVIEW", "RESPONSE", "ATTESTATION", "FINAL"].includes(s.stage) || isReviewer() ? await studyMaterialsHtml() : "";
+  return `${reviewerBox}${materialsBox}${isReviewer() && inReview ? `<section><h2>Reviewer Assistant</h2>
       <p class="muted small">Muse Spark Open, a different, open-weights model. Every briefing starts a fresh conversation. It never opens the data and never sees the authors' side. It suggests questions; you decide what to ask.</p>
       <button class="btn${latest && latest.round === s.round && latest.draft_version === v ? " quiet" : ""}" data-agent="brief_reviewer" data-label="The Reviewer Assistant is reading">${latest && latest.round === s.round && latest.draft_version === v ? "Ask for another briefing" : `Ask for a briefing on version ${v}`}</button></section>` : ""}
     ${brief}
-    <section><h2>Comments</h2>${itemHtml || "<p>No comments yet.</p>"}
+    <section><h2>Comments</h2>${itemHtml || "<p>No comments yet.</p>"}${applyBar}${await responseLetterHtml()}
     ${isReviewer() && inReview ? `<form class="stack" data-form="additem" id="additem">
       <h3>Add a comment</h3>
       <input type="hidden" name="assisted_by_seq" value="${esc(pre.seq ?? "")}"><input type="hidden" name="from_point" value="${esc(pre.point ?? "")}">
@@ -2208,6 +2367,8 @@ document.addEventListener("click", async (ev) => {
       return;
     }
     case "updatecurator": return updateCurator(t);
+    case "applyreview": return applyReview(t);
+    case "tracked": S.tracked = !S.tracked; return render();
     case "reissue": return act(t, async () => { const r = await api(`/projects/${S.pid}/actors/${t.dataset.id}/token`, { method: "POST", body: {} });
         S.invites = null; return r; }, "A new token was issued; the old one no longer works. It is shown below until they sign in.");
     case "savetitle": return act(t, () => command("set_front", { field: "title", value: document.querySelector("[data-front=title]").innerText.trim() }), "The title is saved, under your name.");
@@ -2571,6 +2732,9 @@ document.addEventListener("submit", async (ev) => {
       return act(btn, async () => { const r = await command("add_item", args); S.prefill = null; return r; }, `Comment ${args.item_id} added.`);
     }
     case "verdict": return act(btn, () => command("give_verdict", { item_id: f.dataset.item, verdict: val("verdict"), note: val("note") }), "Verdict recorded.");
+    case "linkmaterial": return act(btn, () => command("link_material", { sha256: f.dataset.sha, url: val("url") }), "Saved. Reviewers and readers see it at its source.");
+    case "dataquery": return act(btn, () => agent("reviewer_data_query", { question: val("question") }),
+      "Answered from the data, in aggregate. The question and the code are in the record.", "The Reviewer Assistant is writing the code; Saksi runs it on the data in the sandbox.");
     case "respond": return act(btn, () => command("respond", { item_id: f.dataset.item, response: val("response"), note: val("note") }), "Response recorded.");
     case "submitreview": return act(btn, () => command("submit_review", { decision: btn.value, summary: val("summary") }), btn.value === "accept" ? "You accepted the manuscript." : "You asked for revision.");
     case "attest": return act(btn, () => command("attest", { version: s.draft_version, statement: val("statement") }), `You attested version ${s.draft_version}.`);

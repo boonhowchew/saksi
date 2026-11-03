@@ -24,7 +24,7 @@ from typing import Any
 from .documents import candidates, extract_text, locate, quote_found
 from .llm import LLMError, ModelClient
 from .profiling import profile, read_table
-from .prompts import (FRONT_MATTER, LITERATURE_QUERIES, LITERATURE_SCREEN, SIGNOFF_SUGGEST)
+from .prompts import (FRONT_MATTER, LITERATURE_QUERIES, LITERATURE_SCREEN, REVIEW_RESPONSE, SIGNOFF_SUGGEST)
 from .prompts import (ASSIST, CHECKLIST, CODE, CURATOR, CURATOR_UPDATE, DATA_PREP, OUTLINE, PLAN_ASSIST, SUGGEST_ANSWERS, CURATOR_COLUMNS, CURATOR_OVERVIEW, PLAN, QUOTE_REPAIR, REPAIR, RESULT_TEXT,
                       REWRITE, WRITER, prompt_ref)
 from .sandbox import CodeRejected, Executor, check_code
@@ -1059,6 +1059,49 @@ class Agents:
         if kws and (not kw or str(kw.get("by", "")).startswith("agent:")):      # the authors' own choice stands
             st = self.project.set_front(WRITER_ID, "keywords", kws, requested_by=requested_by)
         return st
+
+    def suggest_review_response(self, requested_by: str, item_id: str) -> State:
+        """Draft the authors' response to one reviewer comment: a stance, the reply, and exact changes to the
+        draft (each quoting the passage it replaces, found by code), with the number check of the draft as it
+        would read with them. The authors accept, change or reject each one."""
+        s = self.project.state()
+        it = s.items.get(item_id)
+        if it is None:
+            raise WorkflowError(f"no item {item_id}")
+        v = s.draft_version
+        text = self.project.blobs.get_text(s.drafts[v]["text_sha256"])
+        cur = current(s)
+        brief = {k: {"title": a["spec"].get("title"), "label": a["label"], "kind": a.get("kind"),
+                     "estimates": (self.project.blobs.get_json(a["outputs_sha256"]).get("estimates") or [])[:8]}
+                 for k, a in cur.items()}
+        try:
+            protocol, _ = self._protocol_text(s)
+        except Exception:
+            protocol = ""
+        others = {k: x["comment"] for k, x in s.items.items() if k != item_id}
+        user = (f"THE COMMENT ({item_id}, round {it.get('round')}): {it['comment']}\n"
+                f"WHERE IN THE DRAFT: {it.get('location') or '(not given)'}\n\n"
+                f"THE OTHER COMMENTS (for context only): {json.dumps(others)[:6000]}\n\n"
+                f"THE DRAFT (version {v}):\n{text[:70000]}\n\nRESULTS (computed; cite only these):\n"
+                f"{json.dumps(brief)[:20000]}\n\nPROTOCOL (excerpt):\n{protocol[:30000]}\n\n"
+                f"THE AUTHORS' ANSWERS:\n{answers_text(s)[:5000]}")
+        obj, call, _ = self._json_call(WRITER_ID, "write", REVIEW_RESPONSE, user, "review_response")
+        stance = obj.get("stance") if obj.get("stance") in ("revise", "clarify", "rebut") else "clarify"
+        edits = [e for e in obj.get("edits") or [] if isinstance(e, dict)]
+        trial = text
+        for e in edits:
+            old = str(e.get("old") or "")
+            if old and trial.count(old) == 1:
+                trial = trial.replace(old, str(e.get("new") or ""), 1)
+        checks = summarise(self.project.check_text(trial, s)) if trial != text else None
+        return self.project.record_response_suggestion(WRITER_ID, item_id, stance, str(obj.get("response") or ""),
+                                                       edits, requested_by, call, checks_if_applied=checks)
+
+    def reviewer_data_query(self, requested_by: str, question: str) -> State:
+        """A reviewer questions the data: the Reviewer Assistant (a different model) writes code, Saksi runs it in
+        the sandbox on the dataset in use, and only aggregates come back (small counts suppressed)."""
+        from .reviewer import ReviewerAssistant
+        return ReviewerAssistant(self.project, self.client).query_data(requested_by, question, self.executor)
 
     def suggest_signoff(self, requested_by: str) -> State:
         """Suggest the claim and the least-defensible result for the current version, from its text."""

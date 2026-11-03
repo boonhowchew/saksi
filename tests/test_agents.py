@@ -109,7 +109,9 @@ class ScriptedModel:
             r = r if isinstance(r, str) else __import__("json").dumps(r)
             return {"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-        purpose = ("front" if "writing the front matter of a manuscript" in system
+        purpose = ("resp" if "respond to ONE peer-review comment" in system
+                   else "dq" if "answers a peer reviewer's question about the dataset" in system
+                   else "front" if "writing the front matter of a manuscript" in system
                    else "so" if "An author is about to sign off" in system
                    else "lit_q" if "PubMed search queries" in system else "lit_s" if "Screen these PubMed records" in system
                    else "curator_update" if "Bring your earlier report on this dataset up to date" in system
@@ -131,6 +133,12 @@ class ScriptedModel:
         elif purpose == "plan_assist" and not self.script.get("plan_assist"):
             reply = {"reply": "Then this paper reports the primary objective only.", "questions": ["Is GDM defined by the 2013 WHO criteria?"],
                      "redraft": "This paper reports the primary objective only."}
+        elif purpose == "resp" and not self.script.get("resp"):
+            reply = {"stance": "clarify", "response": "Thank you. The Discussion now names this limitation explicitly.",
+                     "edits": [{"old": "A larger study is needed.", "new": "A larger study, with more outcome events, is needed.",
+                                "why": "Answers the comment on imprecision"}]}
+        elif purpose == "dq" and not self.script.get("dq"):
+            reply = DQ_REPLY
         elif purpose == "front" and not self.script.get("front"):
             reply = FRONT_REPLY
         elif purpose == "so" and not self.script.get("so"):
@@ -160,6 +168,16 @@ class ScriptedModel:
                 "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
 
 
+DQ_REPLY = "```python\n" + ("""
+import pandas as pd
+
+def analyse(data_path, seed):
+    df = pd.read_csv(data_path, na_values=["#NULL!", "."])
+    t = df.groupby("gdm").size()
+    rows = [[str(k), int(v)] for k, v in t.items()]
+    return {"answer": f"{int(df['booking_bmi'].isna().sum())} records lack booking BMI.",
+            "table": {"columns": ["GDM", "n"], "rows": rows + [["test small", 3]]}, "n": int(len(df))}
+""") + "```"
 FRONT_REPLY = {
     "abstract": ("**Background:** Booking body mass index (BMI) may help identify women at risk of gestational diabetes "
                  "(GDM).\n**Methods:** A cohort of pregnant women booking at public health clinics; logistic regression "

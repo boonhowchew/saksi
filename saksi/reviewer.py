@@ -26,7 +26,7 @@ from typing import Any
 from .agents import AgentError, not_performed, parse_json, protocol_text
 from .documents import quote_found
 from .llm import ModelClient
-from .prompts import REVIEW_ASSIST, REVIEW_FOLLOWUP, prompt_ref
+from .prompts import DATA_QUERY, REVIEW_ASSIST, REVIEW_FOLLOWUP, prompt_ref
 from .tracing import interval_facts
 from .workflow import Project, State, WorkflowError, current, summarise_checks
 
@@ -54,6 +54,43 @@ CODE_CHARS, DIFF_CHARS, PROTOCOL_CHARS = 6000, 20000, 40000
 class ReviewerAssistant:
     project: Project
     client: ModelClient
+
+    def query_data(self, requested_by: str, question: str, executor: Any) -> State:
+        import re as _re
+        from .agents import latest_material, material_bytes
+        s = self.project.state()
+        if requested_by not in s.reviewers:
+            raise WorkflowError("only a reviewer can question the data")
+        if s.stage not in ("REVIEW", "RESPONSE"):
+            raise WorkflowError("the data can be questioned during the review")
+        if not (question or "").strip():
+            raise WorkflowError("ask a question")
+        ds = latest_material(s, "dataset")
+        dic = []
+        if s.curator_reports:
+            rep = self.project.blobs.get_json(s.curator_reports[-1]["report_sha256"])
+            dic = [{k: d.get(k) for k in ("column", "label", "type", "units_or_coding")} for d in rep.get("dictionary") or []]
+        user = f"THE REVIEWER'S QUESTION: {question}\n\nDATA DICTIONARY:\n{json.dumps(dic)[:40000]}"
+        r = self.client.chat(PROVIDER, [{"role": "system", "content": DATA_QUERY}, {"role": "user", "content": user}],
+                             purpose="review_data_query", **SETTINGS)
+        call = r.record.to_payload()
+        m = _re.search(r"```(?:python)?\s*\n(.*?)```", r.text, _re.S)
+        code = (m.group(1) if m else r.text).strip()
+        status, error, results_sha = "ok", None, None
+        try:
+            out = executor.run(code, material_bytes(self.project, ds), seed=20261103, timeout=180)
+            if out.status != "ok":
+                status, error = "error", (out.error or "the code failed")[:800]
+            else:
+                safe = aggregate_only(out.results)
+                if safe is None:
+                    status, error = "refused", "the code returned something other than aggregates, so nothing is shown"
+                else:
+                    results_sha = self.project.blobs.put_json(safe)
+        except Exception as e:                       # the sandbox failed; recorded, not hidden
+            status, error = "error", str(e)[:800]
+        return self.project.record_data_query(REVIEWER_ASSIST_ID, question, self.project.blobs.put_text(code),
+                                              results_sha, status, error, requested_by, call)
 
     def brief(self, requested_by: str) -> State:
         s = self.project.state()
@@ -197,3 +234,28 @@ def _check_brief(checks: dict[str, Any] | None) -> dict[str, Any] | None:
     return {**summarise_checks(checks),
             "untraced_numbers": [{"number": u["number"], "sentence": u["sentence"][:200]}
                                  for u in checks.get("untraced", [])[:15]]}
+
+
+MAX_ROWS = 30
+COUNT_HEAD = __import__("re").compile(r"^(n|count|counts|frequency|number|no\.?|events?|cases?)\b", __import__("re").I)
+
+
+def aggregate_only(results: Any) -> dict[str, Any] | None:
+    """What a reviewer may see of a data query: an answer, a small table of aggregates (counts below 5 shown as
+    "<5"), and the number of records used. Anything that looks like records is refused."""
+    if not isinstance(results, dict):
+        return None
+    out = {"answer": str(results.get("answer") or "")[:1500], "n": results.get("n")}
+    t = results.get("table")
+    if t:
+        cols, rows = t.get("columns") if isinstance(t, dict) else None, t.get("rows") if isinstance(t, dict) else None
+        if not isinstance(cols, list) or not isinstance(rows, list) or len(rows) > MAX_ROWS or len(cols) > 15:
+            return None
+        clean = []
+        for r in rows:
+            if not isinstance(r, list) or len(r) != len(cols):
+                return None
+            clean.append([("<5" if COUNT_HEAD.match(str(cols[i])) and isinstance(v, (int, float)) and 0 < v < 5 else v)
+                          if not isinstance(v, (dict, list)) else str(v)[:80] for i, v in enumerate(r)])
+        out["table"] = {"columns": [str(c)[:80] for c in cols], "rows": clean}
+    return out

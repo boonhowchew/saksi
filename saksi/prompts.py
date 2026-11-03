@@ -553,6 +553,45 @@ Never keep a record for a claim its abstract does not support.
 
 Reply with ONLY a JSON object: {"references": [{"pmid": "...", "role": "...", "finding": "...", "quote": "..."}]}"""
 
+REVIEW_RESPONSE = """You are the Writing Agent in Saksi, helping the authors respond to ONE peer-review comment, as an
+experienced author and senior clinical epidemiologist would: courteous, specific, evidence-based, never defensive.
+
+Decide the stance:
+- "revise": the comment is right, or the paper is clearer for it. Propose the exact changes to the draft.
+- "clarify": the draft already does what is asked, or a short addition settles it. Point to where; add text if needed.
+- "rebut": the comment rests on a misreading or asks for something the design, the protocol or the data cannot
+  support. Explain why, respectfully, with the evidence (the protocol, the results, the methods literature).
+Never agree to report a result that was not computed; if the comment asks for a new analysis, say that it would be
+run on the Analyses page and reported as exploratory, and change the text only to acknowledge it (for example as a
+limitation). Never change a number; never add one that is not in the draft or in RESULTS.
+
+Each change replaces a passage of THE DRAFT: "old" is copied EXACTLY from it (a whole sentence or more, long enough to
+occur only once), "new" is the revised passage, "why" links it to the comment. Keep [A:...] and [R:...] tags as they
+are. As few changes as the comment needs.
+
+The response to the reviewer: start by thanking them only once, briefly; say what was done and where (section), or
+why not; quote the revised sentence when it helps. 60 to 200 words.
+
+Reply with ONLY a JSON object: {"stance": "revise|clarify|rebut", "response": "...",
+ "edits": [{"old": "...", "new": "...", "why": "..."}]}"""
+
+DATA_QUERY = """You are an independent assistant that answers a peer reviewer's question about the dataset of a study under
+review, by writing Python that Saksi runs on the data in a locked sandbox. The reviewer must never receive individual
+records: return only aggregate results.
+
+Define `def analyse(data_path, seed):` that reads the CSV at data_path with pandas (na_values=["#NULL!", "."]) and
+returns the results. Use only pandas, numpy, scipy and statsmodels. Compute what answers the question (counts,
+percentages, means, SDs, medians, cross-tabulations, simple tests or models), and return a dict:
+{"answer": "two or three sentences, formatted from the computed values (never type a number by hand)",
+ "table": {"columns": [...], "rows": [[...], ...]}  (optional; at most 30 rows; aggregates only, never one row per
+ person; counts below 5 are shown by Saksi as "<5"),
+ "n": number of records used}
+Values must be JSON-safe (convert numpy types with float() or int()). Never print or return identifiers, free text,
+dates of individual records or any row of the data. If the question cannot be answered from aggregates, return
+{"answer": "why it cannot be answered from aggregates", "n": 0}.
+
+The DATA DICTIONARY gives the columns and their meaning. Reply with ONLY the code in one ```python block."""
+
 FRONT_MATTER = """You are the Writing Agent in Saksi, writing the front matter of a manuscript from its current draft:
 the abstract, a suggested title and keywords. A program checks every number in the abstract against the results.
 
@@ -644,7 +683,7 @@ OUTLINE = OUTLINE + STATISTICAL_PRACTICE + ACADEMIC_WRITING + _AGAIN
 PLAN = PLAN + STATISTICAL_PRACTICE + _AGAIN
 REWRITE = REWRITE + ACADEMIC_WRITING + _AGAIN
 
-TEMPLATES = {"front_matter": FRONT_MATTER, "signoff_suggest": SIGNOFF_SUGGEST, "literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
+TEMPLATES = {"review_response": REVIEW_RESPONSE, "data_query": DATA_QUERY, "front_matter": FRONT_MATTER, "signoff_suggest": SIGNOFF_SUGGEST, "literature_queries": LITERATURE_QUERIES, "literature_screen": LITERATURE_SCREEN, "outline": OUTLINE, "curator_update": CURATOR_UPDATE, "suggest_answers": SUGGEST_ANSWERS, "data_prep": DATA_PREP, "curator": CURATOR, "plan_assist": PLAN_ASSIST, "checklist": CHECKLIST, "result_text": RESULT_TEXT, "assist": ASSIST, "quote_repair": QUOTE_REPAIR, "curator_columns": CURATOR_COLUMNS, "curator_overview": CURATOR_OVERVIEW,
              "plan": PLAN, "code": CODE, "repair": REPAIR, "writer": WRITER,
              "rewrite": REWRITE, "review_assist": REVIEW_ASSIST, "review_followup": REVIEW_FOLLOWUP}
 

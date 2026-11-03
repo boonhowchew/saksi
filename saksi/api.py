@@ -53,6 +53,8 @@ AGENT_ACTIONS: dict[str, tuple[str, set[str], str]] = {
     "find_literature": ("find_literature", {"pmids", "doi", "instructions"}, "author"),
     "suggest_signoff": ("suggest_signoff", set(), "author"),
     "front_matter": ("front_matter", {"instruction", "word_limit"}, "author"),
+    "suggest_review_response": ("suggest_review_response", {"item_id"}, "author"),
+    "reviewer_data_query": ("reviewer_data_query", {"question"}, "reviewer"),
     "checklist": ("checklist", {"version"}, "author"),
     "change_table1": ("change_table1", {"table1", "reason"}, "author"),
     "write_draft": ("write_draft", {"instructions"}, "author"),
@@ -76,6 +78,8 @@ HUMAN_COMMANDS: dict[str, tuple[str, set[str]]] = {
     "place_analysis": ("place_analysis", {"analysis_id", "place", "reason"}),
     "remove_reference": ("remove_reference", {"pmid", "reason"}),
     "set_front": ("set_front", {"field", "value"}),
+    "apply_review_changes": ("apply_review_changes", {"decisions", "summary"}),
+    "link_material": ("link_material", {"sha256", "url", "note"}),
     "set_reference_style": ("set_reference_style", {"style"}),
     "set_value_labels": ("set_value_labels", {"column", "labels", "reason"}),
     "restore_figure": ("restore_figure", {"analysis_id", "name"}),
@@ -391,12 +395,14 @@ def create_app(data_root: str | Path, on_write: Callable[[], None] | None = None
 
     @app.get("/projects/{pid}/materials/{digest}")
     def get_material(pid: str, digest: str, who: str = Depends(actor)):
-        """An uploaded or prepared file, for the study's authors only (never the reviewer)."""
+        """An uploaded or prepared file. Authors may download any; a reviewer may download the study documents
+        (protocol, ethics approval, codebook and others) but never a dataset, which they question through Saksi."""
         p = existing(pid)
         s = p.state()
-        if "author" not in s.actors[who]["roles"]:
-            raise HTTPException(403, "only the authors can download the study's files")
         m = next((m for m in s.materials if m["sha256"] == digest and not m.get("withdrawn")), None)
+        roles = s.actors[who]["roles"]
+        if "author" not in roles and not ("reviewer" in roles and m is not None and m["kind"] != "dataset"):
+            raise HTTPException(403, "the dataset stays with the authors; a reviewer questions it through Saksi")
         if m is None or not m.get("storage_ref") or not (p.root / m["storage_ref"]).exists():
             raise HTTPException(404, "no such file")
         return Response((p.root / m["storage_ref"]).read_bytes(), media_type="application/octet-stream",

@@ -245,6 +245,13 @@ with sync_playwright() as p:
     signout(page); signin(page, toks["rev1"])
     print("reviewer next:", page.locator(".next p").inner_text())
     page.get_by_role("tab", name="Review").click(); click(page, "Ask for a briefing on version"); shot(page, "07-briefing")
+    # The reviewer sees the study documents and questions the data, in aggregate only.
+    print("study materials:", page.locator("section", has_text="Study materials").locator("li").count(), "documents |",
+          "dataset download offered:", page.locator("section", has_text="Study materials").locator("[data-action=downloadfile]", has_text="Download").count())
+    page.fill("form[data-form=dataquery] input[name=question]", "How many women had GDM, and how many lack booking BMI?")
+    page.locator("form[data-form=dataquery]").get_by_role("button", name="Ask").click()
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
+    print("data query:", page.locator("section", has_text="Study materials").locator(".item p").nth(1).inner_text()[:90])
     page.get_by_role("button", name="Use as a comment").first.click(); page.wait_for_timeout(400)
     click(page, "Add comment"); click(page, "Ask for revision")
     print("after revision:", page.locator(".progress .where strong").inner_text())
@@ -265,8 +272,18 @@ with sync_playwright() as p:
     assert "No GDM" in page.locator("#ms .pubtable[data-aid='s_table1.r1']").inner_text()
     page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
     page.get_by_role("tab", name="Review").click()
-    page.fill("form[data-form=respond] input[name=note]", "Added a limitation to the Discussion.")
-    click(page, "Respond"); signoff(page)
+    # Saksi drafts the response and the exact change; the author accepts it and applies it as a new version.
+    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=90000); page.wait_for_timeout(300)
+    print("suggested response:", page.locator(".respsug p.small").first.inner_text()[:100])
+    click(page, "Apply the accepted changes and respond")
+    print("applied:", note(page)[:100])
+    page.get_by_role("tab", name="Draft").click(); page.wait_for_timeout(400)
+    click(page, "Show tracked changes since version")
+    print("tracked:", page.locator("#ms ins").count(), "insertions,", page.locator("#ms del").count(), "deletions |",
+          page.locator("#ms .chg-tag").first.inner_text() if page.locator("#ms .chg-tag").count() else "no tags")
+    assert page.locator("#ms ins").count() >= 1
+    click(page, "Show the clean text")
+    signoff(page)
     page.select_option("select[data-change=switch]", "siti-aminah"); page.wait_for_timeout(600); signoff(page)
     page.select_option("select[data-change=switch]", "boon-how-chew"); page.wait_for_timeout(600)
     page.get_by_role("tab", name="Review").click(); click(page, "Send the response to the reviewer")

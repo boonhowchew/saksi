@@ -146,3 +146,57 @@ def test_two_review_rounds_end_to_end(in_review):
     led = ledger(p.log.events())
     assert led["rev1"]["counts"]["review_comments_from_assistant"] == 1
     assert led["agent:reviewer_assist"]["counts"]["review_briefings"] == 2
+
+
+def _to_response(p, agents, model):
+    model.script["review"] = [ROUND1]
+    agents.brief_reviewer("rev1")
+    p.add_item("rev1", "R1", "Please state the number of events per model parameter as a limitation.",
+               location="The estimate was imprecise.")
+    p.add_item("rev1", "R2", "Should this not be a randomised trial?")
+    return p.submit_review("rev1", "revise")
+
+
+def test_saksi_drafts_responses_and_changes_that_authors_accept_or_reject(in_review):
+    p, agents, model = in_review
+    s = _to_response(p, agents, model)
+    assert s.stage == "RESPONSE"
+    text = p.blobs.get_text(s.drafts[s.draft_version]["text_sha256"])
+    model.script["resp"] = [
+        {"stance": "revise", "response": "Thank you. We now state the events per parameter as a limitation.",
+         "edits": [{"old": "The estimate was imprecise.", "new": "The estimate was imprecise, with few events per model parameter.",
+                    "why": "R1 asks for it"}, {"old": "A sentence not in the draft.", "new": "x"}]},
+        {"stance": "rebut", "response": "A trial could not answer this question about an exposure present at booking.", "edits": []}]
+    s = agents.suggest_review_response("bhc", "R1")
+    sug = s.response_suggestions["R1"][-1]
+    assert sug["stance"] == "revise" and len(sug["edits"]) == 1 and sug["edits_dropped"] == 1
+    assert sug["checks_if_applied"] is not None and sug["by"] == "agent:writer" and sug["requested_by"] == "bhc"
+    assert "THE COMMENT (R1" in model.bodies[-1]["messages"][1]["content"]
+    s = agents.suggest_review_response("bhc", "R2")
+    assert s.response_suggestions["R2"][-1]["stance"] == "rebut"
+    v = s.draft_version
+    with pytest.raises(WorkflowError, match="accept at least one"):
+        p.apply_review_changes("bhc", [{"item_id": "R1", "suggestion_seq": sug["seq"], "edits": {"e1": {"accept": False}}}])
+    s = p.apply_review_changes("coauthor", [{"item_id": "R1", "suggestion_seq": sug["seq"],
+                                             "edits": {"e1": {"accept": True, "new": "The estimate was imprecise, with 4.5 events per parameter."}}}])
+    d = s.drafts[s.draft_version]
+    assert s.draft_version == v + 1 and d["by"] == "coauthor"
+    assert d["review_changes"][0]["item_id"] == "R1" and d["review_changes"][0]["modified"] is True
+    assert "4.5 events per parameter" in p.blobs.get_text(d["text_sha256"]) and text != p.blobs.get_text(d["text_sha256"])
+    s = p.respond("coauthor", "R1", "revised", sug["response"])
+    s = p.respond("bhc", "R2", "rebutted", s.response_suggestions["R2"][-1]["response"])
+    assert s.items["R1"]["status"] == s.items["R2"]["status"] == "responded"
+
+
+def test_reviewer_questions_the_data_in_aggregate_and_never_downloads_it(in_review):
+    from saksi.reviewer import aggregate_only
+    p, agents, model = in_review
+    with pytest.raises(WorkflowError, match="only a reviewer"):
+        agents.reviewer_data_query("bhc", "How many women had GDM?")
+    s = agents.reviewer_data_query("rev1", "How many women had GDM, and how many lack booking BMI?")
+    q = s.data_queries[-1]
+    assert q["status"] == "ok" and q["requested_by"] == "rev1" and q["by"] == "agent:reviewer_assist"
+    r = p.blobs.get_json(q["results_sha256"])
+    assert "lack booking BMI" in r["answer"] and r["n"] == 400
+    assert ["test small", "<5"] in r["table"]["rows"]                    # small counts suppressed
+    assert aggregate_only({"answer": "x", "table": {"columns": ["id"], "rows": [[i] for i in range(100)]}}) is None
