@@ -273,7 +273,8 @@ with sync_playwright() as p:
     page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=60000); page.wait_for_timeout(300)
     page.get_by_role("tab", name="Review").click()
     # Saksi drafts the response and the exact change; the author accepts it and applies it as a new version.
-    page.wait_for_timeout(300); page.wait_for_function("() => !S.busy", timeout=90000); page.wait_for_timeout(300)
+    page.wait_for_selector(".respsug", timeout=90000); page.wait_for_function("() => !S.resp.working && !S.resp.queue.length", timeout=90000)
+    page.wait_for_timeout(500)
     print("suggested response:", page.locator(".respsug p.small").first.inner_text()[:100])
     click(page, "Apply the accepted changes and respond")
     print("applied:", note(page)[:100])

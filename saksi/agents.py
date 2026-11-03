@@ -54,6 +54,7 @@ TASKS = {
     "assist": {"reasoning_effort": "low", "max_tokens": 2500},
     "checklist": {"reasoning_effort": "low", "max_tokens": 6000},
     "prep": {"reasoning_effort": "medium", "max_tokens": 8000},
+    "respond": {"reasoning_effort": "low", "max_tokens": 6000},
 }
 MAX_ATTEMPTS = 2
 PROTOCOL_CHARS = 120_000
@@ -1081,11 +1082,13 @@ class Agents:
         others = {k: x["comment"] for k, x in s.items.items() if k != item_id}
         user = (f"THE COMMENT ({item_id}, round {it.get('round')}): {it['comment']}\n"
                 f"WHERE IN THE DRAFT: {it.get('location') or '(not given)'}\n\n"
-                f"THE OTHER COMMENTS (for context only): {json.dumps(others)[:6000]}\n\n"
-                f"THE DRAFT (version {v}):\n{text[:70000]}\n\nRESULTS (computed; cite only these):\n"
-                f"{json.dumps(brief)[:20000]}\n\nPROTOCOL (excerpt):\n{protocol[:30000]}\n\n"
-                f"THE AUTHORS' ANSWERS:\n{answers_text(s)[:5000]}")
-        obj, call, _ = self._json_call(WRITER_ID, "write", REVIEW_RESPONSE, user, "review_response")
+                f"THE OTHER COMMENTS (for context only): {json.dumps(others)[:3000]}\n\n"
+                f"THE DRAFT (version {v}; the outline, and the passages that bear on the comment, copied exactly):\n"
+                f"{_relevant_passages(text, it['comment'] + ' ' + (it.get('location') or ''))}\n\n"
+                f"RESULTS (computed; cite only these):\n{json.dumps(brief)[:12000]}\n\n"
+                f"PROTOCOL (excerpt):\n{_relevant_passages(protocol, it['comment'], 8000)}\n\n"
+                f"THE AUTHORS' ANSWERS:\n{answers_text(s)[:3000]}")
+        obj, call, _ = self._json_call(WRITER_ID, "respond", REVIEW_RESPONSE, user, "review_response")
         stance = obj.get("stance") if obj.get("stance") in ("revise", "clarify", "rebut") else "clarify"
         edits = [e for e in obj.get("edits") or [] if isinstance(e, dict)]
         trial = text
@@ -1246,6 +1249,28 @@ def _focus(d: dict[str, Any], specs: list[dict[str, Any]]):
         return d["dictionary"], d["profile"], None
     return ([x for x in (d["dictionary"] or []) if x.get("column") in named],
             {**d["profile"], "columns": [c for c in cols if c["name"] in named]}, [c["name"] for c in cols])
+
+
+def _relevant_passages(text: str, about: str, budget: int = 24000) -> str:
+    """The headings of a text plus the paragraphs that share most words with `about`, in their original order,
+    copied exactly, within a character budget: enough for a focused, quick reply."""
+    paras = [p for p in re.split(r"\n{2,}", text or "") if p.strip()]
+    words = {w for w in re.findall(r"[a-z]{4,}", (about or "").lower())}
+    scored = sorted(range(len(paras)), key=lambda i: -len(words & set(re.findall(r"[a-z]{4,}", paras[i].lower()))))
+    keep, used = set(), 0
+    for i, p in enumerate(paras):
+        if p.lstrip().startswith("#"):
+            keep.add(i); used += len(p)
+    for i in scored:
+        if used + len(paras[i]) > budget:
+            continue
+        keep.add(i); used += len(paras[i])
+    out, last = [], -1
+    for i in sorted(keep):
+        if i != last + 1 and out:
+            out.append("[...]")
+        out.append(paras[i]); last = i
+    return "\n\n".join(out)
 
 
 SENSITIVITY = re.compile(r"sensitivity analys|robustness|as a check of|refit .* excluding|multiple imputation|"

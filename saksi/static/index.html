@@ -170,6 +170,8 @@ form.signoff .soitem { border: 1px solid var(--rule); border-radius: 8px; paddin
 .respsug textarea, form[data-form=respond] textarea { width: 100%; }
 del { color: #9b1c1c; text-decoration: line-through; background: #fbeaea; } ins { color: #14532d; text-decoration: underline; background: #e6f4ea; }
 .tracked p { margin: .5rem 0; } .tracked .chg-tag { font-size: .7rem; vertical-align: super; color: var(--muted); }
+.spin { display: inline-block; width: .8em; height: .8em; border: 2px solid var(--rule); border-top-color: var(--accent, #23366f); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 ul.flags { margin: .3rem 0 .6rem; padding: .5rem .5rem .5rem 1.6rem; }
 table.t1 td:not(:first-child), table.t1 th:not(:first-child) { text-align: right; white-space: nowrap; }
 table.t1 tr.cat td:first-child { padding-left: 1.4rem; color: var(--muted); }
@@ -1662,34 +1664,60 @@ function latestSuggestion(id) {
 }
 function responseHelp(id, it) {
   const sug = latestSuggestion(id);
-  if (!sug) return `<p class="small"><span class="aibadge">AI</span> <button class="linkish" data-agent="suggest_review_response" data-args='${esc(JSON.stringify({ item_id: id }))}' data-label="The Writing Agent is drafting a response to ${esc(id)}">Ask Saksi to draft the response and the changes</button></p>`;
+  if (!sug) return `<p class="small"><span class="aibadge">AI</span> <span data-respstate="${esc(id)}"></span></p>`;
   const c = sug.checks_if_applied;
   return `<div class="suggest respsug" data-item="${esc(id)}" data-seq="${sug.seq}"><p class="small"><span class="aibadge">AI</span> <strong>Saksi suggests: ${esc({ revise: "revise the draft", clarify: "clarify", rebut: "respectfully rebut" }[sug.stance])}.</strong>
       The response below is in your note; ${sug.edits.length ? `${sug.edits.length} change${sug.edits.length > 1 ? "s" : ""} to the draft, each quoting the passage it replaces. Untick to reject; edit the new text to change it.` : "no change to the draft is needed."}
       ${c ? `<span class="tag ${c.ok ? "good" : "attn"}">${c.ok ? "numbers still check with these changes" : `${c.untraced || 0} number(s) would not trace`}</span>` : ""}
-      <button class="linkish small" data-agent="suggest_review_response" data-args='${esc(JSON.stringify({ item_id: id }))}' data-label="The Writing Agent is drafting again">Draft again</button></p>
+      <button class="linkish small" data-action="draftresp" data-id="${esc(id)}">Draft again</button> <span class="small" data-respstate-again="${esc(id)}">${S.resp.working === id ? "Saksi is drafting it again…" : ""}</span></p>
     ${sug.edits.map((e) => `<div class="edit"><label class="inline"><input type="checkbox" data-edit="${esc(e.id)}" checked> Accept this change</label>
       <p class="small"><del>${esc(e.old)}</del></p><textarea data-new="${esc(e.id)}" rows="3">${esc(e.new)}</textarea>${e.why ? `<p class="small muted">${esc(e.why)}</p>` : ""}</div>`).join("")}
     ${sug.edits_dropped ? `<p class="small muted">${sug.edits_dropped} suggested change(s) quoted text not found in the draft and were left out.</p>` : ""}</div>`;
 }
+// Saksi drafts the responses in the background, one comment at a time, without locking the page: each comment
+// shows whether it is waiting, being drafted, or could not be drafted; the authors carry on meanwhile.
+S.resp = { queue: [], working: null, errors: {} };
+function queueResponse(id, first = false) {
+  const R = S.resp;
+  if (R.working === id || R.queue.includes(id)) return;
+  delete R.errors[id];
+  first ? R.queue.unshift(id) : R.queue.push(id);
+  paintResponses();
+  runResponses();
+}
+function paintResponses() {
+  document.querySelectorAll("[data-respstate]").forEach((el) => {
+    const id = el.dataset.respstate, R = S.resp;
+    el.innerHTML = R.working === id ? `<span class="spin"></span> Saksi is drafting the response and the changes for ${esc(id)}…`
+      : R.queue.includes(id) ? `Waiting: Saksi drafts ${esc(id)} after ${esc([R.working, ...R.queue.slice(0, R.queue.indexOf(id))].filter(Boolean).join(", "))}.`
+      : R.errors[id] ? `<span class="tag attn">could not draft it</span> ${esc(R.errors[id])} <button class="linkish" data-action="draftresp" data-id="${esc(id)}">Try again</button>`
+      : `<button class="linkish" data-action="draftresp" data-id="${esc(id)}">Ask Saksi to draft the response and the changes</button>`;
+  });
+}
+async function runResponses() {
+  const R = S.resp;
+  if (R.working) return;
+  while (R.queue.length) {
+    R.working = R.queue.shift();
+    paintResponses();
+    try { await agent("suggest_review_response", { item_id: R.working }); }
+    catch (e) { R.errors[R.working] = e.message || "the request failed"; }
+    R.working = null;
+    // Show it without wiping what an author is typing.
+    const typing = document.activeElement?.matches?.("input, textarea, select, [contenteditable=true]");
+    if (!S.busy && !typing) { try { await load(); } catch { /* next check */ } await render(); }
+    else { S.stale = true; const box = $("#stale"); if (box) box.innerHTML = staleHtml(); paintResponses(); }
+  }
+}
 function maybeSuggestResponses() {
   const s = S.state;
-  if (S.busy || !isAuthor() || s.stage !== "RESPONSE") return;
-  const open = Object.entries(s.items).filter(([id, it]) => it.status === "open" && !latestSuggestion(id));
+  if (!isAuthor() || s.stage !== "RESPONSE") { paintResponses(); return; }
   (S.respTried ||= {});
-  const todo = open.filter(([id]) => !S.respTried[`${S.pid}|${s.draft_version}|${id}`]);
-  if (!todo.length) return;
-  todo.forEach(([id]) => (S.respTried[`${S.pid}|${s.draft_version}|${id}`] = true));
-  act(null, async () => {
-    let r;
-    for (const [i, [id]] of todo.entries()) {
-      S.notice = { kind: "warn", text: `The Writing Agent is drafting the response to ${id} (${i + 1} of ${todo.length}), with the exact changes to the draft.` };
-      const st = $("#status"); if (st) st.innerHTML = noticeHtml();
-      try { r = await agent("suggest_review_response", { item_id: id }); } catch { /* the button offers it again */ }
-    }
-    return r;
-  }, "Saksi drafted a response to each comment, with the changes it would make. Accept, change or reject each one, then apply them.",
-  "The Writing Agent is drafting the responses to the reviewer.");
+  for (const [id, it] of Object.entries(s.items)) {
+    const key = `${S.pid}|${s.draft_version}|${id}`;
+    if (it.status === "open" && !latestSuggestion(id) && !S.respTried[key]) { S.respTried[key] = true; queueResponse(id); }
+  }
+  paintResponses();
 }
 async function applyReview(btn) {
   const decisions = [], notes = {};
@@ -2368,6 +2396,13 @@ document.addEventListener("click", async (ev) => {
     }
     case "updatecurator": return updateCurator(t);
     case "applyreview": return applyReview(t);
+    case "draftresp": {
+      // A drafted suggestion is replaced when it comes back; the rest of the page stays usable meanwhile.
+      if ((S.state.response_suggestions || {})[t.dataset.id]) { (S.resp.errors ||= {}); S.resp.queue = S.resp.queue.filter((x) => x !== t.dataset.id); }
+      queueResponse(t.dataset.id, true);
+      const again = document.querySelector(`[data-respstate-again="${CSS.escape(t.dataset.id)}"]`); if (again) again.textContent = "Saksi is drafting it again…";
+      return;
+    }
     case "tracked": S.tracked = !S.tracked; return render();
     case "reissue": return act(t, async () => { const r = await api(`/projects/${S.pid}/actors/${t.dataset.id}/token`, { method: "POST", body: {} });
         S.invites = null; return r; }, "A new token was issued; the old one no longer works. It is shown below until they sign in.");
