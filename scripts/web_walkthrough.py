@@ -82,6 +82,8 @@ with sync_playwright() as p:
     # The Curator's report follows: the preparation (and later answers) bring it up to date by itself.
     page.wait_for_function("() => !document.querySelector('.busy')", timeout=60000); page.wait_for_timeout(300)
     page.wait_for_selector("text=Brought up to date", timeout=60000)
+    print("what was done:", page.locator("td.small .tag", has_text="cleaned").count(), "findings cleaned |",
+          page.locator("td.small", has_text="No action recorded").count(), "with no action")
     print("curator:", page.locator("section", has_text="Data Curator's report").locator("p.muted.small").first.inner_text()[:70],
           "| resolved:", page.locator("summary", has_text="resolved since").count())
     click(page, "Update the report"); print("curator button:", note(page)[:70])
@@ -196,6 +198,10 @@ with sync_playwright() as p:
     order = page.evaluate("""() => [...document.querySelectorAll('#ms h3, #ms h2, #ms .pubtable .ptitle, #ms figure figcaption strong')].map(e => e.innerText.split('.')[0].trim()).filter(Boolean)""")
     print("draft order:", " > ".join(order)[:200])
     # After acceptance the Analyses page is still the authors' worksheet: chat, editable text, suggestions.
+    page.get_by_role("tab", name="Analyses").click(); page.wait_for_timeout(400)
+    page.get_by_role("tab", name="Data").click(); page.wait_for_timeout(500)
+    print("data handling:", page.locator("section", has_text="How the data were handled").locator(".msg").first.inner_text()[:110], "|",
+          page.locator("section", has_text="How the data were handled").locator("tbody tr").count(), "analyses")
     page.get_by_role("tab", name="Analyses").click(); page.wait_for_timeout(400)
     print("worksheet in revision:", page.locator("#results-view .chat").count(), "chat boxes,",
           page.locator(".rtext[contenteditable=true]").count(), "editable texts")

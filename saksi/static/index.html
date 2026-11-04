@@ -705,6 +705,39 @@ function people() {
 }
 
 /* Data */
+// For one Curator finding: what the record shows was done about it. A preparation step on that column (applied, or
+// proposed and not chosen), an author's answer that names it, or nothing yet.
+function flagAction(f) {
+  const s = S.state, col = (f.column || "").trim();
+  const ds = s.materials.filter((m) => m.kind === "dataset" && !m.withdrawn).at(-1);
+  const prep = ds?.preparation;
+  const touches = (st) => col && ((st.columns || []).includes(col) || (st.columns || []).includes("*") || st.column === col || st.new === col);
+  const bits = [];
+  if (prep) for (const x of prep.steps || []) if (touches(x)) bits.push(`<span class="tag good">cleaned</span> ${esc(x.title)}: ${esc((prep.log.find((l) => l.id === x.id) || {}).effect || "")}`);
+  const prop = s.preparations.at(-1);
+  if (prop) for (const x of prop.steps || []) if (touches(x) && !(prep?.steps || []).some((y) => y.id === x.id && prep.proposal_seq === prop.seq))
+    bits.push(`<span class="tag">${prep && prep.proposal_seq === prop.seq ? "not chosen" : "proposed"}</span> ${esc(x.title)}`);
+  const ans = col ? s.answers.filter((a) => (a.question + " " + a.answer).includes(col)) : [];
+  for (const a of ans.slice(0, 2)) bits.push(`<span class="tag">answered</span> ${esc(name(a.by))}: “${esc(a.answer.slice(0, 140))}${a.answer.length > 140 ? "…" : ""}”`);
+  return bits.length ? bits.join("<br>") : `<span class="muted">No action recorded${prep ? "" : "; the data were not prepared"}.</span>`;
+}
+// How the data were actually handled for the results: the preparation (if any) and, for each analysis, the records
+// it used and what it excluded, from its own recorded output. Always shown once analyses exist.
+async function dataHandlingHtml(raw, ds) {
+  const s = S.state, cur = Object.entries(s.analyses).filter(([, a]) => a.status === "ok" && !a.superseded_by && !a.withdrawn);
+  if (!cur.length || !raw) return "";
+  const prepared = !!ds?.preparation;
+  const rows = await Promise.all(cur.sort((x, y) => x[1].seq - y[1].seq).map(async ([id, a]) => {
+    const o = await blobJSON(a.outputs_sha256) || {};
+    const used = s.materials.find((m) => m.sha256 === a.execution?.dataset_sha256);
+    return `<tr><td>${esc(a.spec?.title || id)}</td><td class="small">${esc(used?.filename || "")}</td><td class="num">${esc(o.n_analysed ?? "")}</td><td class="num">${esc(o.n_excluded ?? "")}</td><td class="small">${esc(o.exclusion_reason || "")}</td></tr>`;
+  }));
+  return `<section><h2>How the data were handled for the results</h2>
+    ${prepared ? `<p class="msg ok small">The analyses used the prepared dataset <strong>${esc(ds.filename)}</strong>, made by Saksi's code from <strong>${esc(raw.filename)}</strong> with the steps the authors chose (above). Both files are kept and can be downloaded; the comparison shows every change.</p>`
+      : `<p class="msg warn small"><strong>No cleaning was applied to ${esc(raw.filename)}.</strong> ${s.preparations.length ? "Saksi proposed how to prepare it, but no steps were applied." : "This project's data were confirmed with the plan before Saksi's data-preparation step was offered, and the dataset is fixed once every author confirms the plan."}
+        The analyses used the file as uploaded. In every analysis Saksi read <code>#NULL!</code> and <code>.</code> as missing values; anything else (excluding records, recoding, deriving variables) was done inside each analysis's own code, recorded under “How each result was produced” on the Analyses page. The table shows what each analysis used and excluded.</p>`}
+    <div class="tablewrap"><table><thead><tr><th>Analysis</th><th>Dataset</th><th>Records analysed</th><th>Excluded</th><th>Why excluded</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></section>`;
+}
 // Where a document is publicly available, so the reviewer (and later readers) open it at its source.
 function linkControl(m) {
   const can = isAuthor() && S.state.stage !== "FINAL";
@@ -778,8 +811,8 @@ async function materials() {
         ${stale ? `<p class="msg warn small">Out of date: ${esc(stale)} since it was written.</p>` : ""}
         ${isAuthor() && s.stage !== "FINAL" ? `<p><button class="btn ${stale ? "primary" : "secondary"} small" data-action="updatecurator">Update the report</button></p>` : ""}
         <p>${esc(full.summary)}</p>
-        ${open.length ? `<details ${open.some((f) => f.severity === "high") ? "open" : ""}><summary>${open.length} things for the authors to check${open.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th></tr></thead><tbody>
-          ${open.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td></tr>`).join("")}</tbody></table></div></details>` : (full.flags || []).length ? `<p class="msg ok small">Every earlier finding has been resolved.</p>` : ""}
+        ${open.length ? `<details ${open.some((f) => f.severity === "high") ? "open" : ""}><summary>${open.length} things for the authors to check${open.some((f) => f.severity === "high") ? ", some important" : ""}</summary><div class="tablewrap"><table><thead><tr><th>Severity</th><th>Column</th><th>Issue</th><th>Suggested check</th><th>What was done</th></tr></thead><tbody>
+          ${open.map((f) => `<tr><td><span class="tag ${sev[f.severity] || ""}">${esc(f.severity)}</span></td><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.suggested_check)}</td><td class="small">${flagAction(f)}</td></tr>`).join("")}</tbody></table></div></details>` : (full.flags || []).length ? `<p class="msg ok small">Every earlier finding has been resolved.</p>` : ""}
         ${done.length ? `<details><summary>${done.length} resolved since the first report</summary><div class="tablewrap"><table><thead><tr><th>Column</th><th>Issue</th><th>How it was resolved</th></tr></thead><tbody>
           ${done.map((f) => `<tr><td>${esc(f.column || "")}</td><td>${esc(f.issue)}</td><td>${esc(f.resolution || "")}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
         ${full.protocol_variables_missing_from_data?.length ? `<p class="msg warn small">Named in the protocol but not found in the data: ${esc(full.protocol_variables_missing_from_data.join(", "))}</p>` : ""}
@@ -803,7 +836,8 @@ async function materials() {
   ${others.length ? `<section><h2>Other files</h2><div class="tablewrap"><table><thead><tr><th>What</th><th>File</th><th>Status</th><th>Read by Saksi</th></tr></thead><tbody>
     ${others.map((m) => `<tr><td>${esc(m.kind.replace("_", " "))}</td><td>${esc(m.filename)}${!m.withdrawn && m.kind !== "dataset" ? linkControl(m) : ""}</td><td class="small">${status(m)}${canFile && !m.withdrawn ? removeControl(m) : ""}${isAuthor() && !m.withdrawn && m.kind === "dataset" ? ` <button class="linkish" data-action="downloadfile" data-sha="${esc(m.sha256)}" data-name="${esc(m.filename)}">Download</button>` : ""}</td><td class="small">${m.withdrawn ? "" : readText(m)}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
   ${rep}
-  ${await preparationHtml(canEdit, rawDs, ds)}`;
+  ${await preparationHtml(canEdit, rawDs, ds)}
+  ${await dataHandlingHtml(rawDs, ds)}`;
 }
 
 function comparisonHtml(prep, raw, ds) {
